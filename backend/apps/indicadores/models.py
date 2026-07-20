@@ -285,6 +285,20 @@ class Medicion(models.Model):
         on_delete=models.PROTECT,
         related_name='mediciones_registradas'
     )
+    archivo_importado = models.ForeignKey(
+        'integraciones.ArchivoImportado',
+        on_delete=models.PROTECT,
+        related_name='mediciones',
+        blank=True,
+        null=True
+    )
+    consulta_dw = models.ForeignKey(
+        'integraciones.ConsultaDW',
+        on_delete=models.PROTECT,
+        related_name='mediciones',
+        blank=True,
+        null=True
+    )
     fecha_medicion = models.DateField()
     valor_resultado = models.DecimalField(max_digits=14, decimal_places=4)
     observacion = models.TextField(blank=True, null=True)
