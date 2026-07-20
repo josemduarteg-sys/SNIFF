@@ -194,6 +194,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         source='indicador.nombre',
         read_only=True
     )
+    estado_cumplimiento = serializers.PrimaryKeyRelatedField(read_only=True)
     estado_cumplimiento_nombre = serializers.CharField(
         source='estado_cumplimiento.nombre',
         read_only=True
@@ -226,12 +227,71 @@ class MedicionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id',
+            'estado_cumplimiento',
             'fecha_registro',
             'porcentaje_cumplimiento',
         ]
 
     def get_porcentaje_cumplimiento(self, obj):
         return round(obj.calcular_cumplimiento(), 2)
+
+    def validate(self, attrs):
+        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
+        meta = attrs.get('meta') or getattr(self.instance, 'meta', None)
+
+        if indicador and meta and meta.indicador_id != indicador.id:
+            raise serializers.ValidationError(
+                'La meta seleccionada no pertenece al indicador indicado.'
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        from .services import obtener_estado_para_medicion
+
+        indicador = validated_data.get('indicador')
+        meta = validated_data.get('meta')
+        valor_resultado = validated_data.get('valor_resultado')
+
+        estado = obtener_estado_para_medicion(
+            indicador=indicador,
+            meta=meta,
+            valor_resultado=valor_resultado,
+        )
+
+        if estado is None:
+            raise serializers.ValidationError(
+                'No se encontró un estado de cumplimiento válido para esta medición.'
+            )
+
+        validated_data['estado_cumplimiento'] = estado
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        from .services import obtener_estado_para_medicion
+
+        indicador = validated_data.get('indicador', instance.indicador)
+        meta = validated_data.get('meta', instance.meta)
+        valor_resultado = validated_data.get(
+            'valor_resultado',
+            instance.valor_resultado
+        )
+
+        estado = obtener_estado_para_medicion(
+            indicador=indicador,
+            meta=meta,
+            valor_resultado=valor_resultado,
+        )
+
+        if estado is None:
+            raise serializers.ValidationError(
+                'No se encontró un estado de cumplimiento válido para esta medición.'
+            )
+
+        validated_data['estado_cumplimiento'] = estado
+
+        return super().update(instance, validated_data)
 
 
 class AlertaSerializer(serializers.ModelSerializer):
