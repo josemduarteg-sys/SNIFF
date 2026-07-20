@@ -247,7 +247,10 @@ class MedicionSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        from .services import obtener_estado_para_medicion
+        from .services import (
+            generar_alerta_para_medicion,
+            obtener_estado_para_medicion,
+        )
 
         indicador = validated_data.get('indicador')
         meta = validated_data.get('meta')
@@ -266,10 +269,16 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         validated_data['estado_cumplimiento'] = estado
 
-        return super().create(validated_data)
+        medicion = super().create(validated_data)
+        generar_alerta_para_medicion(medicion)
+
+        return medicion
 
     def update(self, instance, validated_data):
-        from .services import obtener_estado_para_medicion
+        from .services import (
+            generar_alerta_para_medicion,
+            obtener_estado_para_medicion,
+        )
 
         indicador = validated_data.get('indicador', instance.indicador)
         meta = validated_data.get('meta', instance.meta)
@@ -291,7 +300,10 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         validated_data['estado_cumplimiento'] = estado
 
-        return super().update(instance, validated_data)
+        medicion = super().update(instance, validated_data)
+        generar_alerta_para_medicion(medicion)
+
+        return medicion
 
 
 class AlertaSerializer(serializers.ModelSerializer):

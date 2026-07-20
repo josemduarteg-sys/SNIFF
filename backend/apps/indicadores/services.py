@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from .models import EstadoCumplimiento, RangoKPI
+from django.utils import timezone
+
+from .models import Alerta, EstadoCumplimiento, RangoKPI
 
 
 def calcular_porcentaje_cumplimiento(valor_resultado, valor_meta):
@@ -43,4 +45,49 @@ def obtener_estado_para_medicion(indicador, meta, valor_resultado):
     )
 
     return estado
+
+
+def generar_alerta_para_medicion(medicion):
+    estado_nombre = medicion.estado_cumplimiento.nombre.lower()
+    porcentaje = calcular_porcentaje_cumplimiento(
+        valor_resultado=medicion.valor_resultado,
+        valor_meta=medicion.meta.valor_meta,
+    )
+
+    if estado_nombre == 'favorable':
+        Alerta.objects.filter(
+            indicador=medicion.indicador,
+            medicion=medicion,
+            estado_alerta='pendiente',
+        ).update(
+            estado_alerta='descartada',
+            fecha_revision=timezone.now(),
+        )
+        return None
+
+    tipo_alerta = f'Indicador {medicion.estado_cumplimiento.nombre}'
+    mensaje = (
+        f'El indicador "{medicion.indicador.nombre}" presenta un cumplimiento '
+        f'del {round(porcentaje, 2)}%, por lo que requiere seguimiento.'
+    )
+
+    alerta_existente = Alerta.objects.filter(
+        indicador=medicion.indicador,
+        medicion=medicion,
+        estado_alerta='pendiente',
+    ).first()
+
+    if alerta_existente:
+        alerta_existente.tipo_alerta = tipo_alerta
+        alerta_existente.mensaje = mensaje
+        alerta_existente.save()
+        return alerta_existente
+
+    return Alerta.objects.create(
+        indicador=medicion.indicador,
+        medicion=medicion,
+        tipo_alerta=tipo_alerta,
+        mensaje=mensaje,
+        estado_alerta='pendiente',
+    )
 
