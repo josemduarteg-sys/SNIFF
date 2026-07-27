@@ -88,3 +88,26 @@ class UsuarioCrearSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
     
+class UsuarioActualSerializer(serializers.ModelSerializer):
+    rol_nombre = serializers.CharField(
+        source='rol.nombre',
+        read_only=True
+    )
+
+    class Meta:
+        model = Usuario
+        fields = [
+            'id',
+            'username',
+            'first_name',
+            'last_name',
+            'correo',
+            'email',
+            'rol',
+            'rol_nombre',
+            'estado',
+            'is_active',
+            'is_staff',
+        ]
+        read_only_fields = fields
+
