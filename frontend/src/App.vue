@@ -1,8 +1,13 @@
 <script setup>
 import { onMounted, ref } from 'vue'
-import LoginView from './views/LoginView.vue'
-import DashboardView from './views/DashboardView.vue'
-import { estaAutenticado, logout, obtenerUsuarioActual } from './services/authService'
+import { useRouter } from 'vue-router'
+import {
+  estaAutenticado,
+  logout,
+  obtenerUsuarioActual,
+} from './services/authService'
+
+const router = useRouter()
 
 const usuario = ref(null)
 const cargandoSesion = ref(true)
@@ -19,6 +24,7 @@ async function cargarSesion() {
   } catch (error) {
     logout()
     usuario.value = null
+    router.push('/login')
   } finally {
     cargandoSesion.value = false
   }
@@ -26,11 +32,13 @@ async function cargarSesion() {
 
 function manejarLoginExitoso(usuarioAutenticado) {
   usuario.value = usuarioAutenticado
+  router.push('/dashboard')
 }
 
 function manejarLogout() {
   logout()
   usuario.value = null
+  router.push('/login')
 }
 
 onMounted(() => {
@@ -43,16 +51,14 @@ onMounted(() => {
     Cargando...
   </div>
 
-  <LoginView
-    v-else-if="!usuario"
-    @login-success="manejarLoginExitoso"
-  />
-
-  <DashboardView
-    v-else
-    :usuario="usuario"
-    @logout="manejarLogout"
-  />
+  <router-view v-else v-slot="{ Component }">
+    <component
+      :is="Component"
+      :usuario="usuario"
+      @login-success="manejarLoginExitoso"
+      @logout="manejarLogout"
+    />
+  </router-view>
 </template>
 
 <style scoped>
@@ -67,3 +73,4 @@ onMounted(() => {
   font-weight: 700;
 }
 </style>
+
