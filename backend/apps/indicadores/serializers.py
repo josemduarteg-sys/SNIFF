@@ -236,8 +236,16 @@ class MedicionSerializer(serializers.ModelSerializer):
         return round(obj.calcular_cumplimiento(), 2)
 
     def validate(self, attrs):
-        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
-        meta = attrs.get('meta') or getattr(self.instance, 'meta', None)
+        indicador = attrs.get('indicador') or getattr(
+            self.instance,
+            'indicador',
+            None
+        )
+        meta = attrs.get('meta') or getattr(
+            self.instance,
+            'meta',
+            None
+        )
 
         if indicador and meta and meta.indicador_id != indicador.id:
             raise serializers.ValidationError(
@@ -247,6 +255,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        from apps.auditoria.services import registrar_bitacora
         from .services import (
             generar_alerta_para_medicion,
             obtener_estado_para_medicion,
@@ -270,9 +279,100 @@ class MedicionSerializer(serializers.ModelSerializer):
         validated_data['estado_cumplimiento'] = estado
 
         medicion = super().create(validated_data)
-        generar_alerta_para_medicion(medicion)
+        alerta = generar_alerta_para_medicion(medicion)
+
+        request = self.context.get('request')
+        usuario = (
+            request.user
+            if request and request.user.is_authenticated
+            else medicion.registrado_por
+        )
+
+        registrar_bitacora(
+            usuario=usuario,
+            accion='crear',
+            modulo='mediciones',
+            descripcion=(
+                f'Se registró una medición para el indicador '
+                f'"{medicion.indicador.nombre}" con resultado '
+                f'{medicion.valor_resultado}.'
+            ),
+            request=request,
+        )
+
+        if alerta:
+            registrar_bitacora(
+                usuario=usuario,
+                accion='crear',
+                modulo='alertas',
+                descripcion=(
+                    f'Se generó una alerta automática para el indicador '
+                    f'"{medicion.indicador.nombre}".'
+                ),
+                request=request,
+            )
 
         return medicion
+
+    def update(self, instance, validated_data):
+        from apps.auditoria.services import registrar_bitacora
+        from .services import (
+            generar_alerta_para_medicion,
+            obtener_estado_para_medicion,
+        )
+
+        indicador = validated_data.get('indicador', instance.indicador)
+        meta = validated_data.get('meta', instance.meta)
+        valor_resultado = validated_data.get(
+            'valor_resultado',
+            instance.valor_resultado
+        )
+
+        estado = obtener_estado_para_medicion(
+            indicador=indicador,
+            meta=meta,
+            valor_resultado=valor_resultado,
+        )
+
+        if estado is None:
+            raise serializers.ValidationError(
+                'No se encontró un estado de cumplimiento válido para esta medición.'
+            )
+
+        validated_data['estado_cumplimiento'] = estado
+
+        medicion = super().update(instance, validated_data)
+        alerta = generar_alerta_para_medicion(medicion)
+
+        request = self.context.get('request')
+        usuario = request.user if request and request.user.is_authenticated else medicion.registrado_por
+
+        registrar_bitacora(
+            usuario=usuario,
+            accion='actualizar',
+            modulo='mediciones',
+            descripcion=(
+                f'Se actualizó una medición para el indicador '
+                f'"{medicion.indicador.nombre}" con resultado '
+                f'{medicion.valor_resultado}.'
+            ),
+            request=request,
+        )
+
+        if alerta:
+            registrar_bitacora(
+                usuario=usuario,
+                accion='crear',
+                modulo='alertas',
+                descripcion=(
+                    f'Se generó o actualizó una alerta automática para el indicador '
+                    f'"{medicion.indicador.nombre}".'
+                ),
+                request=request,
+            )
+
+        return medicion
+
 
     def update(self, instance, validated_data):
         from .services import (
