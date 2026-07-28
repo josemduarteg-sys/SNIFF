@@ -2,6 +2,9 @@
   <div class="page">
     <h1>Mediciones</h1>
     <p>Vista de registro y consulta de mediciones KPI.</p>
+    <button @click="$router.go(-1)">
+  Regresar
+</button>
   </div>
 </template>
 

@@ -2,6 +2,9 @@
   <div class="page">
     <h1>Indicadores KPI</h1>
     <p>Vista de gestión de indicadores clave de desempeño.</p>
+    <button @click="$router.go(-1)">
+  Regresar
+</button>
   </div>
 </template>
 
