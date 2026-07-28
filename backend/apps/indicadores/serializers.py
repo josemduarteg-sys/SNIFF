@@ -194,6 +194,12 @@ class MedicionSerializer(serializers.ModelSerializer):
         source='indicador.nombre',
         read_only=True
     )
+    periodo_nombre = serializers.SerializerMethodField()
+    valor_meta = serializers.SerializerMethodField()
+    observaciones = serializers.CharField(
+        source='observacion',
+        read_only=True
+    )
     estado_cumplimiento = serializers.PrimaryKeyRelatedField(read_only=True)
     estado_cumplimiento_nombre = serializers.CharField(
         source='estado_cumplimiento.nombre',
@@ -212,9 +218,11 @@ class MedicionSerializer(serializers.ModelSerializer):
             'indicador',
             'indicador_nombre',
             'meta',
+            'valor_meta',
             'estado_cumplimiento',
             'estado_cumplimiento_nombre',
             'periodo',
+            'periodo_nombre',
             'registrado_por',
             'registrado_por_username',
             'archivo_importado',
@@ -223,6 +231,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             'valor_resultado',
             'porcentaje_cumplimiento',
             'observacion',
+            'observaciones',
             'fecha_registro',
         ]
         read_only_fields = [
@@ -230,7 +239,31 @@ class MedicionSerializer(serializers.ModelSerializer):
             'estado_cumplimiento',
             'fecha_registro',
             'porcentaje_cumplimiento',
+            'periodo_nombre',
+            'valor_meta',
+            'observaciones',
         ]
+
+    def get_periodo_nombre(self, obj):
+        if not obj.periodo:
+            return None
+
+        if obj.periodo.descripcion:
+            return obj.periodo.descripcion
+
+        if obj.periodo.fecha_inicio and obj.periodo.fecha_fin:
+            return f'{obj.periodo.fecha_inicio} - {obj.periodo.fecha_fin}'
+
+        if obj.periodo.fecha_inicio:
+            return str(obj.periodo.fecha_inicio)
+
+        return f'Periodo {obj.periodo.id}'
+
+    def get_valor_meta(self, obj):
+        if not obj.meta:
+            return None
+
+        return obj.meta.valor_meta
 
     def get_porcentaje_cumplimiento(self, obj):
         return round(obj.calcular_cumplimiento(), 2)
