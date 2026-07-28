@@ -1,6 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import sniffLogo from '../assets/images/sniff-logo.png'
+import api from '../services/api'
 
 const props = defineProps({
   usuario: {
@@ -12,14 +13,94 @@ const props = defineProps({
 
 const emit = defineEmits(['logout'])
 
+const cargandoDashboard = ref(false)
+const errorDashboard = ref('')
+
+const estrategias = ref([])
+const objetivos = ref([])
+const indicadores = ref([])
+const mediciones = ref([])
+const alertas = ref([])
+
 const inicialesUsuario = computed(() => {
   const nombre = props.usuario?.username || 'Usuario'
   return nombre.slice(0, 2).toUpperCase()
 })
 
+const estrategiasActivas = computed(() => {
+  return estrategias.value.filter((item) => item.estado === 'activa' || item.estado === true).length
+})
+
+const objetivosRegistrados = computed(() => objetivos.value.length)
+
+const indicadoresActivos = computed(() => {
+  return indicadores.value.filter((item) => item.estado === 'activo' || item.estado === true).length
+})
+
+const alertasPendientes = computed(() => {
+  return alertas.value.filter((item) => item.estado_alerta === 'pendiente').length
+})
+
+const cumplimientoGeneral = computed(() => {
+  if (!mediciones.value.length) return 0
+
+  const total = mediciones.value.reduce((acumulado, medicion) => {
+    return acumulado + Number(medicion.porcentaje_cumplimiento || 0)
+  }, 0)
+
+  return Math.round(total / mediciones.value.length)
+})
+
+function normalizarRespuesta(response) {
+  if (Array.isArray(response.data)) {
+    return response.data
+  }
+
+  if (Array.isArray(response.data.results)) {
+    return response.data.results
+  }
+
+  return []
+}
+
+async function cargarDatosDashboard() {
+  cargandoDashboard.value = true
+  errorDashboard.value = ''
+
+  try {
+    const [
+      estrategiasResponse,
+      objetivosResponse,
+      indicadoresResponse,
+      medicionesResponse,
+      alertasResponse,
+    ] = await Promise.all([
+      api.get('estrategias/'),
+      api.get('objetivos/'),
+      api.get('indicadores-kpi/'),
+      api.get('mediciones/'),
+      api.get('alertas/'),
+    ])
+
+    estrategias.value = normalizarRespuesta(estrategiasResponse)
+    objetivos.value = normalizarRespuesta(objetivosResponse)
+    indicadores.value = normalizarRespuesta(indicadoresResponse)
+    mediciones.value = normalizarRespuesta(medicionesResponse)
+    alertas.value = normalizarRespuesta(alertasResponse)
+  } catch (error) {
+    errorDashboard.value = 'No se pudieron cargar los datos del dashboard.'
+  } finally {
+    cargandoDashboard.value = false
+  }
+}
+
 function cerrarSesion() {
   emit('logout')
 }
+
+onMounted(() => {
+  cargarDatosDashboard()
+})
 </script>
 
 <template>
@@ -106,6 +187,9 @@ function cerrarSesion() {
 
     <main class="content">
 
+      <div v-if="cargandoDashboard" class="dashboard-message">Cargando datos del dashboard...</div>
+      <div v-if="errorDashboard" class="dashboard-error">{{ errorDashboard }}</div>
+
       <div class="page-header">
         <div>
           <h1>Dashboard Principal</h1>
@@ -131,9 +215,9 @@ function cerrarSesion() {
               +4%
             </div>
           </div>
-          <div class="kpi-value">82%</div>
+          <div class="kpi-value">{{ cumplimientoGeneral }}%</div>
           <div class="kpi-label">Cumplimiento general</div>
-          <div class="progress-track"><div class="progress-fill" style="width:82%;"></div></div>
+          <div class="progress-track"><div class="progress-fill" :style="{ width: `${cumplimientoGeneral}%` }"></div></div>
           <div class="kpi-foot">Meta del periodo: 90%</div>
         </div>
 
@@ -143,9 +227,9 @@ function cerrarSesion() {
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
             </div>
           </div>
-          <div class="kpi-value">5</div>
+          <div class="kpi-value">{{ estrategiasActivas }}</div>
           <div class="kpi-label">Estrategias activas</div>
-          <div class="kpi-foot" style="margin-top:22px;">De 5 estrategias registradas</div>
+          <div class="kpi-foot" style="margin-top:22px;">De {{ estrategias.length }} estrategias registradas</div>
         </div>
 
         <div class="kpi-card">
@@ -154,9 +238,9 @@ function cerrarSesion() {
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V4a1 1 0 0 1 1-1h9l4 4v3"/><path d="M4 14h8"/><path d="M4 21h9"/><circle cx="18" cy="16" r="4"/></svg>
             </div>
           </div>
-          <div class="kpi-value">18</div>
+          <div class="kpi-value">{{ objetivosRegistrados }}</div>
           <div class="kpi-label">Objetivos registrados</div>
-          <div class="kpi-foot" style="margin-top:22px;">Distribuidos en 5 estrategias</div>
+          <div class="kpi-foot" style="margin-top:22px;">Distribuidos en {{ estrategias.length }} estrategias</div>
         </div>
 
         <div class="kpi-card">
@@ -165,7 +249,7 @@ function cerrarSesion() {
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
             </div>
           </div>
-          <div class="kpi-value">34</div>
+          <div class="kpi-value">{{ indicadoresActivos }}</div>
           <div class="kpi-label">KPI activos</div>
           <div class="kpi-foot" style="margin-top:22px;">En seguimiento este trimestre</div>
         </div>
@@ -180,7 +264,7 @@ function cerrarSesion() {
               +2
             </div>
           </div>
-          <div class="kpi-value">6</div>
+          <div class="kpi-value">{{ alertasPendientes }}</div>
           <div class="kpi-label">Indicadores en riesgo</div>
           <div class="kpi-foot">Requieren atención inmediata</div>
         </div>
@@ -976,6 +1060,25 @@ function cerrarSesion() {
     cursor:pointer;
   }
   .link-see-all:hover{ color:var(--navy); }
+
+.dashboard-message,
+.dashboard-error {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dashboard-message {
+  background: var(--aqua-soft);
+  color: var(--steel);
+}
+
+.dashboard-error {
+  background: rgba(231, 111, 81, 0.12);
+  color: var(--danger);
+}
 
   /* ===================== RESPONSIVE ===================== */
   @media (max-width:1180px){
