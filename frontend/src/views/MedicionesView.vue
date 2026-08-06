@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import MedicionForm from '../components/mediciones/MedicionForm.vue'
+import MedicionDetalle from '../components/mediciones/MedicionDetalle.vue'
 import {
   obtenerDatosFormularioMedicion,
   obtenerMediciones,
@@ -33,6 +34,8 @@ const error = ref('')
 const mostrarModal = ref(false)
 const medicionSeleccionada = ref(null)
 const mensajeExito = ref('')
+const mostrarModalDetalle = ref(false)
+const medicionDetalle = ref(null)
 
 const tituloModal = computed(() => {
   return medicionSeleccionada.value?.id ? 'Editar medición' : 'Nueva medición'
@@ -128,6 +131,16 @@ function abrirModalEditar(medicion) {
   mensajeExito.value = ''
   medicionSeleccionada.value = { ...medicion }
   mostrarModal.value = true
+}
+
+function abrirModalDetalle(medicion) {
+  medicionDetalle.value = { ...medicion }
+  mostrarModalDetalle.value = true
+}
+
+function cerrarModalDetalle() {
+  mostrarModalDetalle.value = false
+  medicionDetalle.value = null
 }
 
 function cerrarModal() {
@@ -435,7 +448,7 @@ onMounted(() => {
 
             <td>
               <div class="actions-cell">
-                <button class="action-icon-btn" type="button" title="Ver detalle">
+                <button class="action-icon-btn" type="button" title="Ver detalle" @click="abrirModalDetalle(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
                     <circle cx="12" cy="12" r="3" />
@@ -480,6 +493,19 @@ onMounted(() => {
         :medicion-editar="medicionSeleccionada"
         @guardado="manejarGuardado"
         @cancelar="cerrarModal"
+      />
+    </ModalBase>
+
+    <ModalBase
+      :abierto="mostrarModalDetalle"
+      titulo="Detalle de medición"
+      subtitulo="Información completa de la medición registrada y su cálculo de cumplimiento."
+      ancho="760px"
+      @cerrar="cerrarModalDetalle"
+    >
+      <MedicionDetalle
+        v-if="medicionDetalle"
+        :medicion="medicionDetalle"
       />
     </ModalBase>
   </AppLayout>
