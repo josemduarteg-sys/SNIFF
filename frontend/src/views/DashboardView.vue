@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import sniffLogo from '../assets/images/sniff-logo.png'
+import AppLayout from '../components/layout/AppLayout.vue'
 import api from '../services/api'
 
 const props = defineProps({
@@ -22,10 +22,6 @@ const indicadores = ref([])
 const mediciones = ref([])
 const alertas = ref([])
 
-const inicialesUsuario = computed(() => {
-  const nombre = props.usuario?.username || 'Usuario'
-  return nombre.slice(0, 2).toUpperCase()
-})
 
 const estrategiasActivas = computed(() => {
   return estrategias.value.filter((item) => item.estado === 'activa' || item.estado === true).length
@@ -104,103 +100,25 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="dashboard-view">
-
-  <!-- ===================== SIDEBAR ===================== -->
-  <aside class="sidebar">
-    <div class="sidebar-brand">
-      <img :src="sniffLogo" alt="Sniff">
-      <div class="wordmark">Sniff<span>.</span></div>
-    </div>
-
-    <nav class="nav-section">
-      <div class="nav-label">General</div>
-      <RouterLink to="/dashboard" class="nav-item active">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-        <span>Dashboard</span>
-      </RouterLink>
-
-      <div class="nav-label" style="margin-top:14px;">Planeación</div>
-      <RouterLink to="/estrategias" class="nav-item">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
-        <span>Estrategias</span>
-      </RouterLink>
-      <RouterLink to="/objetivos" class="nav-item">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V4a1 1 0 0 1 1-1h9l4 4v3"/><path d="M4 14h8"/><path d="M4 21h9"/><circle cx="18" cy="16" r="4"/></svg>
-        <span>Objetivos</span>
-      </RouterLink>
-      <RouterLink to="/indicadores" class="nav-item">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-        <span>Indicadores (KPI)</span>
-      </RouterLink>
-      <RouterLink to="/mediciones" class="nav-item">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 3v3h6V3"/><polyline points="8.5 13 11 15.5 15.5 10.5"/></svg>
-        <span>Registro de Mediciones</span>
-      </RouterLink>
-      <RouterLink to="/dashboard" class="nav-item">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><path d="M9 3v15M15 6v15"/></svg>
-        <span>Mapa Estratégico</span>
-      </RouterLink>
-
-      <div class="nav-label" style="margin-top:14px;">Sistema</div>
-      <RouterLink to="/dashboard" class="nav-item">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        <span>Configuración</span>
-      </RouterLink>
-    </nav>
-
-    <div class="sidebar-user">
-      <div class="avatar-sm">{{ inicialesUsuario }}</div>
-      <div>
-        <div class="name">{{ usuario?.username || 'Usuario' }}</div>
-        <div class="role">{{ usuario?.rol_nombre || 'Sin rol' }}</div>
+  <AppLayout
+    :usuario="usuario"
+    titulo="Dashboard Principal"
+    subtitulo="Resumen general del cumplimiento estratégico"
+    breadcrumb-actual="Dashboard"
+    @logout="cerrarSesion"
+  >
+    <template #actions>
+      <div class="period-select">
+        <svg class="cal" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Segundo Trimestre 2026
+        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       </div>
-    </div>
-  </aside>
+    </template>
 
-  <!-- ===================== MAIN AREA ===================== -->
-  <div class="main-area">
-
-    <header class="topbar">
-      <div class="breadcrumb">
-        <span>Sniff</span>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-        <span class="current">Dashboard</span>
-      </div>
-
-      <div class="topbar-search">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" placeholder="Buscar objetivos, indicadores...">
-      </div>
-
-      <div class="topbar-actions">
-        <div class="icon-btn">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          <span class="dot"></span>
-        </div>
-        <button class="topbar-profile" type="button" @click="cerrarSesion" title="Cerrar sesión">
-          <div class="avatar-sm">{{ inicialesUsuario }}</div>
-          <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-      </div>
-    </header>
-
-    <main class="content">
+    <div class="dashboard-content">
 
       <div v-if="cargandoDashboard" class="dashboard-message">Cargando datos del dashboard...</div>
       <div v-if="errorDashboard" class="dashboard-error">{{ errorDashboard }}</div>
-
-      <div class="page-header">
-        <div>
-          <h1>Dashboard Principal</h1>
-          <div class="subtitle">Resumen general del cumplimiento estratégico</div>
-        </div>
-        <div class="period-select">
-          <svg class="cal" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          Segundo Trimestre 2026
-          <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-        </div>
-      </div>
 
       <!-- ================= SUMMARY CARDS ================= -->
       <section class="summary-grid">
@@ -564,14 +482,13 @@ onMounted(() => {
 
       </section>
 
-    </main>
-  </div>
-
-  </div>
+    
+    </div>
+  </AppLayout>
 </template>
 
 <style scoped>
-  .dashboard-view{
+  .dashboard-content{
     --navy:#1D3557;
     --navy-dark:#152840;
     --steel:#457B9D;
@@ -592,15 +509,15 @@ onMounted(() => {
     --shadow-hover: 0 10px 26px rgba(29,53,87,0.10);
     --sidebar-w:264px;
   }
-  .dashboard-view *{ box-sizing:border-box; margin:0; padding:0; }
-  .dashboard-view{
+  .dashboard-content *{ box-sizing:border-box; margin:0; padding:0; }
+  .dashboard-content{
     font-family:'Montserrat', sans-serif;
     background:var(--bg);
     color:var(--navy);
     -webkit-font-smoothing:antialiased;
   }
-  .dashboard-view a{ color:inherit; text-decoration:none; }
-  .dashboard-view button{ font-family:inherit; }
+  .dashboard-content a{ color:inherit; text-decoration:none; }
+  .dashboard-content button{ font-family:inherit; }
 
   /* ===================== SIDEBAR ===================== */
   .sidebar{
@@ -1091,7 +1008,7 @@ onMounted(() => {
     .topbar-search{ display:none; }
   }
   @media (max-width:760px){
-    .dashboard-view{ --sidebar-w:76px; }
+    .dashboard-content{ --sidebar-w:76px; }
     .sidebar-brand .wordmark, .nav-label, .nav-item span, .sidebar-user .name, .sidebar-user .role{ display:none; }
     .sidebar-brand{ justify-content:center; padding:20px 0; }
     .nav-item{ justify-content:center; }
