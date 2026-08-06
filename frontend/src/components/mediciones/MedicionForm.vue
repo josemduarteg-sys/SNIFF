@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, watch } from 'vue'
-import { crearMedicion } from '../../services/medicionService'
+import { actualizarMedicion, crearMedicion } from '../../services/medicionService'
 
 const props = defineProps({
   indicadores: {
@@ -14,6 +14,11 @@ const props = defineProps({
   periodos: {
     type: Array,
     required: true,
+  },
+  medicionEditar: {
+    type: Object,
+    required: false,
+    default: null,
   },
 })
 
@@ -32,72 +37,89 @@ const estado = reactive({
   error: '',
 })
 
+const esEdicion = computed(() => !!props.medicionEditar?.id)
+
+const tituloBoton = computed(() => {
+  if (estado.guardando) return esEdicion.value ? 'Actualizando...' : 'Guardando...'
+  return esEdicion.value ? 'Actualizar medición' : 'Guardar medición'
+})
+
 const metasDisponibles = computed(() => {
-  if (!form.indicador) {
-    return []
-  }
+  if (!form.indicador) return props.metas
 
-  return props.metas.filter((meta) => Number(meta.indicador) === Number(form.indicador))
+  return props.metas.filter((meta) => {
+    return Number(meta.indicador) === Number(form.indicador)
+  })
 })
 
-const metaSeleccionada = computed(() => {
-  return props.metas.find((meta) => Number(meta.id) === Number(form.meta)) || null
-})
+watch(
+  () => props.medicionEditar,
+  (medicion) => {
+    estado.error = ''
 
-const indicadorSeleccionado = computed(() => {
-  return props.indicadores.find((indicador) => Number(indicador.id) === Number(form.indicador)) || null
-})
+    if (medicion?.id) {
+      form.indicador = medicion.indicador || ''
+      form.meta = medicion.meta || ''
+      form.periodo = medicion.periodo || ''
+      form.valor_resultado = medicion.valor_resultado || ''
+      form.observacion = medicion.observacion || medicion.observaciones || ''
+      return
+    }
+
+    limpiarFormulario()
+  },
+  { immediate: true }
+)
 
 watch(
   () => form.indicador,
   () => {
-    form.meta = ''
+    if (!form.meta) return
+
+    const metaExiste = metasDisponibles.value.some((meta) => {
+      return Number(meta.id) === Number(form.meta)
+    })
+
+    if (!metaExiste) {
+      form.meta = ''
+    }
   }
 )
 
-function textoMeta(meta) {
-  const valor = meta.valor_meta ?? meta.valor ?? '-'
-  const inicio = meta.fecha_inicio || 'sin inicio'
-  const fin = meta.fecha_fin || 'sin fin'
-  return `${formatearNumero(valor)} · ${inicio} a ${fin}`
+function limpiarFormulario() {
+  form.indicador = ''
+  form.meta = ''
+  form.periodo = ''
+  form.valor_resultado = ''
+  form.observacion = ''
 }
 
-function formatearNumero(valor) {
-  if (valor === null || valor === undefined || valor === '') {
-    return '-'
-  }
+function obtenerValorMeta(meta) {
+  if (meta.valor_meta !== undefined && meta.valor_meta !== null) return meta.valor_meta
+  if (meta.valor !== undefined && meta.valor !== null) return meta.valor
+  return '-'
+}
 
-  const numero = Number(valor)
-
-  if (Number.isNaN(numero)) {
-    return valor
-  }
-
-  return numero.toLocaleString('es-GT', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  })
+function formatearMeta(meta) {
+  const valor = obtenerValorMeta(meta)
+  const indicador = meta.indicador_nombre ? ` - ${meta.indicador_nombre}` : ''
+  return `${valor}${indicador}`
 }
 
 function validarFormulario() {
-  if (!form.indicador) {
-    return 'Seleccioná el indicador KPI.'
-  }
+  if (!form.indicador) return 'Seleccioná el KPI.'
+  if (!form.meta) return 'Seleccioná la meta asociada.'
+  if (!form.periodo) return 'Seleccioná el periodo de medición.'
+  if (form.valor_resultado === '' || form.valor_resultado === null) return 'Ingresá el resultado medido.'
 
-  if (!form.meta) {
-    return 'Seleccioná la meta contra la que se evaluará la medición.'
-  }
+  const resultado = Number(form.valor_resultado)
 
-  if (!form.periodo) {
-    return 'Seleccioná el periodo de medición.'
-  }
-
-  if (form.valor_resultado === '' || form.valor_resultado === null) {
-    return 'Ingresá el resultado medido.'
-  }
-
-  if (Number.isNaN(Number(form.valor_resultado))) {
+  if (Number.isNaN(resultado)) {
     return 'El resultado medido debe ser un número válido.'
+  }
+
+  if (resultado < 0) {
+    return 'El resultado medido no puede ser negativo.'
   }
 
   return ''
@@ -115,41 +137,52 @@ async function guardar() {
 
   estado.guardando = true
 
-  try {
-    const medicion = await crearMedicion({
-      indicador: Number(form.indicador),
-      meta: Number(form.meta),
-      periodo: Number(form.periodo),
-      valor_resultado: form.valor_resultado,
-      observacion: form.observacion,
-    })
+  const payload = {
+    indicador: Number(form.indicador),
+    meta: Number(form.meta),
+    periodo: Number(form.periodo),
+    valor_resultado: form.valor_resultado,
+    observacion: form.observacion,
+  }
 
-    emit('guardado', medicion)
+  try {
+    if (esEdicion.value) {
+      await actualizarMedicion(props.medicionEditar.id, payload)
+    } else {
+      await crearMedicion(payload)
+    }
+
+    emit('guardado')
+    limpiarFormulario()
   } catch (error) {
     const data = error.response?.data
 
-    if (data && typeof data === 'object') {
-      const primerError = Object.values(data).flat().join(' ')
-      estado.error = primerError || 'No se pudo guardar la medición.'
+    if (data?.non_field_errors) {
+      estado.error = data.non_field_errors.join(' ')
+    } else if (data?.detail) {
+      estado.error = data.detail
+    } else if (typeof data === 'object' && data !== null) {
+      const primerCampo = Object.keys(data)[0]
+      const mensaje = data[primerCampo]
+      estado.error = Array.isArray(mensaje) ? mensaje.join(' ') : String(mensaje)
     } else {
-      estado.error = 'No se pudo guardar la medición.'
+      estado.error = esEdicion.value
+        ? 'No se pudo actualizar la medición.'
+        : 'No se pudo guardar la medición.'
     }
   } finally {
     estado.guardando = false
   }
 }
-
-function cancelar() {
-  emit('cancelar')
-}
 </script>
 
 <template>
-  <form class="form-grid" @submit.prevent="guardar">
+  <form class="medicion-form" @submit.prevent="guardar">
     <div class="form-group full">
-      <label>Indicador KPI</label>
+      <label>KPI</label>
       <select v-model="form.indicador">
-        <option value="">Seleccionar indicador</option>
+        <option value="">Seleccionar KPI</option>
+
         <option
           v-for="indicador in indicadores"
           :key="indicador.id"
@@ -162,16 +195,15 @@ function cancelar() {
 
     <div class="form-group">
       <label>Meta</label>
-      <select v-model="form.meta" :disabled="!form.indicador">
-        <option value="">
-          {{ form.indicador ? 'Seleccionar meta' : 'Primero seleccioná un KPI' }}
-        </option>
+      <select v-model="form.meta">
+        <option value="">Seleccionar meta</option>
+
         <option
           v-for="meta in metasDisponibles"
           :key="meta.id"
           :value="meta.id"
         >
-          {{ textoMeta(meta) }}
+          {{ formatearMeta(meta) }}
         </option>
       </select>
     </div>
@@ -180,39 +212,26 @@ function cancelar() {
       <label>Periodo</label>
       <select v-model="form.periodo">
         <option value="">Seleccionar periodo</option>
+
         <option
           v-for="periodo in periodos"
           :key="periodo.id"
           :value="periodo.id"
         >
-          {{ periodo.nombre || periodo.periodo_nombre || `Periodo ${periodo.id}` }}
+          {{ periodo.nombre || periodo.periodo_nombre || periodo.descripcion }}
         </option>
       </select>
     </div>
 
-    <div class="form-group">
+    <div class="form-group full">
       <label>Resultado medido</label>
       <input
         v-model="form.valor_resultado"
         type="number"
-        step="0.01"
         min="0"
-        placeholder="Ej. 85000"
+        step="0.01"
+        placeholder="Ejemplo: 85000"
       />
-    </div>
-
-    <div class="form-group">
-      <label>Unidad</label>
-      <input
-        :value="indicadorSeleccionado?.unidad_medida || '-'"
-        type="text"
-        disabled
-      />
-    </div>
-
-    <div v-if="metaSeleccionada" class="info-box full">
-      <strong>Meta seleccionada:</strong>
-      <span>{{ formatearNumero(metaSeleccionada.valor_meta ?? metaSeleccionada.valor) }}</span>
     </div>
 
     <div class="form-group full">
@@ -220,7 +239,7 @@ function cancelar() {
       <textarea
         v-model="form.observacion"
         rows="3"
-        placeholder="Observaciones opcionales de la medición"
+        placeholder="Agregar observaciones de la medición"
       ></textarea>
     </div>
 
@@ -229,19 +248,19 @@ function cancelar() {
     </div>
 
     <div class="form-actions full">
-      <button class="btn-secondary" type="button" @click="cancelar">
+      <button class="btn-secondary" type="button" @click="emit('cancelar')">
         Cancelar
       </button>
 
       <button class="btn-primary" type="submit" :disabled="estado.guardando">
-        {{ estado.guardando ? 'Guardando...' : 'Guardar medición' }}
+        {{ tituloBoton }}
       </button>
     </div>
   </form>
 </template>
 
 <style scoped>
-.form-grid {
+.medicion-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 1fr));
   gap: 16px;
@@ -267,6 +286,7 @@ label {
 input,
 select,
 textarea {
+  width: 100%;
   border: 1.5px solid #e4eaef;
   border-radius: 10px;
   padding: 0 12px;
@@ -282,37 +302,14 @@ select {
 }
 
 textarea {
-  resize: vertical;
-  min-height: 86px;
   padding-top: 10px;
+  resize: vertical;
 }
 
 input:focus,
 select:focus,
 textarea:focus {
   border-color: #a8dadc;
-}
-
-input:disabled,
-select:disabled {
-  background: #f6f9fa;
-  color: #9aa8b8;
-  cursor: not-allowed;
-}
-
-.info-box {
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: #eaf5f5;
-  color: #457b9d;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.info-box strong {
-  color: #1d3557;
 }
 
 .alert {
@@ -331,6 +328,7 @@ select:disabled {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  padding-top: 4px;
 }
 
 .btn-primary,
@@ -365,9 +363,18 @@ select:disabled {
   background: #f6f9fa;
 }
 
-@media (max-width: 700px) {
-  .form-grid {
+@media (max-width: 640px) {
+  .medicion-form {
     grid-template-columns: 1fr;
+  }
+
+  .form-actions {
+    flex-direction: column-reverse;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    width: 100%;
   }
 }
 </style>

@@ -4,11 +4,11 @@ import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import MedicionForm from '../components/mediciones/MedicionForm.vue'
 import {
-  obtenerMediciones,
   obtenerDatosFormularioMedicion,
+  obtenerMediciones,
 } from '../services/medicionService'
 
-defineProps({
+const props = defineProps({
   usuario: {
     type: Object,
     required: false,
@@ -27,10 +27,74 @@ const estadosCumplimiento = ref([])
 const busqueda = ref('')
 const indicadorSeleccionado = ref('')
 const estadoSeleccionado = ref('')
-const mostrarModalCrear = ref(false)
 
 const cargando = ref(false)
 const error = ref('')
+const mostrarModal = ref(false)
+const medicionSeleccionada = ref(null)
+const mensajeExito = ref('')
+
+const tituloModal = computed(() => {
+  return medicionSeleccionada.value?.id ? 'Editar medición' : 'Nueva medición'
+})
+
+const subtituloModal = computed(() => {
+  if (medicionSeleccionada.value?.id) {
+    return 'Actualizá el resultado medido. El sistema recalculará el cumplimiento y el estado automáticamente.'
+  }
+
+  return 'Registrá una medición para que el sistema calcule el cumplimiento y asigne el estado correspondiente.'
+})
+
+const medicionesFiltradas = computed(() => {
+  const texto = busqueda.value.trim().toLowerCase()
+
+  return mediciones.value.filter((medicion) => {
+    const coincideBusqueda =
+      !texto ||
+      medicion.indicador_nombre?.toLowerCase().includes(texto) ||
+      medicion.periodo_nombre?.toLowerCase().includes(texto) ||
+      medicion.estado_cumplimiento_nombre?.toLowerCase().includes(texto) ||
+      medicion.observacion?.toLowerCase().includes(texto) ||
+      medicion.observaciones?.toLowerCase().includes(texto)
+
+    const coincideIndicador =
+      !indicadorSeleccionado.value ||
+      Number(medicion.indicador) === Number(indicadorSeleccionado.value)
+
+    const coincideEstado =
+      !estadoSeleccionado.value ||
+      Number(medicion.estado_cumplimiento) === Number(estadoSeleccionado.value)
+
+    return coincideBusqueda && coincideIndicador && coincideEstado
+  })
+})
+
+const totalMediciones = computed(() => mediciones.value.length)
+
+const promedioCumplimiento = computed(() => {
+  const porcentajes = mediciones.value
+    .map((medicion) => Number(medicion.porcentaje_cumplimiento))
+    .filter((valor) => !Number.isNaN(valor))
+
+  if (!porcentajes.length) return 0
+
+  const total = porcentajes.reduce((acumulado, valor) => acumulado + valor, 0)
+  return Math.round(total / porcentajes.length)
+})
+
+const medicionesFavorables = computed(() => {
+  return mediciones.value.filter((medicion) => {
+    return medicion.estado_cumplimiento_nombre?.toLowerCase().includes('favorable')
+  }).length
+})
+
+const medicionesRiesgo = computed(() => {
+  return mediciones.value.filter((medicion) => {
+    const estado = medicion.estado_cumplimiento_nombre?.toLowerCase() || ''
+    return estado.includes('riesgo') || estado.includes('incumplido')
+  }).length
+})
 
 async function cargarDatos() {
   cargando.value = true
@@ -54,69 +118,32 @@ async function cargarDatos() {
   }
 }
 
-const medicionesFiltradas = computed(() => {
-  const texto = busqueda.value.trim().toLowerCase()
-
-  return mediciones.value.filter((medicion) => {
-    const coincideBusqueda =
-      !texto ||
-      medicion.indicador_nombre?.toLowerCase().includes(texto) ||
-      medicion.periodo_nombre?.toLowerCase().includes(texto) ||
-      medicion.estado_cumplimiento_nombre?.toLowerCase().includes(texto) ||
-      medicion.observaciones?.toLowerCase().includes(texto)
-
-    const coincideIndicador =
-      !indicadorSeleccionado.value ||
-      Number(medicion.indicador) === Number(indicadorSeleccionado.value)
-
-    const coincideEstado =
-      !estadoSeleccionado.value ||
-      Number(medicion.estado_cumplimiento) === Number(estadoSeleccionado.value)
-
-    return coincideBusqueda && coincideIndicador && coincideEstado
-  })
-})
-
-const totalMediciones = computed(() => mediciones.value.length)
-
-const promedioCumplimiento = computed(() => {
-  const porcentajes = mediciones.value
-    .map((medicion) => Number(medicion.porcentaje_cumplimiento))
-    .filter((valor) => !Number.isNaN(valor))
-
-  if (!porcentajes.length) {
-    return 0
-  }
-
-  const total = porcentajes.reduce((acumulado, valor) => acumulado + valor, 0)
-
-  return Math.round(total / porcentajes.length)
-})
-
-const medicionesFavorables = computed(() => {
-  return mediciones.value.filter((medicion) => {
-    return medicion.estado_cumplimiento_nombre?.toLowerCase().includes('favorable')
-  }).length
-})
-
-const medicionesRiesgo = computed(() => {
-  return mediciones.value.filter((medicion) => {
-    const estado = medicion.estado_cumplimiento_nombre?.toLowerCase() || ''
-    return estado.includes('riesgo') || estado.includes('incumplido')
-  }).length
-})
-
 function abrirModalCrear() {
-  mostrarModalCrear.value = true
+  mensajeExito.value = ''
+  medicionSeleccionada.value = null
+  mostrarModal.value = true
 }
 
-function cerrarModalCrear() {
-  mostrarModalCrear.value = false
+function abrirModalEditar(medicion) {
+  mensajeExito.value = ''
+  medicionSeleccionada.value = { ...medicion }
+  mostrarModal.value = true
 }
 
-async function manejarMedicionGuardada() {
-  cerrarModalCrear()
+function cerrarModal() {
+  mostrarModal.value = false
+  medicionSeleccionada.value = null
+}
+
+async function manejarGuardado() {
+  const fueEdicion = !!medicionSeleccionada.value?.id
+
+  cerrarModal()
   await cargarDatos()
+
+  mensajeExito.value = fueEdicion
+    ? 'Medición actualizada correctamente.'
+    : 'Medición registrada correctamente.'
 }
 
 function estadoClase(nombreEstado) {
@@ -139,15 +166,11 @@ function porcentajeClase(porcentaje) {
 }
 
 function formatearNumero(valor) {
-  if (valor === null || valor === undefined || valor === '') {
-    return '-'
-  }
+  if (valor === null || valor === undefined || valor === '') return '-'
 
   const numero = Number(valor)
 
-  if (Number.isNaN(numero)) {
-    return valor
-  }
+  if (Number.isNaN(numero)) return valor
 
   return numero.toLocaleString('es-GT', {
     minimumFractionDigits: 0,
@@ -158,33 +181,25 @@ function formatearNumero(valor) {
 function formatearPorcentaje(valor) {
   const numero = Number(valor)
 
-  if (Number.isNaN(numero)) {
-    return '0%'
-  }
+  if (Number.isNaN(numero)) return '0%'
 
   return `${numero.toFixed(2)}%`
 }
 
 function formatearFecha(fecha) {
-  if (!fecha) {
-    return 'No definida'
-  }
+  if (!fecha) return 'No definida'
 
   const soloFecha = fecha.split('T')[0]
   const [anio, mes, dia] = soloFecha.split('-')
+
+  if (!anio || !mes || !dia) return fecha
 
   return `${dia}/${mes}/${anio}`
 }
 
 function obtenerFuente(medicion) {
-  if (medicion.archivo_importado) {
-    return 'CSV'
-  }
-
-  if (medicion.consulta_dw) {
-    return 'Data Warehouse'
-  }
-
+  if (medicion.archivo_importado) return 'CSV'
+  if (medicion.consulta_dw) return 'Data Warehouse'
   return 'Manual'
 }
 
@@ -208,9 +223,9 @@ onMounted(() => {
 
 <template>
   <AppLayout
-    :usuario="usuario"
+    :usuario="props.usuario"
     titulo="Registro de Mediciones"
-    subtitulo="Consulta las mediciones registradas, su cumplimiento calculado y el estado asignado automáticamente."
+    subtitulo="Consulta, registra y actualiza mediciones de indicadores KPI."
     breadcrumb-actual="Mediciones"
     @logout="cerrarSesion"
   >
@@ -300,6 +315,10 @@ onMounted(() => {
       </article>
     </section>
 
+    <div v-if="mensajeExito" class="alert success">
+      {{ mensajeExito }}
+    </div>
+
     <div class="toolbar">
       <div class="toolbar-search">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -370,19 +389,12 @@ onMounted(() => {
         <tbody>
           <tr v-for="medicion in medicionesFiltradas" :key="medicion.id">
             <td>
-              <div class="cell-main">
-                {{ medicion.indicador_nombre || 'Sin KPI' }}
-              </div>
-
-              <div class="cell-sub">
-                {{ medicion.observaciones || 'Sin observaciones' }}
-              </div>
+              <div class="cell-main">{{ medicion.indicador_nombre || 'Sin KPI' }}</div>
+              <div class="cell-sub">{{ medicion.observacion || medicion.observaciones || 'Sin observaciones' }}</div>
             </td>
 
             <td>
-              <span class="code-chip">
-                {{ medicion.periodo_nombre || 'Sin periodo' }}
-              </span>
+              <span class="code-chip">{{ medicion.periodo_nombre || 'Sin periodo' }}</span>
             </td>
 
             <td>{{ formatearNumero(medicion.valor_meta) }}</td>
@@ -430,7 +442,7 @@ onMounted(() => {
                   </svg>
                 </button>
 
-                <button class="action-icon-btn" type="button" title="Editar">
+                <button class="action-icon-btn" type="button" title="Editar" @click="abrirModalEditar(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                     <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
@@ -448,36 +460,26 @@ onMounted(() => {
         </div>
 
         <div class="pagination">
-          <button class="page-btn" type="button" disabled>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-
+          <button class="page-btn" type="button" disabled>‹</button>
           <button class="page-btn active" type="button">1</button>
-
-          <button class="page-btn" type="button" disabled>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
+          <button class="page-btn" type="button" disabled>›</button>
         </div>
       </div>
     </section>
 
     <ModalBase
-      :abierto="mostrarModalCrear"
-      titulo="Nueva medición"
-      subtitulo="Registrá el resultado de un KPI para que el sistema calcule automáticamente su cumplimiento."
-      ancho="720px"
-      @cerrar="cerrarModalCrear"
+      :abierto="mostrarModal"
+      :titulo="tituloModal"
+      :subtitulo="subtituloModal"
+      @cerrar="cerrarModal"
     >
       <MedicionForm
         :indicadores="indicadores"
         :metas="metas"
         :periodos="periodos"
-        @guardado="manejarMedicionGuardada"
-        @cancelar="cerrarModalCrear"
+        :medicion-editar="medicionSeleccionada"
+        @guardado="manejarGuardado"
+        @cancelar="cerrarModal"
       />
     </ModalBase>
   </AppLayout>
@@ -525,29 +527,11 @@ onMounted(() => {
   justify-content: center;
 }
 
-.kpi-icon.navy {
-  background: rgba(29, 53, 87, 0.08);
-  color: #1d3557;
-}
-
-.kpi-icon.steel {
-  background: rgba(69, 123, 157, 0.10);
-  color: #457b9d;
-}
-
-.kpi-icon.aqua {
-  background: #eaf5f5;
-  color: #457b9d;
-}
-
-.kpi-icon.orange {
-  background: rgba(244, 162, 97, 0.14);
-  color: #f4a261;
-}
-
-.kpi-icon svg {
-  stroke: currentColor;
-}
+.kpi-icon.navy { background: rgba(29, 53, 87, 0.08); color: #1d3557; }
+.kpi-icon.steel { background: rgba(69, 123, 157, 0.10); color: #457b9d; }
+.kpi-icon.aqua { background: #eaf5f5; color: #457b9d; }
+.kpi-icon.orange { background: rgba(244, 162, 97, 0.14); color: #f4a261; }
+.kpi-icon svg { stroke: currentColor; }
 
 .kpi-value {
   font-size: 26px;
@@ -588,8 +572,19 @@ onMounted(() => {
   box-shadow: 0 8px 18px rgba(29, 53, 87, 0.14);
 }
 
-.btn-primary-page:hover {
-  background: #152840;
+.btn-primary-page:hover { background: #152840; }
+
+.alert {
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 18px;
+}
+
+.alert.success {
+  background: rgba(42, 157, 143, 0.12);
+  color: #2a9d8f;
 }
 
 .toolbar {
@@ -614,10 +609,7 @@ onMounted(() => {
   padding: 0 12px;
 }
 
-.toolbar-search svg {
-  stroke: #9aa8b8;
-}
-
+.toolbar-search svg { stroke: #9aa8b8; }
 .toolbar-search input {
   border: none;
   outline: none;
@@ -627,10 +619,7 @@ onMounted(() => {
   color: #1d3557;
   font-size: 13px;
 }
-
-.toolbar-search input::placeholder {
-  color: #9aa8b8;
-}
+.toolbar-search input::placeholder { color: #9aa8b8; }
 
 .toolbar-filter {
   height: 40px;
@@ -656,10 +645,7 @@ onMounted(() => {
   max-width: 260px;
 }
 
-.filter-label {
-  color: #9aa8b8;
-  font-size: 12px;
-}
+.filter-label { color: #9aa8b8; font-size: 12px; }
 
 .toolbar-count {
   height: 40px;
@@ -673,13 +659,8 @@ onMounted(() => {
   font-weight: 800;
 }
 
-.card-panel {
-  padding: 20px 22px 18px;
-}
-
-.table-card {
-  margin-bottom: 20px;
-}
+.card-panel { padding: 20px 22px 18px; }
+.table-card { margin-bottom: 20px; }
 
 .message,
 .empty-state {
@@ -691,15 +672,9 @@ onMounted(() => {
   font-weight: 700;
 }
 
-.message.error {
-  background: rgba(231, 111, 81, 0.12);
-  color: #e76f51;
-}
+.message.error { background: rgba(231, 111, 81, 0.12); color: #e76f51; }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
+table { width: 100%; border-collapse: collapse; }
 
 thead th {
   text-align: left;
@@ -720,31 +695,12 @@ tbody td {
   vertical-align: middle;
 }
 
-tbody tr:last-child td {
-  border-bottom: none;
-}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr { transition: background 0.12s ease; }
+tbody tr:hover { background: #fafcfd; }
 
-tbody tr {
-  transition: background 0.12s ease;
-}
-
-tbody tr:hover {
-  background: #fafcfd;
-}
-
-.cell-main {
-  font-weight: 800;
-  font-size: 13px;
-  color: #1d3557;
-}
-
-.cell-sub {
-  font-size: 11.5px;
-  color: #9aa8b8;
-  font-weight: 500;
-  margin-top: 3px;
-  max-width: 460px;
-}
+.cell-main { font-weight: 800; font-size: 13px; color: #1d3557; }
+.cell-sub { font-size: 11.5px; color: #9aa8b8; font-weight: 500; margin-top: 3px; max-width: 460px; }
 
 .code-chip {
   display: inline-flex;
@@ -758,32 +714,12 @@ tbody tr:hover {
   max-width: 260px;
 }
 
-.progress-cell {
-  min-width: 120px;
-}
-
-.progress-info {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.progress-number {
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.progress-number.ok {
-  color: #2a9d8f;
-}
-
-.progress-number.warning {
-  color: #b9701e;
-}
-
-.progress-number.danger {
-  color: #e76f51;
-}
+.progress-cell { min-width: 120px; }
+.progress-info { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.progress-number { font-size: 12px; font-weight: 800; }
+.progress-number.ok { color: #2a9d8f; }
+.progress-number.warning { color: #b9701e; }
+.progress-number.danger { color: #e76f51; }
 
 .progress-track {
   width: 100%;
@@ -793,22 +729,10 @@ tbody tr:hover {
   overflow: hidden;
 }
 
-.progress-fill {
-  height: 100%;
-  border-radius: 999px;
-}
-
-.progress-fill.ok {
-  background: #2a9d8f;
-}
-
-.progress-fill.warning {
-  background: #f4a261;
-}
-
-.progress-fill.danger {
-  background: #e76f51;
-}
+.progress-fill { height: 100%; border-radius: 999px; }
+.progress-fill.ok { background: #2a9d8f; }
+.progress-fill.warning { background: #f4a261; }
+.progress-fill.danger { background: #e76f51; }
 
 .badge {
   display: inline-flex;
@@ -820,33 +744,11 @@ tbody tr:hover {
   border-radius: 20px;
   white-space: nowrap;
 }
-
-.badge.ok {
-  background: rgba(42, 157, 143, 0.12);
-  color: #2a9d8f;
-}
-
-.badge.warning {
-  background: rgba(244, 162, 97, 0.16);
-  color: #b9701e;
-}
-
-.badge.danger {
-  background: rgba(231, 111, 81, 0.12);
-  color: #e76f51;
-}
-
-.badge.neutral {
-  background: rgba(154, 168, 184, 0.16);
-  color: #5e6e82;
-}
-
-.badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
+.badge.ok { background: rgba(42, 157, 143, 0.12); color: #2a9d8f; }
+.badge.warning { background: rgba(244, 162, 97, 0.16); color: #b9701e; }
+.badge.danger { background: rgba(231, 111, 81, 0.12); color: #e76f51; }
+.badge.neutral { background: rgba(154, 168, 184, 0.16); color: #5e6e82; }
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 .source-chip {
   display: inline-flex;
@@ -856,29 +758,11 @@ tbody tr:hover {
   font-size: 11.5px;
   font-weight: 800;
 }
+.source-chip.manual { background: rgba(69, 123, 157, 0.12); color: #457b9d; }
+.source-chip.csv { background: rgba(244, 162, 97, 0.16); color: #b9701e; }
+.source-chip.dw { background: rgba(42, 157, 143, 0.12); color: #2a9d8f; }
 
-.source-chip.manual {
-  background: rgba(69, 123, 157, 0.12);
-  color: #457b9d;
-}
-
-.source-chip.csv {
-  background: rgba(244, 162, 97, 0.16);
-  color: #b9701e;
-}
-
-.source-chip.dw {
-  background: rgba(42, 157, 143, 0.12);
-  color: #2a9d8f;
-}
-
-.actions-cell {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
+.actions-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .action-icon-btn {
   width: 30px;
   height: 30px;
@@ -892,16 +776,8 @@ tbody tr:hover {
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-
-.action-icon-btn svg {
-  stroke: currentColor;
-}
-
-.action-icon-btn:hover {
-  background: #eaf5f5;
-  color: #457b9d;
-  border-color: #a8dadc;
-}
+.action-icon-btn svg { stroke: currentColor; }
+.action-icon-btn:hover { background: #eaf5f5; color: #457b9d; border-color: #a8dadc; }
 
 .table-footer {
   display: flex;
@@ -911,19 +787,8 @@ tbody tr:hover {
   border-top: 1px solid #f1f4f7;
   margin-top: 4px;
 }
-
-.showing {
-  font-size: 12px;
-  color: #9aa8b8;
-  font-weight: 600;
-}
-
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
+.showing { font-size: 12px; color: #9aa8b8; font-weight: 600; }
+.pagination { display: flex; align-items: center; gap: 6px; }
 .page-btn {
   min-width: 30px;
   height: 30px;
@@ -939,53 +804,20 @@ tbody tr:hover {
   justify-content: center;
   cursor: pointer;
 }
-
-.page-btn svg {
-  stroke: currentColor;
-}
-
-.page-btn.active {
-  background: #1d3557;
-  color: #ffffff;
-  border-color: #1d3557;
-}
-
-.page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
+.page-btn.active { background: #1d3557; color: #ffffff; border-color: #1d3557; }
+.page-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 @media (max-width: 1100px) {
-  .summary-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  table {
-    display: block;
-    overflow-x: auto;
-  }
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  table { display: block; overflow-x: auto; }
 }
 
 @media (max-width: 640px) {
-  .summary-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .toolbar {
-    align-items: stretch;
-  }
-
+  .summary-grid { grid-template-columns: 1fr; }
+  .toolbar { align-items: stretch; }
   .toolbar-search,
   .toolbar-filter,
-  .toolbar-count {
-    width: 100%;
-    max-width: none;
-  }
-
-  .table-footer {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
+  .toolbar-count { width: 100%; max-width: none; }
+  .table-footer { flex-direction: column; align-items: flex-start; gap: 12px; }
 }
 </style>
