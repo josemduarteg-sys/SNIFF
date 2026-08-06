@@ -1,7 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
-import api from '../services/api'
+import ModalBase from '../components/ui/ModalBase.vue'
+import MedicionForm from '../components/mediciones/MedicionForm.vue'
+import {
+  obtenerMediciones,
+  obtenerDatosFormularioMedicion,
+} from '../services/medicionService'
 
 defineProps({
   usuario: {
@@ -15,49 +20,33 @@ const emit = defineEmits(['logout'])
 
 const mediciones = ref([])
 const indicadores = ref([])
+const metas = ref([])
 const periodos = ref([])
 const estadosCumplimiento = ref([])
 
 const busqueda = ref('')
 const indicadorSeleccionado = ref('')
 const estadoSeleccionado = ref('')
+const mostrarModalCrear = ref(false)
 
 const cargando = ref(false)
 const error = ref('')
-
-function normalizarRespuesta(response) {
-  if (Array.isArray(response.data)) {
-    return response.data
-  }
-
-  if (Array.isArray(response.data.results)) {
-    return response.data.results
-  }
-
-  return []
-}
 
 async function cargarDatos() {
   cargando.value = true
   error.value = ''
 
   try {
-    const [
-      medicionesResponse,
-      indicadoresResponse,
-      periodosResponse,
-      estadosResponse,
-    ] = await Promise.all([
-      api.get('mediciones/'),
-      api.get('indicadores-kpi/'),
-      api.get('periodos-medicion/'),
-      api.get('estados-cumplimiento/'),
+    const [medicionesResponse, datosFormulario] = await Promise.all([
+      obtenerMediciones(),
+      obtenerDatosFormularioMedicion(),
     ])
 
-    mediciones.value = normalizarRespuesta(medicionesResponse)
-    indicadores.value = normalizarRespuesta(indicadoresResponse)
-    periodos.value = normalizarRespuesta(periodosResponse)
-    estadosCumplimiento.value = normalizarRespuesta(estadosResponse)
+    mediciones.value = medicionesResponse
+    indicadores.value = datosFormulario.indicadores
+    metas.value = datosFormulario.metas
+    periodos.value = datosFormulario.periodos
+    estadosCumplimiento.value = datosFormulario.estadosCumplimiento
   } catch (e) {
     error.value = 'No se pudieron cargar las mediciones.'
   } finally {
@@ -88,9 +77,7 @@ const medicionesFiltradas = computed(() => {
   })
 })
 
-const totalMediciones = computed(() => {
-  return mediciones.value.length
-})
+const totalMediciones = computed(() => mediciones.value.length)
 
 const promedioCumplimiento = computed(() => {
   const porcentajes = mediciones.value
@@ -118,6 +105,19 @@ const medicionesRiesgo = computed(() => {
     return estado.includes('riesgo') || estado.includes('incumplido')
   }).length
 })
+
+function abrirModalCrear() {
+  mostrarModalCrear.value = true
+}
+
+function cerrarModalCrear() {
+  mostrarModalCrear.value = false
+}
+
+async function manejarMedicionGuardada() {
+  cerrarModalCrear()
+  await cargarDatos()
+}
 
 function estadoClase(nombreEstado) {
   const estado = nombreEstado?.toLowerCase() || ''
@@ -215,7 +215,7 @@ onMounted(() => {
     @logout="cerrarSesion"
   >
     <template #actions>
-      <button class="btn-primary-page" type="button">
+      <button class="btn-primary-page" type="button" @click="abrirModalCrear">
         <svg
           width="15"
           height="15"
@@ -238,16 +238,7 @@ onMounted(() => {
       <article class="kpi-card">
         <div class="kpi-top">
           <div class="kpi-icon navy">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="4" y="3" width="16" height="18" rx="2" />
               <path d="M9 3v3h6V3" />
               <path d="M8 13h8" />
@@ -264,16 +255,7 @@ onMounted(() => {
       <article class="kpi-card">
         <div class="kpi-top">
           <div class="kpi-icon aqua">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 19V5" />
               <path d="M4 19h16" />
               <path d="M7 15l4-4 3 3 5-7" />
@@ -289,16 +271,7 @@ onMounted(() => {
       <article class="kpi-card">
         <div class="kpi-top">
           <div class="kpi-icon steel">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="9" />
               <path d="M8 12l2.5 2.5L16 9" />
             </svg>
@@ -313,16 +286,7 @@ onMounted(() => {
       <article class="kpi-card">
         <div class="kpi-top">
           <div class="kpi-icon orange">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 8v5" />
               <path d="M12 17h.01" />
               <circle cx="12" cy="12" r="9" />
@@ -338,25 +302,12 @@ onMounted(() => {
 
     <div class="toolbar">
       <div class="toolbar-search">
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
 
-        <input
-          v-model="busqueda"
-          type="text"
-          placeholder="Buscar medición..."
-        />
+        <input v-model="busqueda" type="text" placeholder="Buscar medición..." />
       </div>
 
       <div class="toolbar-filter">
@@ -365,11 +316,7 @@ onMounted(() => {
         <select v-model="indicadorSeleccionado">
           <option value="">Todos</option>
 
-          <option
-            v-for="indicador in indicadores"
-            :key="indicador.id"
-            :value="indicador.id"
-          >
+          <option v-for="indicador in indicadores" :key="indicador.id" :value="indicador.id">
             {{ indicador.nombre }}
           </option>
         </select>
@@ -381,11 +328,7 @@ onMounted(() => {
         <select v-model="estadoSeleccionado">
           <option value="">Todos</option>
 
-          <option
-            v-for="estado in estadosCumplimiento"
-            :key="estado.id"
-            :value="estado.id"
-          >
+          <option v-for="estado in estadosCumplimiento" :key="estado.id" :value="estado.id">
             {{ estado.nombre }}
           </option>
         </select>
@@ -425,10 +368,7 @@ onMounted(() => {
         </thead>
 
         <tbody>
-          <tr
-            v-for="medicion in medicionesFiltradas"
-            :key="medicion.id"
-          >
+          <tr v-for="medicion in medicionesFiltradas" :key="medicion.id">
             <td>
               <div class="cell-main">
                 {{ medicion.indicador_nombre || 'Sin KPI' }}
@@ -445,13 +385,8 @@ onMounted(() => {
               </span>
             </td>
 
-            <td>
-              {{ formatearNumero(medicion.valor_meta) }}
-            </td>
-
-            <td>
-              {{ formatearNumero(medicion.valor_resultado) }}
-            </td>
+            <td>{{ formatearNumero(medicion.valor_meta) }}</td>
+            <td>{{ formatearNumero(medicion.valor_resultado) }}</td>
 
             <td>
               <div class="progress-cell">
@@ -472,57 +407,31 @@ onMounted(() => {
             </td>
 
             <td>
-              <span
-                class="badge"
-                :class="estadoClase(medicion.estado_cumplimiento_nombre)"
-              >
+              <span class="badge" :class="estadoClase(medicion.estado_cumplimiento_nombre)">
                 <span class="badge-dot"></span>
                 {{ medicion.estado_cumplimiento_nombre || 'Sin estado' }}
               </span>
             </td>
 
             <td>
-              <span
-                class="source-chip"
-                :class="fuenteClase(medicion)"
-              >
+              <span class="source-chip" :class="fuenteClase(medicion)">
                 {{ obtenerFuente(medicion) }}
               </span>
             </td>
 
-            <td>
-              {{ formatearFecha(medicion.fecha_registro || medicion.created_at) }}
-            </td>
+            <td>{{ formatearFecha(medicion.fecha_registro || medicion.created_at) }}</td>
 
             <td>
               <div class="actions-cell">
                 <button class="action-icon-btn" type="button" title="Ver detalle">
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
                     <circle cx="12" cy="12" r="3" />
                   </svg>
                 </button>
 
                 <button class="action-icon-btn" type="button" title="Editar">
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                     <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
                   </svg>
@@ -540,41 +449,37 @@ onMounted(() => {
 
         <div class="pagination">
           <button class="page-btn" type="button" disabled>
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
 
-          <button class="page-btn active" type="button">
-            1
-          </button>
+          <button class="page-btn active" type="button">1</button>
 
           <button class="page-btn" type="button" disabled>
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="9 18 15 12 9 6" />
             </svg>
           </button>
         </div>
       </div>
     </section>
+
+    <ModalBase
+      :abierto="mostrarModalCrear"
+      titulo="Nueva medición"
+      subtitulo="Registrá el resultado de un KPI para que el sistema calcule automáticamente su cumplimiento."
+      ancho="720px"
+      @cerrar="cerrarModalCrear"
+    >
+      <MedicionForm
+        :indicadores="indicadores"
+        :metas="metas"
+        :periodos="periodos"
+        @guardado="manejarMedicionGuardada"
+        @cancelar="cerrarModalCrear"
+      />
+    </ModalBase>
   </AppLayout>
 </template>
 
