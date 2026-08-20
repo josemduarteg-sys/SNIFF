@@ -318,6 +318,11 @@ async function guardar() {
 </template>
 
 <style scoped>
+.medicion-form,
+.medicion-form * {
+  box-sizing: border-box;
+}
+
 .medicion-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 1fr));
@@ -328,6 +333,7 @@ async function guardar() {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  min-width: 0;
 }
 
 .form-group.full,
@@ -345,6 +351,8 @@ input,
 select,
 textarea {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1.5px solid #e4eaef;
   border-radius: 10px;
   padding: 0 12px;

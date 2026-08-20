@@ -8,7 +8,13 @@ const props = defineProps({
     required: false,
     default: null,
   },
+  contraido: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+const emit = defineEmits(['alternar'])
 
 const inicialesUsuario = computed(() => {
   const nombre = props.usuario?.username || 'Usuario'
@@ -17,11 +23,16 @@ const inicialesUsuario = computed(() => {
 </script>
 
 <template>
-  <aside class="sidebar-menu">
-    <div class="sidebar-brand">
+  <aside class="sidebar-menu" :class="{ collapsed: contraido }">
+    <button
+      class="sidebar-brand brand-button"
+      type="button"
+      title="Contraer o expandir menú"
+      @click="emit('alternar')"
+    >
       <img :src="sniffLogo" alt="Sniff" />
       <div class="wordmark">Sniff<span>.</span></div>
-    </div>
+    </button>
 
     <nav class="nav-section">
       <div class="nav-label">General</div>
@@ -105,13 +116,22 @@ const inicialesUsuario = computed(() => {
 <style scoped>
 .sidebar-menu {
   width: var(--sidebar-w);
-  min-height: 100vh;
+  min-width: var(--sidebar-w);
+  height: 100vh;
   background: var(--white);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   position: sticky;
   top: 0;
+  left: 0;
+  overflow-y: auto;
+  transition: width 0.2s ease, min-width 0.2s ease;
+}
+
+.sidebar-menu.collapsed {
+  width: 78px;
+  min-width: 78px;
 }
 
 .sidebar-brand {
@@ -123,10 +143,29 @@ const inicialesUsuario = computed(() => {
   border-bottom: 1px solid var(--border);
 }
 
+.sidebar-menu.collapsed .sidebar-brand {
+  justify-content: center;
+  padding: 18px 0;
+}
+
+.brand-button {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.brand-button:hover img {
+  transform: scale(1.04);
+}
+
 .sidebar-brand img {
   width: 34px;
   height: 34px;
   border-radius: 9px;
+  transition: transform 0.15s ease;
 }
 
 .wordmark {
@@ -224,6 +263,22 @@ const inicialesUsuario = computed(() => {
   font-size: 11px;
   color: var(--text-muted);
   font-weight: 600;
+}
+
+.sidebar-menu.collapsed .wordmark,
+.sidebar-menu.collapsed .nav-label,
+.sidebar-menu.collapsed .nav-item span,
+.sidebar-menu.collapsed .sidebar-user .name,
+.sidebar-menu.collapsed .sidebar-user .role {
+  display: none;
+}
+
+.sidebar-menu.collapsed .nav-item {
+  justify-content: center;
+}
+
+.sidebar-menu.collapsed .sidebar-user {
+  justify-content: center;
 }
 
 @media (max-width: 760px) {

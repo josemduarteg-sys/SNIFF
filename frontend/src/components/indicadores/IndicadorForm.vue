@@ -326,6 +326,11 @@ function cancelar() {
 </template>
 
 <style scoped>
+.indicador-form,
+.indicador-form * {
+  box-sizing: border-box;
+}
+
 .indicador-form {
   display: flex;
   flex-direction: column;
@@ -359,6 +364,7 @@ function cancelar() {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  min-width: 0;
 }
 
 .field-full {
@@ -375,6 +381,8 @@ function cancelar() {
 .field select,
 .field textarea {
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1.5px solid #e4eaef;
   border-radius: 11px;
   background: #ffffff;

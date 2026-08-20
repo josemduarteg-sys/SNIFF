@@ -1,4 +1,5 @@
 <script setup>
+import { ref } from 'vue'
 import SidebarMenu from './SidebarMenu.vue'
 import ProfileDropdown from './ProfileDropdown.vue'
 
@@ -25,14 +26,24 @@ const props = defineProps({
 
 const emit = defineEmits(['logout'])
 
+const sidebarContraido = ref(false)
+
+function alternarSidebar() {
+  sidebarContraido.value = !sidebarContraido.value
+}
+
 function cerrarSesion() {
   emit('logout')
 }
 </script>
 
 <template>
-  <div class="app-layout">
-    <SidebarMenu :usuario="props.usuario" />
+  <div class="app-layout" :class="{ 'sidebar-collapsed': sidebarContraido }">
+    <SidebarMenu
+      :usuario="props.usuario"
+      :contraido="sidebarContraido"
+      @alternar="alternarSidebar"
+    />
 
     <div class="main-area">
       <header class="topbar">

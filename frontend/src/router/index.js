@@ -7,6 +7,7 @@ import EstrategiasView from '../views/EstrategiasView.vue'
 import ObjetivosView from '../views/ObjetivosView.vue'
 import IndicadoresView from '../views/IndicadoresView.vue'
 import MedicionesView from '../views/MedicionesView.vue'
+import ConfiguracionView from '../views/ConfiguracionView.vue'
 
 const routes = [
   {
@@ -59,6 +60,14 @@ const routes = [
     path: '/mediciones',
     name: 'mediciones',
     component: MedicionesView,
+    meta: {
+      requiresAuth: true,
+    },
+  },
+  {
+    path: '/configuracion',
+    name: 'configuracion',
+    component: ConfiguracionView,
     meta: {
       requiresAuth: true,
     },
