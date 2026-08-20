@@ -201,14 +201,6 @@ function formatearNumero(valor) {
   })
 }
 
-function formatearPorcentaje(valor) {
-  const numero = Number(valor)
-
-  if (Number.isNaN(numero)) return '0%'
-
-  return `${numero.toFixed(2)}%`
-}
-
 function formatearFecha(fecha) {
   if (!fecha) return 'No definida'
 
@@ -218,21 +210,6 @@ function formatearFecha(fecha) {
   if (!anio || !mes || !dia) return fecha
 
   return `${dia}/${mes}/${anio}`
-}
-
-function obtenerFuente(medicion) {
-  if (medicion.archivo_importado) return 'CSV'
-  if (medicion.consulta_dw) return 'Data Warehouse'
-  return 'Manual'
-}
-
-function fuenteClase(medicion) {
-  const fuente = obtenerFuente(medicion).toLowerCase()
-
-  if (fuente.includes('csv')) return 'csv'
-  if (fuente.includes('warehouse')) return 'dw'
-
-  return 'manual'
 }
 
 function cerrarSesion() {
