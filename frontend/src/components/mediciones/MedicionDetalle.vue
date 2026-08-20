@@ -44,14 +44,6 @@ function formatearNumero(valor) {
   })
 }
 
-function formatearPorcentaje(valor) {
-  const numero = Number(valor)
-
-  if (Number.isNaN(numero)) return '0.00%'
-
-  return `${numero.toFixed(2)}%`
-}
-
 function formatearFecha(fecha) {
   if (!fecha) return 'No definida'
 
@@ -63,19 +55,18 @@ function formatearFecha(fecha) {
   return `${dia}/${mes}/${anio}`
 }
 
-function obtenerFuente(medicion) {
-  if (medicion.archivo_importado) return 'CSV'
-  if (medicion.consulta_dw) return 'Data Warehouse'
-  return 'Manual'
-}
+function textoEstadoCumplimiento(estado) {
+  if (!estado) {
+    return 'Pendiente de revisión'
+  }
 
-function fuenteClase(medicion) {
-  const fuente = obtenerFuente(medicion).toLowerCase()
+  const texto = estado.toLowerCase()
 
-  if (fuente.includes('csv')) return 'csv'
-  if (fuente.includes('warehouse')) return 'dw'
+  if (texto.includes('pendiente')) {
+    return 'Pendiente de revisión'
+  }
 
-  return 'manual'
+  return estado
 }
 </script>
 
@@ -90,7 +81,7 @@ function fuenteClase(medicion) {
 
       <span class="badge" :class="estadoClase(medicion.estado_cumplimiento_nombre)">
         <span class="badge-dot"></span>
-        {{ medicion.estado_cumplimiento_nombre || 'Sin estado' }}
+        {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
       </span>
     </div>
 
@@ -98,7 +89,7 @@ function fuenteClase(medicion) {
       <div class="progress-head">
         <span>Cumplimiento calculado</span>
         <strong :class="porcentajeClase(porcentaje)">
-          {{ formatearPorcentaje(porcentaje) }}
+          {{ formatearNumero(porcentaje) }}%
         </strong>
       </div>
 
@@ -112,44 +103,55 @@ function fuenteClase(medicion) {
     </div>
 
     <div class="detail-grid">
-      <article class="detail-card">
-        <span>Periodo</span>
-        <strong>{{ medicion.periodo_nombre || 'Sin periodo' }}</strong>
-      </article>
+      <div class="detail-item">
+        <span>KPI</span>
+        <strong>{{ medicion.indicador_nombre || 'Sin KPI' }}</strong>
+      </div>
 
-      <article class="detail-card">
-        <span>Meta definida</span>
+      <div class="detail-item">
+        <span>Mes evaluado</span>
+        <strong>{{ medicion.periodo_nombre || medicion.mes_medicion || 'No definido' }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Meta del KPI</span>
         <strong>{{ formatearNumero(medicion.valor_meta) }}</strong>
-      </article>
+      </div>
 
-      <article class="detail-card">
-        <span>Resultado medido</span>
+      <div class="detail-item">
+        <span>Resultado mensual</span>
         <strong>{{ formatearNumero(medicion.valor_resultado) }}</strong>
-      </article>
+      </div>
 
-      <article class="detail-card">
-        <span>Fuente de dato</span>
-        <strong>
-          <span class="source-chip" :class="fuenteClase(medicion)">
-            {{ obtenerFuente(medicion) }}
-          </span>
-        </strong>
-      </article>
+      <div class="detail-item">
+        <span>Cumplimiento</span>
+        <strong>{{ formatearNumero(medicion.porcentaje_cumplimiento) }}%</strong>
+      </div>
 
-      <article class="detail-card">
+      <div class="detail-item">
+        <span>Estado</span>
+        <strong>{{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Registrado por</span>
+        <strong>{{ medicion.registrado_por_username || 'Sistema' }}</strong>
+      </div>
+
+      <div class="detail-item">
         <span>Fecha de registro</span>
-        <strong>{{ formatearFecha(medicion.fecha_registro || medicion.created_at) }}</strong>
-      </article>
+        <strong>{{ formatearFecha(medicion.fecha_registro) }}</strong>
+      </div>
+    </div>
 
-      <article class="detail-card">
-        <span>ID de medición</span>
-        <strong>#{{ medicion.id }}</strong>
-      </article>
+    <div class="observation-box">
+      <span>Observaciones / razones</span>
+      <p>{{ medicion.observacion || medicion.observaciones || 'Sin observaciones registradas.' }}</p>
     </div>
 
     <div class="note-box">
       <strong>Nota:</strong>
-      El porcentaje y el estado de cumplimiento son calculados por el backend según la meta asociada y los rangos configurados para el KPI.
+      El porcentaje y el estado de cumplimiento son calculados por el backend según la meta y vigencia configuradas en el KPI autorizado.
     </div>
   </section>
 </template>
@@ -243,14 +245,14 @@ p {
   gap: 12px;
 }
 
-.detail-card {
+.detail-item {
   border: 1px solid #e4eaef;
   border-radius: 12px;
   padding: 14px;
   background: #ffffff;
 }
 
-.detail-card span {
+.detail-item span {
   display: block;
   color: #9aa8b8;
   font-size: 11.5px;
@@ -258,7 +260,7 @@ p {
   margin-bottom: 6px;
 }
 
-.detail-card strong {
+.detail-item strong {
   color: #1d3557;
   font-size: 14px;
   font-weight: 800;
@@ -302,28 +304,27 @@ p {
   background: currentColor;
 }
 
-.source-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 5px 9px;
-  border-radius: 9px;
+.observation-box {
+  border-radius: 12px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.observation-box span {
+  display: block;
+  color: #9aa8b8;
   font-size: 11.5px;
   font-weight: 800;
+  margin-bottom: 6px;
 }
 
-.source-chip.manual {
-  background: rgba(69, 123, 157, 0.12);
-  color: #457b9d;
-}
-
-.source-chip.csv {
-  background: rgba(244, 162, 97, 0.16);
-  color: #b9701e;
-}
-
-.source-chip.dw {
-  background: rgba(42, 157, 143, 0.12);
-  color: #2a9d8f;
+.observation-box p {
+  margin: 0;
+  color: #1d3557;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .note-box {

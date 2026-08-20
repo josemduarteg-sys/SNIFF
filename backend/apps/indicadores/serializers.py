@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from rest_framework import serializers
 
 from .models import (
@@ -399,6 +400,18 @@ class MedicionSerializer(serializers.ModelSerializer):
             periodo = self.obtener_o_crear_periodo_mensual(mes_medicion)
             attrs['periodo'] = periodo
             attrs['fecha_medicion'] = periodo.fecha_fin
+
+            medicion_existente = Medicion.objects.filter(
+                indicador=indicador,
+                periodo=periodo,
+            ).exclude(
+                id=self.instance.id if self.instance else None
+            ).exists()
+
+            if medicion_existente:
+                raise serializers.ValidationError({
+                    'mes_medicion': 'Ya existe una medición registrada para este KPI en el mes seleccionado.'
+                })
         elif not self.instance:
             raise serializers.ValidationError({
                 'mes_medicion': 'Seleccioná el mes que se va a medir.'
@@ -440,6 +453,27 @@ class MedicionSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+    def asignar_estado_cumplimiento(self, medicion):
+        porcentaje = medicion.calcular_cumplimiento()
+
+        if porcentaje is None:
+            return medicion
+
+        porcentaje = Decimal(str(porcentaje))
+
+        if porcentaje >= Decimal('90'):
+            estado = EstadoCumplimiento.objects.filter(nombre__icontains='favorable').first()
+        elif porcentaje >= Decimal('70'):
+            estado = EstadoCumplimiento.objects.filter(nombre__icontains='riesgo').first()
+        else:
+            estado = EstadoCumplimiento.objects.filter(nombre__icontains='incumplido').first()
+
+        if estado:
+            medicion.estado_cumplimiento = estado
+            medicion.save(update_fields=['estado_cumplimiento'])
+
+        return medicion
 
     def create(self, validated_data):
         from apps.auditoria.services import registrar_bitacora
@@ -499,6 +533,11 @@ class MedicionSerializer(serializers.ModelSerializer):
                 request=request,
             )
 
+        medicion.calcular_cumplimiento()
+        medicion.save()
+
+        self.asignar_estado_cumplimiento(medicion)
+
         return medicion
 
     def update(self, instance, validated_data):
@@ -557,6 +596,11 @@ class MedicionSerializer(serializers.ModelSerializer):
                 ),
                 request=request,
             )
+
+        medicion.calcular_cumplimiento()
+        medicion.save()
+
+        self.asignar_estado_cumplimiento(medicion)
 
         return medicion
 

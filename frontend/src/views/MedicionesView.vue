@@ -507,7 +507,7 @@ onMounted(() => {
 
     <ModalBase
       :abierto="mostrarModalDetalle"
-      titulo="Detalle de medición"
+      titulo="Detalle de medición mensual"
       subtitulo="Información completa de la medición registrada y su cálculo de cumplimiento."
       ancho="760px"
       @cerrar="cerrarModalDetalle"
