@@ -1,7 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
-import api from '../services/api'
+import {
+  anularIndicador,
+  autorizarIndicador,
+  obtenerDatosFormularioIndicador,
+  obtenerIndicadoresKpi,
+} from '../services/indicadorService'
 
 defineProps({
   usuario: {
@@ -23,46 +28,29 @@ const busqueda = ref('')
 const objetivoSeleccionado = ref('')
 const frecuenciaSeleccionada = ref('')
 const fuenteSeleccionada = ref('')
+const estadoSeleccionado = ref('')
 
 const cargando = ref(false)
+const procesandoId = ref(null)
 const error = ref('')
-
-function normalizarRespuesta(response) {
-  if (Array.isArray(response.data)) {
-    return response.data
-  }
-
-  if (Array.isArray(response.data.results)) {
-    return response.data.results
-  }
-
-  return []
-}
+const mensaje = ref('')
 
 async function cargarDatos() {
   cargando.value = true
   error.value = ''
+  mensaje.value = ''
 
   try {
-    const [
-      indicadoresResponse,
-      objetivosResponse,
-      frecuenciasResponse,
-      tiposCalculoResponse,
-      fuentesDatoResponse,
-    ] = await Promise.all([
-      api.get('indicadores-kpi/'),
-      api.get('objetivos/'),
-      api.get('frecuencias/'),
-      api.get('tipos-calculo/'),
-      api.get('fuentes-dato/'),
+    const [indicadoresData, datosFormulario] = await Promise.all([
+      obtenerIndicadoresKpi(),
+      obtenerDatosFormularioIndicador(),
     ])
 
-    indicadores.value = normalizarRespuesta(indicadoresResponse)
-    objetivos.value = normalizarRespuesta(objetivosResponse)
-    frecuencias.value = normalizarRespuesta(frecuenciasResponse)
-    tiposCalculo.value = normalizarRespuesta(tiposCalculoResponse)
-    fuentesDato.value = normalizarRespuesta(fuentesDatoResponse)
+    indicadores.value = indicadoresData
+    objetivos.value = datosFormulario.objetivos
+    frecuencias.value = datosFormulario.frecuencias
+    tiposCalculo.value = datosFormulario.tiposCalculo
+    fuentesDato.value = datosFormulario.fuentesDato
   } catch (e) {
     error.value = 'No se pudieron cargar los indicadores KPI.'
   } finally {
@@ -81,7 +69,8 @@ const indicadoresFiltrados = computed(() => {
       indicador.objetivo_nombre?.toLowerCase().includes(texto) ||
       indicador.frecuencia_nombre?.toLowerCase().includes(texto) ||
       indicador.tipo_calculo_nombre?.toLowerCase().includes(texto) ||
-      indicador.fuente_dato_nombre?.toLowerCase().includes(texto)
+      indicador.fuente_dato_nombre?.toLowerCase().includes(texto) ||
+      indicador.estado?.toLowerCase().includes(texto)
 
     const coincideObjetivo =
       !objetivoSeleccionado.value ||
@@ -95,33 +84,42 @@ const indicadoresFiltrados = computed(() => {
       !fuenteSeleccionada.value ||
       Number(indicador.fuente_dato) === Number(fuenteSeleccionada.value)
 
-    return coincideBusqueda && coincideObjetivo && coincideFrecuencia && coincideFuente
+    const coincideEstado =
+      !estadoSeleccionado.value ||
+      indicador.estado === estadoSeleccionado.value
+
+    return (
+      coincideBusqueda &&
+      coincideObjetivo &&
+      coincideFrecuencia &&
+      coincideFuente &&
+      coincideEstado
+    )
   })
 })
 
-const indicadoresActivos = computed(() => {
-  return indicadores.value.filter((indicador) => indicador.estado === 'activo').length
+const indicadoresBorrador = computed(() => {
+  return indicadores.value.filter((indicador) => indicador.estado === 'borrador').length
 })
 
-const indicadoresRevision = computed(() => {
-  return indicadores.value.filter((indicador) => indicador.estado === 'en_revision').length
+const indicadoresAutorizados = computed(() => {
+  return indicadores.value.filter((indicador) => indicador.estado === 'autorizado').length
+})
+
+const indicadoresAnulados = computed(() => {
+  return indicadores.value.filter((indicador) => indicador.estado === 'anulado').length
 })
 
 const indicadoresInactivos = computed(() => {
   return indicadores.value.filter((indicador) => indicador.estado === 'inactivo').length
 })
 
-const indicadoresCSV = computed(() => {
-  return indicadores.value.filter((indicador) => {
-    return indicador.fuente_dato_nombre?.toLowerCase() === 'csv'
-  }).length
-})
-
 function textoEstado(estado) {
   const estados = {
-    activo: 'Activo',
+    borrador: 'Borrador',
+    autorizado: 'Autorizado',
     inactivo: 'Inactivo',
-    en_revision: 'En revisión',
+    anulado: 'Anulado',
   }
 
   return estados[estado] || estado || 'Sin estado'
@@ -129,9 +127,10 @@ function textoEstado(estado) {
 
 function estadoClase(estado) {
   const clases = {
-    activo: 'ok',
-    en_revision: 'warning',
+    borrador: 'warning',
+    autorizado: 'ok',
     inactivo: 'neutral',
+    anulado: 'danger',
   }
 
   return clases[estado] || 'neutral'
@@ -155,7 +154,101 @@ function formatearFecha(fecha) {
   const soloFecha = fecha.split('T')[0]
   const [anio, mes, dia] = soloFecha.split('-')
 
+  if (!anio || !mes || !dia) {
+    return fecha
+  }
+
   return `${dia}/${mes}/${anio}`
+}
+
+function formatearNumero(valor) {
+  if (valor === null || valor === undefined || valor === '') {
+    return '-'
+  }
+
+  const numero = Number(valor)
+
+  if (Number.isNaN(numero)) {
+    return valor
+  }
+
+  return numero.toLocaleString('es-GT', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })
+}
+
+function puedeAutorizar(indicador) {
+  return indicador.estado === 'borrador'
+}
+
+function puedeAnular(indicador) {
+  return indicador.estado !== 'anulado'
+}
+
+function puedeEditar(indicador) {
+  return indicador.puede_modificarse === true || indicador.estado === 'borrador'
+}
+
+async function manejarAutorizar(indicador) {
+  if (!puedeAutorizar(indicador)) {
+    return
+  }
+
+  procesandoId.value = indicador.id
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await autorizarIndicador(indicador.id)
+    mensaje.value = 'KPI autorizado correctamente.'
+    await cargarDatos()
+  } catch (e) {
+    error.value =
+      e.response?.data?.detail ||
+      'No se pudo autorizar el KPI. Verificá que tenga meta y fechas de vigencia.'
+  } finally {
+    procesandoId.value = null
+  }
+}
+
+async function manejarAnular(indicador) {
+  if (!puedeAnular(indicador)) {
+    return
+  }
+
+  const confirmar = window.confirm(
+    `¿Seguro que querés anular el KPI "${indicador.nombre}"? Esta acción no elimina el registro, solo lo marca como anulado.`
+  )
+
+  if (!confirmar) {
+    return
+  }
+
+  procesandoId.value = indicador.id
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await anularIndicador(indicador.id)
+    mensaje.value = 'KPI anulado correctamente.'
+    await cargarDatos()
+  } catch (e) {
+    error.value = e.response?.data?.detail || 'No se pudo anular el KPI.'
+  } finally {
+    procesandoId.value = null
+  }
+}
+
+function manejarEditar(indicador) {
+  if (!puedeEditar(indicador)) {
+    mensaje.value = ''
+    error.value = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
+    return
+  }
+
+  mensaje.value = ''
+  error.value = 'La edición del KPI se implementará en el formulario de KPI.'
 }
 
 function cerrarSesion() {
@@ -171,7 +264,7 @@ onMounted(() => {
   <AppLayout
     :usuario="usuario"
     titulo="Gestión de Indicadores KPI"
-    subtitulo="Administra los indicadores clave de desempeño asociados a los objetivos estratégicos."
+    subtitulo="Administra indicadores, metas, vigencia y estado de autorización."
     breadcrumb-actual="Indicadores KPI"
     @logout="cerrarSesion"
   >
@@ -221,30 +314,6 @@ onMounted(() => {
 
       <article class="kpi-card">
         <div class="kpi-top">
-          <div class="kpi-icon aqua">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M8 12l2.5 2.5L16 9" />
-            </svg>
-          </div>
-        </div>
-
-        <div class="kpi-value">{{ indicadoresActivos }}</div>
-        <div class="kpi-label">Activos</div>
-        <div class="kpi-foot">En seguimiento actualmente</div>
-      </article>
-
-      <article class="kpi-card">
-        <div class="kpi-top">
           <div class="kpi-icon orange">
             <svg
               width="17"
@@ -263,9 +332,33 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="kpi-value">{{ indicadoresRevision }}</div>
-        <div class="kpi-label">En revisión</div>
-        <div class="kpi-foot">Requieren validación</div>
+        <div class="kpi-value">{{ indicadoresBorrador }}</div>
+        <div class="kpi-label">En borrador</div>
+        <div class="kpi-foot">Pueden modificarse antes de autorizar</div>
+      </article>
+
+      <article class="kpi-card">
+        <div class="kpi-top">
+          <div class="kpi-icon aqua">
+            <svg
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="M8 12l2.5 2.5L16 9" />
+            </svg>
+          </div>
+        </div>
+
+        <div class="kpi-value">{{ indicadoresAutorizados }}</div>
+        <div class="kpi-label">Autorizados</div>
+        <div class="kpi-foot">Listos para seguimiento mensual</div>
       </article>
 
       <article class="kpi-card">
@@ -287,11 +380,19 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="kpi-value">{{ indicadoresCSV }}</div>
-        <div class="kpi-label">Fuente CSV</div>
-        <div class="kpi-foot">Indicadores alimentados por reportes</div>
+        <div class="kpi-value">{{ indicadoresInactivos + indicadoresAnulados }}</div>
+        <div class="kpi-label">Inactivos/anulados</div>
+        <div class="kpi-foot">Conservados para historial</div>
       </article>
     </section>
+
+    <div v-if="mensaje" class="alert success">
+      {{ mensaje }}
+    </div>
+
+    <div v-if="error" class="alert error">
+      {{ error }}
+    </div>
 
     <div class="toolbar">
       <div class="toolbar-search">
@@ -364,6 +465,18 @@ onMounted(() => {
         </select>
       </div>
 
+      <div class="toolbar-filter">
+        <span class="filter-label">Estado:</span>
+
+        <select v-model="estadoSeleccionado">
+          <option value="">Todos</option>
+          <option value="borrador">Borrador</option>
+          <option value="autorizado">Autorizado</option>
+          <option value="inactivo">Inactivo</option>
+          <option value="anulado">Anulado</option>
+        </select>
+      </div>
+
       <div class="toolbar-count">
         {{ indicadoresFiltrados.length }} KPI
       </div>
@@ -372,10 +485,6 @@ onMounted(() => {
     <section class="card-panel table-card">
       <div v-if="cargando" class="message">
         Cargando indicadores KPI...
-      </div>
-
-      <div v-else-if="error" class="message error">
-        {{ error }}
       </div>
 
       <div v-else-if="!indicadoresFiltrados.length" class="empty-state">
@@ -387,10 +496,10 @@ onMounted(() => {
           <tr>
             <th>Indicador KPI</th>
             <th>Objetivo asociado</th>
+            <th>Meta</th>
+            <th>Vigencia</th>
             <th>Frecuencia</th>
-            <th>Tipo de cálculo</th>
             <th>Fuente</th>
-            <th>Unidad</th>
             <th>Estado</th>
             <th style="text-align: right;">Acciones</th>
           </tr>
@@ -409,6 +518,11 @@ onMounted(() => {
               <div class="cell-sub">
                 {{ indicador.descripcion || 'Sin descripción' }}
               </div>
+
+              <div class="cell-extra">
+                Tipo: {{ indicador.tipo_calculo_nombre || 'Sin tipo' }} · Unidad:
+                {{ indicador.unidad_medida || '-' }}
+              </div>
             </td>
 
             <td>
@@ -418,11 +532,24 @@ onMounted(() => {
             </td>
 
             <td>
-              {{ indicador.frecuencia_nombre || 'Sin frecuencia' }}
+              <div class="meta-value">
+                {{ formatearNumero(indicador.valor_meta) }}
+              </div>
+              <div class="cell-sub">
+                {{ indicador.unidad_medida || 'unidad' }}
+              </div>
             </td>
 
             <td>
-              {{ indicador.tipo_calculo_nombre || 'Sin tipo' }}
+              <div class="date-range">
+                <span>{{ formatearFecha(indicador.fecha_inicio) }}</span>
+                <small>al</small>
+                <span>{{ formatearFecha(indicador.fecha_fin) }}</span>
+              </div>
+            </td>
+
+            <td>
+              {{ indicador.frecuencia_nombre || 'Sin frecuencia' }}
             </td>
 
             <td>
@@ -435,37 +562,36 @@ onMounted(() => {
             </td>
 
             <td>
-              <span class="unit-chip">
-                {{ indicador.unidad_medida || '-' }}
-              </span>
-            </td>
-
-            <td>
               <span class="badge" :class="estadoClase(indicador.estado)">
                 <span class="badge-dot"></span>
                 {{ textoEstado(indicador.estado) }}
               </span>
+
+              <div v-if="indicador.autorizado_por_username" class="cell-sub">
+                Por {{ indicador.autorizado_por_username }}
+              </div>
             </td>
 
             <td>
               <div class="actions-cell">
-                <button class="action-icon-btn" type="button" title="Ver detalle">
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
+                <button
+                  class="action-text-btn ok"
+                  type="button"
+                  title="Autorizar KPI"
+                  :disabled="!puedeAutorizar(indicador) || procesandoId === indicador.id"
+                  @click="manejarAutorizar(indicador)"
+                >
+                  Autorizar
                 </button>
 
-                <button class="action-icon-btn" type="button" title="Editar">
+                <button
+                  class="action-icon-btn"
+                  type="button"
+                  title="Editar"
+                  :class="{ disabled: !puedeEditar(indicador) }"
+                  :disabled="procesandoId === indicador.id"
+                  @click="manejarEditar(indicador)"
+                >
                   <svg
                     width="14"
                     height="14"
@@ -481,7 +607,13 @@ onMounted(() => {
                   </svg>
                 </button>
 
-                <button class="action-icon-btn danger" type="button" title="Inactivar">
+                <button
+                  class="action-icon-btn danger"
+                  type="button"
+                  title="Anular"
+                  :disabled="!puedeAnular(indicador) || procesandoId === indicador.id"
+                  @click="manejarAnular(indicador)"
+                >
                   <svg
                     width="14"
                     height="14"
@@ -492,9 +624,9 @@ onMounted(() => {
                     stroke-linecap="round"
                     stroke-linejoin="round"
                   >
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <circle cx="12" cy="12" r="9" />
+                    <line x1="9" y1="9" x2="15" y2="15" />
+                    <line x1="15" y1="9" x2="9" y2="15" />
                   </svg>
                 </button>
               </div>
@@ -506,42 +638,6 @@ onMounted(() => {
       <div class="table-footer">
         <div class="showing">
           Mostrando {{ indicadoresFiltrados.length }} de {{ indicadores.length }} KPI
-        </div>
-
-        <div class="pagination">
-          <button class="page-btn" type="button" disabled>
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-
-          <button class="page-btn active" type="button">
-            1
-          </button>
-
-          <button class="page-btn" type="button" disabled>
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
         </div>
       </div>
     </section>
@@ -657,6 +753,24 @@ onMounted(() => {
   background: #152840;
 }
 
+.alert {
+  padding: 13px 15px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 750;
+  margin-bottom: 18px;
+}
+
+.alert.success {
+  background: rgba(42, 157, 143, 0.12);
+  color: #2a9d8f;
+}
+
+.alert.error {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -668,7 +782,7 @@ onMounted(() => {
 .toolbar-search {
   flex: 1;
   min-width: 240px;
-  max-width: 380px;
+  max-width: 360px;
   height: 40px;
   border-radius: 10px;
   border: 1.5px solid #e4eaef;
@@ -718,7 +832,7 @@ onMounted(() => {
   font-family: inherit;
   color: #1d3557;
   font-weight: 700;
-  max-width: 220px;
+  max-width: 190px;
 }
 
 .filter-label {
@@ -754,11 +868,6 @@ onMounted(() => {
   color: #457b9d;
   font-size: 13px;
   font-weight: 700;
-}
-
-.message.error {
-  background: rgba(231, 111, 81, 0.12);
-  color: #e76f51;
 }
 
 table {
@@ -811,6 +920,34 @@ tbody tr:hover {
   max-width: 460px;
 }
 
+.cell-extra {
+  font-size: 11.5px;
+  color: #5e6e82;
+  font-weight: 600;
+  margin-top: 5px;
+}
+
+.meta-value {
+  font-weight: 800;
+  color: #1d3557;
+}
+
+.date-range {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #1d3557;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.date-range small {
+  color: #9aa8b8;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .code-chip {
   display: inline-flex;
   align-items: center;
@@ -823,8 +960,7 @@ tbody tr:hover {
   max-width: 260px;
 }
 
-.source-chip,
-.unit-chip {
+.source-chip {
   display: inline-flex;
   align-items: center;
   padding: 5px 9px;
@@ -848,8 +984,7 @@ tbody tr:hover {
   color: #2a9d8f;
 }
 
-.source-chip.neutral,
-.unit-chip {
+.source-chip.neutral {
   background: rgba(154, 168, 184, 0.16);
   color: #5e6e82;
 }
@@ -875,6 +1010,11 @@ tbody tr:hover {
   color: #b9701e;
 }
 
+.badge.danger {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
+}
+
 .badge.neutral {
   background: rgba(154, 168, 184, 0.16);
   color: #5e6e82;
@@ -892,6 +1032,28 @@ tbody tr:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.action-text-btn {
+  min-width: 78px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.action-text-btn.ok {
+  color: #2a9d8f;
+}
+
+.action-text-btn.ok:hover:not(:disabled) {
+  background: rgba(42, 157, 143, 0.12);
+  border-color: rgba(42, 157, 143, 0.25);
 }
 
 .action-icon-btn {
@@ -912,16 +1074,23 @@ tbody tr:hover {
   stroke: currentColor;
 }
 
-.action-icon-btn:hover {
+.action-icon-btn:hover:not(:disabled) {
   background: #eaf5f5;
   color: #457b9d;
   border-color: #a8dadc;
 }
 
-.action-icon-btn.danger:hover {
+.action-icon-btn.danger:hover:not(:disabled) {
   background: rgba(231, 111, 81, 0.10);
   color: #e76f51;
   border-color: rgba(231, 111, 81, 0.25);
+}
+
+.action-icon-btn.disabled,
+.action-icon-btn:disabled,
+.action-text-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .table-footer {
@@ -929,7 +1098,7 @@ tbody tr:hover {
   align-items: center;
   justify-content: space-between;
   padding-top: 14px;
-  border-top: 1px solid #f1f4f7;
+  border-top: 1px solid #f7f1f5;
   margin-top: 4px;
 }
 
@@ -939,51 +1108,16 @@ tbody tr:hover {
   font-weight: 600;
 }
 
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.page-btn {
-  min-width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  border: 1px solid #e4eaef;
-  background: #ffffff;
-  color: #5e6e82;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.page-btn svg {
-  stroke: currentColor;
-}
-
-.page-btn.active {
-  background: #1d3557;
-  color: #ffffff;
-  border-color: #1d3557;
-}
-
-.page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+@media (max-width: 1200px) {
+  table {
+    display: block;
+    overflow-x: auto;
+  }
 }
 
 @media (max-width: 1100px) {
   .summary-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  table {
-    display: block;
-    overflow-x: auto;
   }
 }
 
@@ -1002,11 +1136,5 @@ tbody tr:hover {
     width: 100%;
     max-width: none;
   }
-
-  .table-footer {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
 }
-</style> 
+</style>

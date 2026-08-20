@@ -157,6 +157,9 @@ class MedicionViewSet(viewsets.ModelViewSet):
     serializer_class = MedicionSerializer
     permission_classes = [IsAuthenticated]
 
+    def perform_create(self, serializer):
+        serializer.save(registrado_por=self.request.user)
+
 
 class AlertaViewSet(viewsets.ModelViewSet):
     queryset = Alerta.objects.select_related(

@@ -1,3 +1,4 @@
+from datetime import date
 from rest_framework import serializers
 
 from .models import (
@@ -231,16 +232,11 @@ class PeriodoMedicionSerializer(serializers.ModelSerializer):
 
 
 class MedicionSerializer(serializers.ModelSerializer):
-    indicador_nombre = serializers.CharField(
-        source='indicador.nombre',
-        read_only=True
-    )
+    mes_medicion = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    indicador_nombre = serializers.CharField(source='indicador.nombre', read_only=True)
     periodo_nombre = serializers.SerializerMethodField()
     valor_meta = serializers.SerializerMethodField()
-    observaciones = serializers.CharField(
-        source='observacion',
-        read_only=True
-    )
+    observaciones = serializers.CharField(source='observacion', read_only=True)
     estado_cumplimiento = serializers.PrimaryKeyRelatedField(read_only=True)
     estado_cumplimiento_nombre = serializers.CharField(
         source='estado_cumplimiento.nombre',
@@ -264,6 +260,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             'estado_cumplimiento_nombre',
             'periodo',
             'periodo_nombre',
+            'mes_medicion',
             'registrado_por',
             'registrado_por_username',
             'archivo_importado',
@@ -277,12 +274,17 @@ class MedicionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id',
+            'meta',
             'estado_cumplimiento',
+            'periodo',
+            'fecha_medicion',
             'fecha_registro',
             'porcentaje_cumplimiento',
             'periodo_nombre',
             'valor_meta',
             'observaciones',
+            'registrado_por',
+            'registrado_por_username',
         ]
 
     def get_periodo_nombre(self, obj):
@@ -301,25 +303,114 @@ class MedicionSerializer(serializers.ModelSerializer):
         return f'Periodo {obj.periodo.id}'
 
     def get_valor_meta(self, obj):
-        if not obj.meta:
-            return None
+        if obj.meta:
+            return obj.meta.valor_meta
 
-        return obj.meta.valor_meta
+        if obj.indicador and obj.indicador.valor_meta is not None:
+            return obj.indicador.valor_meta
+
+        return None
 
     def get_porcentaje_cumplimiento(self, obj):
         return round(obj.calcular_cumplimiento(), 2)
 
+    def obtener_fechas_mes(self, mes_medicion):
+        try:
+            anio_texto, mes_texto = mes_medicion.split('-')
+            anio = int(anio_texto)
+            mes = int(mes_texto)
+        except (ValueError, AttributeError):
+            raise serializers.ValidationError({
+                'mes_medicion': 'El mes de medición debe tener formato YYYY-MM.'
+            })
+
+        if mes < 1 or mes > 12:
+            raise serializers.ValidationError({
+                'mes_medicion': 'El mes de medición no es válido.'
+            })
+
+        fecha_inicio = date(anio, mes, 1)
+
+        if mes == 12:
+            fecha_fin = date(anio, 12, 31)
+        else:
+            fecha_fin = date(anio, mes + 1, 1) - date.resolution
+
+        return anio, mes, fecha_inicio, fecha_fin
+
+    def obtener_o_crear_periodo_mensual(self, mes_medicion):
+        anio, mes, fecha_inicio, fecha_fin = self.obtener_fechas_mes(mes_medicion)
+
+        periodo, _ = PeriodoMedicion.objects.get_or_create(
+            tipo_periodo='mensual',
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            defaults={
+                'anio': anio,
+                'mes': mes,
+                'descripcion': f'Medición mensual {mes:02d}/{anio}',
+            }
+        )
+
+        return periodo
+
+    def obtener_o_crear_meta_para_indicador(self, indicador):
+        meta_existente = MetaKPI.objects.filter(
+            indicador=indicador,
+            estado='vigente',
+        ).order_by('-fecha_inicio').first()
+
+        if meta_existente:
+            return meta_existente
+
+        if indicador.valor_meta is None:
+            raise serializers.ValidationError({
+                'indicador': 'El KPI seleccionado no tiene una meta configurada.'
+            })
+
+        if not indicador.fecha_inicio:
+            raise serializers.ValidationError({
+                'indicador': 'El KPI seleccionado no tiene fecha de inicio configurada.'
+            })
+
+        meta, _ = MetaKPI.objects.get_or_create(
+            indicador=indicador,
+            valor_meta=indicador.valor_meta,
+            fecha_inicio=indicador.fecha_inicio,
+            fecha_fin=indicador.fecha_fin,
+            estado='vigente',
+        )
+
+        return meta
+
+    def preparar_datos_mensuales(self, attrs):
+        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
+        mes_medicion = attrs.pop('mes_medicion', None)
+
+        if not indicador:
+            raise serializers.ValidationError({
+                'indicador': 'Seleccioná el KPI.'
+            })
+
+        meta = self.obtener_o_crear_meta_para_indicador(indicador)
+        attrs['meta'] = meta
+
+        if mes_medicion:
+            periodo = self.obtener_o_crear_periodo_mensual(mes_medicion)
+            attrs['periodo'] = periodo
+            attrs['fecha_medicion'] = periodo.fecha_fin
+        elif not self.instance:
+            raise serializers.ValidationError({
+                'mes_medicion': 'Seleccioná el mes que se va a medir.'
+            })
+
+        return attrs
+
     def validate(self, attrs):
-        indicador = attrs.get('indicador') or getattr(
-            self.instance,
-            'indicador',
-            None
-        )
-        meta = attrs.get('meta') or getattr(
-            self.instance,
-            'meta',
-            None
-        )
+        attrs = self.preparar_datos_mensuales(attrs)
+
+        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
+        meta = attrs.get('meta') or getattr(self.instance, 'meta', None)
 
         if indicador and meta and meta.indicador_id != indicador.id:
             raise serializers.ValidationError(
@@ -367,7 +458,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             accion='crear',
             modulo='mediciones',
             descripcion=(
-                f'Se registró una medición para el indicador '
+                f'Se registró una medición mensual para el indicador '
                 f'"{medicion.indicador.nombre}" con resultado '
                 f'{medicion.valor_resultado}.'
             ),
@@ -426,7 +517,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             accion='actualizar',
             modulo='mediciones',
             descripcion=(
-                f'Se actualizó una medición para el indicador '
+                f'Se actualizó una medición mensual para el indicador '
                 f'"{medicion.indicador.nombre}" con resultado '
                 f'{medicion.valor_resultado}.'
             ),
@@ -444,38 +535,6 @@ class MedicionSerializer(serializers.ModelSerializer):
                 ),
                 request=request,
             )
-
-        return medicion
-
-
-    def update(self, instance, validated_data):
-        from .services import (
-            generar_alerta_para_medicion,
-            obtener_estado_para_medicion,
-        )
-
-        indicador = validated_data.get('indicador', instance.indicador)
-        meta = validated_data.get('meta', instance.meta)
-        valor_resultado = validated_data.get(
-            'valor_resultado',
-            instance.valor_resultado
-        )
-
-        estado = obtener_estado_para_medicion(
-            indicador=indicador,
-            meta=meta,
-            valor_resultado=valor_resultado,
-        )
-
-        if estado is None:
-            raise serializers.ValidationError(
-                'No se encontró un estado de cumplimiento válido para esta medición.'
-            )
-
-        validated_data['estado_cumplimiento'] = estado
-
-        medicion = super().update(instance, validated_data)
-        generar_alerta_para_medicion(medicion)
 
         return medicion
 
