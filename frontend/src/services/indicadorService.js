@@ -5,6 +5,16 @@ export async function obtenerIndicadoresKpi() {
   return normalizarRespuesta(response)
 }
 
+export async function crearIndicador(payload) {
+  const response = await api.post('indicadores-kpi/', limpiarPayloadIndicador(payload))
+  return response.data
+}
+
+export async function actualizarIndicador(id, payload) {
+  const response = await api.patch(`indicadores-kpi/${id}/`, limpiarPayloadIndicador(payload))
+  return response.data
+}
+
 export async function obtenerObjetivos() {
   const response = await api.get('objetivos/')
   return normalizarRespuesta(response)
@@ -54,6 +64,21 @@ export async function autorizarIndicador(id) {
 export async function anularIndicador(id) {
   const response = await api.post(`indicadores-kpi/${id}/anular/`)
   return response.data
+}
+
+function limpiarPayloadIndicador(payload) {
+  return {
+    objetivo: payload.objetivo,
+    frecuencia: payload.frecuencia,
+    tipo_calculo: payload.tipo_calculo,
+    fuente_dato: payload.fuente_dato,
+    nombre: payload.nombre,
+    descripcion: payload.descripcion || '',
+    unidad_medida: payload.unidad_medida,
+    valor_meta: payload.valor_meta,
+    fecha_inicio: payload.fecha_inicio,
+    fecha_fin: payload.fecha_fin,
+  }
 }
 
 function normalizarRespuesta(response) {

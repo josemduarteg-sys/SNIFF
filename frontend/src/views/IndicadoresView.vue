@@ -1,9 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
+import ModalBase from '../components/ui/ModalBase.vue'
+import IndicadorForm from '../components/indicadores/IndicadorForm.vue'
 import {
+  actualizarIndicador,
   anularIndicador,
   autorizarIndicador,
+  crearIndicador,
   obtenerDatosFormularioIndicador,
   obtenerIndicadoresKpi,
 } from '../services/indicadorService'
@@ -34,6 +38,10 @@ const cargando = ref(false)
 const procesandoId = ref(null)
 const error = ref('')
 const mensaje = ref('')
+
+const modalAbierto = ref(false)
+const indicadorSeleccionado = ref(null)
+const guardando = ref(false)
 
 async function cargarDatos() {
   cargando.value = true
@@ -251,6 +259,71 @@ function manejarEditar(indicador) {
   error.value = 'La edición del KPI se implementará en el formulario de KPI.'
 }
 
+function abrirNuevoIndicador() {
+  indicadorSeleccionado.value = null
+  modalAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+}
+
+function abrirEditarIndicador(indicador) {
+  if (!puedeEditar(indicador)) {
+    mensaje.value = ''
+    error.value = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
+    return
+  }
+
+  indicadorSeleccionado.value = indicador
+  modalAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+}
+
+function cerrarModal() {
+  modalAbierto.value = false
+  indicadorSeleccionado.value = null
+  guardando.value = false
+}
+
+async function guardarIndicador(payload) {
+  guardando.value = true
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    if (indicadorSeleccionado.value?.id) {
+      await actualizarIndicador(indicadorSeleccionado.value.id, payload)
+      mensaje.value = 'KPI actualizado correctamente.'
+    } else {
+      await crearIndicador(payload)
+      mensaje.value = 'KPI creado correctamente.'
+    }
+
+    cerrarModal()
+    await cargarDatos()
+  } catch (e) {
+    const data = e.response?.data
+
+    if (data?.non_field_errors) {
+      error.value = data.non_field_errors.join(' ')
+    } else if (data?.detail) {
+      error.value = data.detail
+    } else if (typeof data === 'object' && data !== null) {
+      const primerCampo = Object.keys(data)[0]
+      const mensajeCampo = data[primerCampo]
+      error.value = Array.isArray(mensajeCampo)
+        ? mensajeCampo.join(' ')
+        : String(mensajeCampo)
+    } else {
+      error.value = indicadorSeleccionado.value?.id
+        ? 'No se pudo actualizar el KPI.'
+        : 'No se pudo crear el KPI.'
+    }
+  } finally {
+    guardando.value = false
+  }
+}
+
 function cerrarSesion() {
   emit('logout')
 }
@@ -269,7 +342,7 @@ onMounted(() => {
     @logout="cerrarSesion"
   >
     <template #actions>
-      <button class="btn-primary-page" type="button">
+      <button class="btn-primary-page" type="button" @click="abrirNuevoIndicador">
         <svg
           width="15"
           height="15"
@@ -590,7 +663,7 @@ onMounted(() => {
                   title="Editar"
                   :class="{ disabled: !puedeEditar(indicador) }"
                   :disabled="procesandoId === indicador.id"
-                  @click="manejarEditar(indicador)"
+                  @click="abrirEditarIndicador(indicador)"
                 >
                   <svg
                     width="14"
@@ -641,6 +714,31 @@ onMounted(() => {
         </div>
       </div>
     </section>
+
+    <ModalBase
+      :abierto="modalAbierto"
+      :titulo="indicadorSeleccionado ? 'Editar KPI' : 'Nuevo KPI'"
+      :subtitulo="
+        indicadorSeleccionado
+          ? 'Actualiza los datos principales del indicador mientras esté en borrador.'
+          : 'Registra un KPI con meta, vigencia, frecuencia y fuente de datos.'
+      "
+      @cerrar="cerrarModal"
+    >
+      <IndicadorForm
+        :indicador="indicadorSeleccionado"
+        :objetivos="objetivos"
+        :frecuencias="frecuencias"
+        :tipos-calculo="tiposCalculo"
+        :fuentes-dato="fuentesDato"
+        @guardar="guardarIndicador"
+        @cancelar="cerrarModal"
+      />
+
+      <div v-if="guardando" class="saving-message">
+        Guardando KPI...
+      </div>
+    </ModalBase>
   </AppLayout>
 </template>
 
@@ -1106,6 +1204,16 @@ tbody tr:hover {
   font-size: 12px;
   color: #9aa8b8;
   font-weight: 600;
+}
+
+.saving-message {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: #eaf5f5;
+  color: #457b9d;
+  font-size: 12.5px;
+  font-weight: 800;
 }
 
 @media (max-width: 1200px) {

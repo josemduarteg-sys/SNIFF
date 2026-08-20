@@ -21,8 +21,17 @@ export async function obtenerDatosFormularioMedicion() {
     obtenerEstadosCumplimiento(),
   ])
 
+  const indicadoresAutorizados = indicadores.filter((indicador) => {
+    return (
+      indicador.estado === 'autorizado' &&
+      indicador.valor_meta &&
+      indicador.fecha_inicio &&
+      indicador.fecha_fin
+    )
+  })
+
   return {
-    indicadores,
+    indicadores: indicadoresAutorizados,
     estadosCumplimiento,
   }
 }

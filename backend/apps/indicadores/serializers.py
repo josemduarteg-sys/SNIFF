@@ -407,6 +407,28 @@ class MedicionSerializer(serializers.ModelSerializer):
         return attrs
 
     def validate(self, attrs):
+        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
+
+        if not indicador:
+            raise serializers.ValidationError({
+                'indicador': 'Debe seleccionar un KPI.'
+            })
+
+        if indicador.estado != 'autorizado':
+            raise serializers.ValidationError({
+                'indicador': 'Solo se pueden registrar mediciones para KPI autorizados.'
+            })
+
+        if not indicador.valor_meta:
+            raise serializers.ValidationError({
+                'indicador': 'El KPI seleccionado no tiene una meta configurada.'
+            })
+
+        if not indicador.fecha_inicio or not indicador.fecha_fin:
+            raise serializers.ValidationError({
+                'indicador': 'El KPI seleccionado no tiene vigencia configurada.'
+            })
+
         attrs = self.preparar_datos_mensuales(attrs)
 
         indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
