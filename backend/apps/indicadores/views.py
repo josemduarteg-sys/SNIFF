@@ -33,19 +33,19 @@ from .serializers import (
 
 
 class FrecuenciaViewSet(viewsets.ModelViewSet):
-    queryset = Frecuencia.objects.all()
+    queryset = Frecuencia.objects.filter(estado=True).order_by('nombre')
     serializer_class = FrecuenciaSerializer
     permission_classes = [IsAuthenticated]
 
 
 class TipoCalculoViewSet(viewsets.ModelViewSet):
-    queryset = TipoCalculo.objects.all()
+    queryset = TipoCalculo.objects.filter(estado=True).order_by('nombre')
     serializer_class = TipoCalculoSerializer
     permission_classes = [IsAuthenticated]
 
 
 class FuenteDatoViewSet(viewsets.ModelViewSet):
-    queryset = FuenteDato.objects.all()
+    queryset = FuenteDato.objects.filter(estado=True).order_by('nombre')
     serializer_class = FuenteDatoSerializer
     permission_classes = [IsAuthenticated]
 
@@ -124,7 +124,7 @@ class ResponsableKPIViewSet(viewsets.ModelViewSet):
 
 
 class EstadoCumplimientoViewSet(viewsets.ModelViewSet):
-    queryset = EstadoCumplimiento.objects.all()
+    queryset = EstadoCumplimiento.objects.filter(estado=True).order_by('nombre')
     serializer_class = EstadoCumplimientoSerializer
     permission_classes = [IsAuthenticated]
 

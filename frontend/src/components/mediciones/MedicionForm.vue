@@ -7,16 +7,6 @@ const props = defineProps({
     type: Array,
     required: true,
   },
-  metas: {
-    type: Array,
-    required: false,
-    default: () => [],
-  },
-  periodos: {
-    type: Array,
-    required: false,
-    default: () => [],
-  },
   medicionEditar: {
     type: Object,
     required: false,
@@ -56,20 +46,11 @@ const indicadorSeleccionado = computed(() => {
 const metaVigente = computed(() => {
   const indicador = indicadorSeleccionado.value
 
-  if (!indicador) return null
-
-  if (indicador.valor_meta !== null && indicador.valor_meta !== undefined && indicador.valor_meta !== '') {
-    return {
-      valor_meta: indicador.valor_meta,
-      fecha_inicio: indicador.fecha_inicio,
-      fecha_fin: indicador.fecha_fin,
-      origen: 'kpi',
-    }
+  if (!indicador?.valor_meta) {
+    return null
   }
 
-  return props.metas.find((meta) => {
-    return Number(meta.indicador) === Number(indicador.id) && meta.estado === 'vigente'
-  }) || props.metas.find((meta) => Number(meta.indicador) === Number(indicador.id)) || null
+  return Number(indicador.valor_meta)
 })
 
 const unidadMedida = computed(() => indicadorSeleccionado.value?.unidad_medida || 'unidad')
@@ -255,15 +236,15 @@ async function guardar() {
     <section v-if="indicadorSeleccionado" class="kpi-context full">
       <div class="context-item">
         <span>Meta configurada</span>
-        <strong>{{ formatearNumero(metaVigente?.valor_meta) }} {{ unidadMedida }}</strong>
+        <strong>{{ formatearNumero(metaVigente) }} {{ unidadMedida }}</strong>
       </div>
 
       <div class="context-item">
         <span>Vigencia del KPI</span>
         <strong>
-          {{ formatearFecha(indicadorSeleccionado.fecha_inicio || metaVigente?.fecha_inicio) }}
+          {{ formatearFecha(indicadorSeleccionado.fecha_inicio) }}
           al
-          {{ formatearFecha(indicadorSeleccionado.fecha_fin || metaVigente?.fecha_fin) }}
+          {{ formatearFecha(indicadorSeleccionado.fecha_fin) }}
         </strong>
       </div>
 

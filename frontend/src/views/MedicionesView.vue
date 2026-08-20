@@ -21,8 +21,6 @@ const emit = defineEmits(['logout'])
 
 const mediciones = ref([])
 const indicadores = ref([])
-const metas = ref([])
-const periodos = ref([])
 const estadosCumplimiento = ref([])
 
 const busqueda = ref('')
@@ -111,8 +109,6 @@ async function cargarDatos() {
 
     mediciones.value = medicionesResponse
     indicadores.value = datosFormulario.indicadores
-    metas.value = datosFormulario.metas
-    periodos.value = datosFormulario.periodos
     estadosCumplimiento.value = datosFormulario.estadosCumplimiento
   } catch (e) {
     error.value = 'No se pudieron cargar las mediciones.'
@@ -488,8 +484,6 @@ onMounted(() => {
     >
       <MedicionForm
         :indicadores="indicadores"
-        :metas="metas"
-        :periodos="periodos"
         :medicion-editar="medicionSeleccionada"
         @guardado="manejarGuardado"
         @cancelar="cerrarModal"

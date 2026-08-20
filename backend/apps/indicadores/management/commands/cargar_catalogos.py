@@ -66,39 +66,49 @@ class Command(BaseCommand):
     def cargar_frecuencias(self):
         frecuencias = [
             {
-                'nombre': 'Diaria',
-                'descripcion': 'Actualización o medición realizada cada día.',
-            },
-            {
-                'nombre': 'Semanal',
-                'descripcion': 'Actualización o medición realizada cada semana.',
-            },
-            {
                 'nombre': 'Mensual',
-                'descripcion': 'Actualización o medición realizada cada mes.',
+                'descripcion': 'Seguimiento mensual del KPI.',
+                'estado': True,
+            },
+            {
+                'nombre': 'Bimestral',
+                'descripcion': 'KPI con vigencia o evaluación bimestral.',
+                'estado': True,
             },
             {
                 'nombre': 'Trimestral',
-                'descripcion': 'Actualización o medición realizada cada trimestre.',
+                'descripcion': 'KPI con vigencia o evaluación trimestral.',
+                'estado': True,
             },
             {
                 'nombre': 'Semestral',
-                'descripcion': 'Actualización o medición realizada cada semestre.',
+                'descripcion': 'KPI con vigencia o evaluación semestral.',
+                'estado': True,
             },
             {
                 'nombre': 'Anual',
-                'descripcion': 'Actualización o medición realizada cada año.',
+                'descripcion': 'KPI con vigencia o evaluación anual.',
+                'estado': True,
             },
         ]
 
-        for frecuencia in frecuencias:
-            Frecuencia.objects.get_or_create(
-                nombre=frecuencia['nombre'],
+        for frecuencia_data in frecuencias:
+            frecuencia, created = Frecuencia.objects.get_or_create(
+                nombre=frecuencia_data['nombre'],
                 defaults={
-                    'descripcion': frecuencia['descripcion'],
-                    'estado': True,
-                }
+                    'descripcion': frecuencia_data['descripcion'],
+                    'estado': frecuencia_data['estado'],
+                },
             )
+
+            if not created:
+                frecuencia.descripcion = frecuencia_data['descripcion']
+                frecuencia.estado = frecuencia_data['estado']
+                frecuencia.save()
+
+        frecuencias_inactivas = ['Diaria', 'Semanal']
+
+        Frecuencia.objects.filter(nombre__in=frecuencias_inactivas).update(estado=False)
 
     def cargar_tipos_calculo(self):
         tipos_calculo = [
