@@ -155,6 +155,20 @@ async function manejarGuardado() {
     : 'Medición registrada correctamente.'
 }
 
+function textoEstadoCumplimiento(estado) {
+  if (!estado) {
+    return 'Pendiente de revisión'
+  }
+
+  const texto = estado.toLowerCase()
+
+  if (texto.includes('pendiente')) {
+    return 'Pendiente de revisión'
+  }
+
+  return estado
+}
+
 function estadoClase(nombreEstado) {
   const estado = nombreEstado?.toLowerCase() || ''
 
@@ -233,8 +247,8 @@ onMounted(() => {
 <template>
   <AppLayout
     :usuario="props.usuario"
-    titulo="Registro de Mediciones"
-    subtitulo="Consulta, registra y actualiza mediciones de indicadores KPI."
+    titulo="Seguimiento mensual de KPI"
+    subtitulo="Registra y consulta los resultados mensuales de los KPI autorizados."
     breadcrumb-actual="Mediciones"
     @logout="cerrarSesion"
   >
@@ -254,7 +268,7 @@ onMounted(() => {
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
 
-        Nueva Medición
+        Nueva medición mensual
       </button>
     </template>
 
@@ -272,7 +286,7 @@ onMounted(() => {
         </div>
 
         <div class="kpi-value">{{ totalMediciones }}</div>
-        <div class="kpi-label">Mediciones registradas</div>
+        <div class="kpi-label">Mediciones mensuales</div>
         <div class="kpi-foot">Total almacenado en el sistema</div>
       </article>
 
@@ -303,7 +317,7 @@ onMounted(() => {
         </div>
 
         <div class="kpi-value">{{ medicionesFavorables }}</div>
-        <div class="kpi-label">Favorables</div>
+        <div class="kpi-label">En cumplimiento</div>
         <div class="kpi-foot">Cumplen el rango esperado</div>
       </article>
 
@@ -319,7 +333,7 @@ onMounted(() => {
         </div>
 
         <div class="kpi-value">{{ medicionesRiesgo }}</div>
-        <div class="kpi-label">En riesgo/incumplidas</div>
+        <div class="kpi-label">Fuera de meta</div>
         <div class="kpi-foot">Requieren atención o seguimiento</div>
       </article>
     </section>
@@ -384,13 +398,12 @@ onMounted(() => {
         <thead>
           <tr>
             <th>KPI</th>
-            <th>Periodo</th>
+            <th>Mes evaluado</th>
             <th>Meta</th>
-            <th>Resultado</th>
+            <th>Resultado mensual</th>
             <th>Cumplimiento</th>
             <th>Estado</th>
-            <th>Fuente</th>
-            <th>Fecha registro</th>
+            <th>Registrado por</th>
             <th style="text-align: right;">Acciones</th>
           </tr>
         </thead>
@@ -403,17 +416,37 @@ onMounted(() => {
             </td>
 
             <td>
-              <span class="code-chip">{{ medicion.periodo_nombre || 'Sin periodo' }}</span>
+              <div class="cell-main">
+                {{ medicion.periodo_nombre || medicion.mes_medicion || 'Mes no definido' }}
+              </div>
+              <div class="cell-sub">
+                Seguimiento mensual
+              </div>
             </td>
 
-            <td>{{ formatearNumero(medicion.valor_meta) }}</td>
-            <td>{{ formatearNumero(medicion.valor_resultado) }}</td>
+            <td>
+              <div class="meta-value">
+                {{ formatearNumero(medicion.valor_meta) }}
+              </div>
+              <div class="cell-sub">
+                Meta del KPI
+              </div>
+            </td>
+
+            <td>
+              <div class="meta-value">
+                {{ formatearNumero(medicion.valor_resultado) }}
+              </div>
+              <div class="cell-sub">
+                Resultado mensual
+              </div>
+            </td>
 
             <td>
               <div class="progress-cell">
                 <div class="progress-info">
                   <span :class="['progress-number', porcentajeClase(medicion.porcentaje_cumplimiento)]">
-                    {{ formatearPorcentaje(medicion.porcentaje_cumplimiento) }}
+                    {{ formatearNumero(medicion.porcentaje_cumplimiento) }}%
                   </span>
                 </div>
 
@@ -424,23 +457,28 @@ onMounted(() => {
                     :style="{ width: `${Math.min(Number(medicion.porcentaje_cumplimiento) || 0, 100)}%` }"
                   ></div>
                 </div>
+
+                <div class="cell-sub">
+                  Avance contra meta
+                </div>
               </div>
             </td>
 
             <td>
               <span class="badge" :class="estadoClase(medicion.estado_cumplimiento_nombre)">
                 <span class="badge-dot"></span>
-                {{ medicion.estado_cumplimiento_nombre || 'Sin estado' }}
+                {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
               </span>
             </td>
 
             <td>
-              <span class="source-chip" :class="fuenteClase(medicion)">
-                {{ obtenerFuente(medicion) }}
-              </span>
+              <div class="cell-main">
+                {{ medicion.registrado_por_username || 'Sistema' }}
+              </div>
+              <div class="cell-sub">
+                {{ formatearFecha(medicion.fecha_registro) }}
+              </div>
             </td>
-
-            <td>{{ formatearFecha(medicion.fecha_registro || medicion.created_at) }}</td>
 
             <td>
               <div class="actions-cell">
