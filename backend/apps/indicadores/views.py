@@ -1,4 +1,7 @@
-from rest_framework import viewsets
+from django.utils import timezone
+from rest_framework import viewsets, status
+from rest_framework.response import Response    
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 
 from .models import (
@@ -53,10 +56,55 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         'frecuencia',
         'tipo_calculo',
         'fuente_dato',
+        'autorizado_por',
     ).all()
     serializer_class = IndicadorKPISerializer
-    permission_classes = [IsAuthenticated]
 
+    @action(detail=True, methods=['post'])
+    def autorizar(self, request, pk=None):
+        indicador = self.get_object()
+
+        if indicador.estado == 'autorizado':
+            return Response(
+                {'detail': 'El KPI ya se encuentra autorizado.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not indicador.valor_meta:
+            return Response(
+                {'detail': 'No se puede autorizar un KPI sin meta configurada.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not indicador.fecha_inicio or not indicador.fecha_fin:
+            return Response(
+                {'detail': 'No se puede autorizar un KPI sin fechas de vigencia.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        indicador.estado = 'autorizado'
+        indicador.fecha_autorizacion = timezone.now()
+        indicador.autorizado_por = request.user
+        indicador.save(
+            update_fields=[
+                'estado',
+                'fecha_autorizacion',
+                'autorizado_por',
+            ]
+        )
+
+        serializer = self.get_serializer(indicador)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def anular(self, request, pk=None):
+        indicador = self.get_object()
+
+        indicador.estado = 'anulado'
+        indicador.save(update_fields=['estado'])
+
+        serializer = self.get_serializer(indicador)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class MetaKPIViewSet(viewsets.ModelViewSet):
     queryset = MetaKPI.objects.select_related(

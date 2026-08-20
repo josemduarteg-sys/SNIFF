@@ -52,9 +52,10 @@ class FuenteDato(models.Model):
 
 class IndicadorKPI(models.Model):
     ESTADO_CHOICES = [
-        ('activo', 'Activo'),
+        ('borrador', 'Borrador'),
+        ('autorizado', 'Autorizado'),
         ('inactivo', 'Inactivo'),
-        ('en_revision', 'En revisión'),
+        ('anulado', 'Anulado'),
     ]
 
     objetivo = models.ForeignKey(
@@ -80,11 +81,41 @@ class IndicadorKPI(models.Model):
     nombre = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True, null=True)
     unidad_medida = models.CharField(max_length=50)
+
+    valor_meta = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        validators=[MinValueValidator(0)],
+        blank=True,
+        null=True,
+        help_text='Meta total esperada para el KPI durante su vigencia.'
+    )
+    fecha_inicio = models.DateField(
+        blank=True,
+        null=True,
+        help_text='Fecha de inicio de vigencia del KPI.'
+    )
+    fecha_fin = models.DateField(
+        blank=True,
+        null=True,
+        help_text='Fecha final esperada para cumplir el KPI.'
+    )
+
     estado = models.CharField(
         max_length=20,
         choices=ESTADO_CHOICES,
-        default='activo'
+        default='borrador'
     )
+
+    fecha_autorizacion = models.DateTimeField(blank=True, null=True)
+    autorizado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='kpis_autorizados',
+        blank=True,
+        null=True
+    )
+
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -98,6 +129,15 @@ class IndicadorKPI(models.Model):
                 name='unique_indicador_por_objetivo'
             )
         ]
+
+    def clean(self):
+        if self.fecha_inicio and self.fecha_fin and self.fecha_fin < self.fecha_inicio:
+            raise ValidationError(
+                'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+            )
+
+    def puede_modificarse(self):
+        return self.estado == 'borrador'
 
     def __str__(self):
         return self.nombre

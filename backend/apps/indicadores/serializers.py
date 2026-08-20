@@ -52,22 +52,12 @@ class FuenteDatoSerializer(serializers.ModelSerializer):
 
 
 class IndicadorKPISerializer(serializers.ModelSerializer):
-    objetivo_nombre = serializers.CharField(
-        source='objetivo.nombre',
-        read_only=True
-    )
-    frecuencia_nombre = serializers.CharField(
-        source='frecuencia.nombre',
-        read_only=True
-    )
-    tipo_calculo_nombre = serializers.CharField(
-        source='tipo_calculo.nombre',
-        read_only=True
-    )
-    fuente_dato_nombre = serializers.CharField(
-        source='fuente_dato.nombre',
-        read_only=True
-    )
+    objetivo_nombre = serializers.CharField(source='objetivo.nombre', read_only=True)
+    frecuencia_nombre = serializers.CharField(source='frecuencia.nombre', read_only=True)
+    tipo_calculo_nombre = serializers.CharField(source='tipo_calculo.nombre', read_only=True)
+    fuente_dato_nombre = serializers.CharField(source='fuente_dato.nombre', read_only=True)
+    autorizado_por_username = serializers.CharField(source='autorizado_por.username', read_only=True)
+    puede_modificarse = serializers.SerializerMethodField()
 
     class Meta:
         model = IndicadorKPI
@@ -84,10 +74,61 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'nombre',
             'descripcion',
             'unidad_medida',
+            'valor_meta',
+            'fecha_inicio',
+            'fecha_fin',
             'estado',
+            'fecha_autorizacion',
+            'autorizado_por',
+            'autorizado_por_username',
+            'puede_modificarse',
             'fecha_creacion',
         ]
-        read_only_fields = ['id', 'fecha_creacion']
+        read_only_fields = [
+            'id',
+            'fecha_creacion',
+            'fecha_autorizacion',
+            'autorizado_por',
+            'autorizado_por_username',
+            'puede_modificarse',
+        ]
+
+    def get_puede_modificarse(self, obj):
+        return obj.puede_modificarse()
+
+    def validate(self, attrs):
+        instance = self.instance
+
+        if instance and not instance.puede_modificarse():
+            campos_bloqueados = {
+                'objetivo',
+                'frecuencia',
+                'tipo_calculo',
+                'fuente_dato',
+                'nombre',
+                'descripcion',
+                'unidad_medida',
+                'valor_meta',
+                'fecha_inicio',
+                'fecha_fin',
+            }
+
+            campos_intentados = campos_bloqueados.intersection(set(attrs.keys()))
+
+            if campos_intentados:
+                raise serializers.ValidationError(
+                    'El KPI ya está autorizado y no permite modificar sus datos principales.'
+                )
+
+        fecha_inicio = attrs.get('fecha_inicio', getattr(instance, 'fecha_inicio', None))
+        fecha_fin = attrs.get('fecha_fin', getattr(instance, 'fecha_fin', None))
+
+        if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
+            raise serializers.ValidationError(
+                'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+            )
+
+        return attrs
 
 
 class MetaKPISerializer(serializers.ModelSerializer):
