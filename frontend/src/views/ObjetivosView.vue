@@ -1,7 +1,16 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
-import api from '../services/api'
+import ModalBase from '../components/ui/ModalBase.vue'
+import ObjetivoForm from '../components/objetivos/ObjetivoForm.vue'
+import {
+  actualizarObjetivo,
+  crearObjetivo,
+  inactivarObjetivo,
+  obtenerDatosFormularioObjetivo,
+  obtenerObjetivos,
+  reactivarObjetivo,
+} from '../services/objetivoService'
 import { puedeGestionarObjetivos } from '../utils/permisos'
 
 const props = defineProps({
@@ -22,31 +31,25 @@ const busqueda = ref('')
 const estrategiaSeleccionada = ref('')
 const cargando = ref(false)
 const error = ref('')
+const mensaje = ref('')
 
-function normalizarRespuesta(response) {
-  if (Array.isArray(response.data)) {
-    return response.data
-  }
-
-  if (Array.isArray(response.data.results)) {
-    return response.data.results
-  }
-
-  return []
-}
+const modalObjetivoAbierto = ref(false)
+const modalDetalleAbierto = ref(false)
+const objetivoSeleccionado = ref(null)
+const guardandoObjetivo = ref(false)
 
 async function cargarDatos() {
   cargando.value = true
   error.value = ''
 
   try {
-    const [objetivosResponse, estrategiasResponse] = await Promise.all([
-      api.get('objetivos/'),
-      api.get('estrategias/'),
+    const [objetivosData, datosFormulario] = await Promise.all([
+      obtenerObjetivos(),
+      obtenerDatosFormularioObjetivo(),
     ])
 
-    objetivos.value = normalizarRespuesta(objetivosResponse)
-    estrategias.value = normalizarRespuesta(estrategiasResponse)
+    objetivos.value = objetivosData
+    estrategias.value = datosFormulario.estrategias
   } catch (e) {
     error.value = 'No se pudieron cargar los objetivos.'
   } finally {
@@ -128,6 +131,115 @@ function inicialesUsuario(nombre) {
     .toUpperCase()
 }
 
+function abrirNuevoObjetivo() {
+  objetivoSeleccionado.value = null
+  modalObjetivoAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+}
+
+function abrirEditarObjetivo(objetivo) {
+  objetivoSeleccionado.value = objetivo
+  modalObjetivoAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+}
+
+function abrirDetalleObjetivo(objetivo) {
+  objetivoSeleccionado.value = objetivo
+  modalDetalleAbierto.value = true
+}
+
+function cerrarModalObjetivo() {
+  modalObjetivoAbierto.value = false
+  objetivoSeleccionado.value = null
+  guardandoObjetivo.value = false
+}
+
+function cerrarModalDetalle() {
+  modalDetalleAbierto.value = false
+  objetivoSeleccionado.value = null
+}
+
+function obtenerMensajeError(e, mensajeDefault) {
+  const data = e.response?.data
+
+  if (data?.detail) {
+    return data.detail
+  }
+
+  if (typeof data === 'object' && data !== null) {
+    const primerCampo = Object.keys(data)[0]
+    const mensajeCampo = data[primerCampo]
+
+    return Array.isArray(mensajeCampo)
+      ? mensajeCampo.join(' ')
+      : String(mensajeCampo)
+  }
+
+  return mensajeDefault
+}
+
+async function guardarObjetivo(payload) {
+  guardandoObjetivo.value = true
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    if (objetivoSeleccionado.value?.id) {
+      await actualizarObjetivo(objetivoSeleccionado.value.id, payload)
+      mensaje.value = 'Objetivo actualizado correctamente.'
+    } else {
+      await crearObjetivo(payload)
+      mensaje.value = 'Objetivo creado correctamente.'
+    }
+
+    cerrarModalObjetivo()
+    await cargarDatos()
+  } catch (e) {
+    error.value = obtenerMensajeError(
+      e,
+      objetivoSeleccionado.value?.id
+        ? 'No se pudo actualizar el objetivo.'
+        : 'No se pudo crear el objetivo.'
+    )
+  } finally {
+    guardandoObjetivo.value = false
+  }
+}
+
+async function manejarInactivarObjetivo(objetivo) {
+  const confirmar = window.confirm(
+    `¿Seguro que querés inactivar el objetivo "${objetivo.nombre}"?`
+  )
+
+  if (!confirmar) return
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await inactivarObjetivo(objetivo.id)
+    mensaje.value = 'Objetivo inactivado correctamente.'
+    await cargarDatos()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo inactivar el objetivo.')
+  }
+}
+
+async function manejarReactivarObjetivo(objetivo) {
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await reactivarObjetivo(objetivo.id)
+    mensaje.value = 'Objetivo reactivado correctamente.'
+    await cargarDatos()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo reactivar el objetivo.')
+  }
+}
+
 function cerrarSesion() {
   emit('logout')
 }
@@ -146,7 +258,7 @@ onMounted(() => {
     @logout="cerrarSesion"
   >
     <template v-if="puedeGestionar" #actions>
-      <button class="btn-primary-page" type="button">
+      <button class="btn-primary-page" type="button" @click="abrirNuevoObjetivo">
         <svg
           width="15"
           height="15"
@@ -164,6 +276,14 @@ onMounted(() => {
         Nuevo Objetivo
       </button>
     </template>
+
+    <div v-if="mensaje" class="alert success">
+      {{ mensaje }}
+    </div>
+
+    <div v-if="error" class="alert error">
+      {{ error }}
+    </div>
 
     <section class="summary-grid">
       <article class="kpi-card">
@@ -313,10 +433,6 @@ onMounted(() => {
         Cargando objetivos...
       </div>
 
-      <div v-else-if="error" class="message error">
-        {{ error }}
-      </div>
-
       <div v-else-if="!objetivosFiltrados.length" class="empty-state">
         No hay objetivos para mostrar.
       </div>
@@ -377,53 +493,39 @@ onMounted(() => {
 
             <td>
               <div class="actions-cell">
-                <button class="action-icon-btn" type="button" title="Ver detalle">
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
+                <button
+                  class="action-btn"
+                  type="button"
+                  @click="abrirDetalleObjetivo(objetivo)"
+                >
+                  Ver detalle
                 </button>
 
-                <button v-if="puedeGestionar" class="action-icon-btn" type="button" title="Editar">
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                    <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
-                  </svg>
+                <button
+                  v-if="puedeGestionar"
+                  class="action-btn"
+                  type="button"
+                  @click="abrirEditarObjetivo(objetivo)"
+                >
+                  Editar
                 </button>
 
-                <button v-if="puedeGestionar" class="action-icon-btn danger" type="button" title="Inactivar">
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-                    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  </svg>
+                <button
+                  v-if="puedeGestionar && objetivo.estado !== 'inactivo'"
+                  class="action-btn danger"
+                  type="button"
+                  @click="manejarInactivarObjetivo(objetivo)"
+                >
+                  Inactivar
+                </button>
+
+                <button
+                  v-if="puedeGestionar && objetivo.estado === 'inactivo'"
+                  class="action-btn"
+                  type="button"
+                  @click="manejarReactivarObjetivo(objetivo)"
+                >
+                  Reactivar
                 </button>
               </div>
             </td>
@@ -473,6 +575,69 @@ onMounted(() => {
         </div>
       </div>
     </section>
+
+    <ModalBase
+      :abierto="modalObjetivoAbierto"
+      :titulo="objetivoSeleccionado ? 'Editar objetivo' : 'Nuevo objetivo'"
+      :subtitulo="
+        objetivoSeleccionado
+          ? 'Actualiza los datos generales del objetivo.'
+          : 'Registra un objetivo asociado a una estrategia.'
+      "
+      @cerrar="cerrarModalObjetivo"
+    >
+      <ObjetivoForm
+        :objetivo="objetivoSeleccionado"
+        :estrategias="estrategias"
+        @guardar="guardarObjetivo"
+        @cancelar="cerrarModalObjetivo"
+      />
+
+      <div v-if="guardandoObjetivo" class="saving-message">
+        Guardando objetivo...
+      </div>
+    </ModalBase>
+
+    <ModalBase
+      :abierto="modalDetalleAbierto"
+      titulo="Detalle del objetivo"
+      subtitulo="Información general del objetivo seleccionado."
+      @cerrar="cerrarModalDetalle"
+    >
+      <div v-if="objetivoSeleccionado" class="detail-grid">
+        <div class="detail-item">
+          <span>Estrategia</span>
+          <strong>
+            {{ objetivoSeleccionado.estrategia_nombre || objetivoSeleccionado.nombre_estrategia || 'Sin especificar' }}
+          </strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Objetivo</span>
+          <strong>{{ objetivoSeleccionado.nombre }}</strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Estado</span>
+          <strong>{{ textoEstado(objetivoSeleccionado.estado) }}</strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Fecha inicio</span>
+          <strong>{{ formatearFecha(objetivoSeleccionado.fecha_inicio) }}</strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Fecha fin</span>
+          <strong>{{ formatearFecha(objetivoSeleccionado.fecha_fin) }}</strong>
+        </div>
+
+        <div class="detail-item detail-full">
+          <span>Descripción</span>
+          <strong>{{ objetivoSeleccionado.descripcion || 'Sin descripción registrada.' }}</strong>
+        </div>
+      </div>
+    </ModalBase>
   </AppLayout>
 </template>
 
@@ -585,6 +750,24 @@ onMounted(() => {
   background: #152840;
 }
 
+.alert {
+  padding: 13px 15px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 750;
+  margin-bottom: 18px;
+}
+
+.alert.success {
+  background: rgba(42, 157, 143, 0.12);
+  color: #2a9d8f;
+}
+
+.alert.error {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -682,11 +865,6 @@ onMounted(() => {
   color: #457b9d;
   font-size: 13px;
   font-weight: 700;
-}
-
-.message.error {
-  background: rgba(231, 111, 81, 0.12);
-  color: #e76f51;
 }
 
 table {
@@ -817,34 +995,81 @@ tbody tr:hover {
   gap: 6px;
 }
 
-.action-icon-btn {
-  width: 30px;
+.action-btn {
   height: 30px;
+  padding: 0 10px;
   border-radius: 9px;
   border: 1px solid #e4eaef;
   background: #ffffff;
-  color: #5e6e82;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  color: #457b9d;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.action-icon-btn svg {
-  stroke: currentColor;
-}
-
-.action-icon-btn:hover {
+.action-btn:hover {
   background: #eaf5f5;
-  color: #457b9d;
   border-color: #a8dadc;
 }
 
-.action-icon-btn.danger:hover {
-  background: rgba(231, 111, 81, 0.10);
+.action-btn.danger {
   color: #e76f51;
+}
+
+.action-btn.danger:hover {
+  background: rgba(231, 111, 81, 0.10);
   border-color: rgba(231, 111, 81, 0.25);
+}
+
+.saving-message {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: #eaf5f5;
+  color: #457b9d;
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.detail-item {
+  padding: 13px 14px;
+  border-radius: 12px;
+  background: #f4f7f9;
+  border: 1px solid #e4eaef;
+}
+
+.detail-full {
+  grid-column: 1 / -1;
+}
+
+.detail-item span {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #6c7a89;
+}
+
+.detail-item strong {
+  display: block;
+  color: #1d3557;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+@media (max-width: 680px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .table-footer {

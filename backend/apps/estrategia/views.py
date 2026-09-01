@@ -23,6 +23,9 @@ class EstrategiaViewSet(viewsets.ModelViewSet):
     serializer_class = EstrategiaSerializer
     permission_classes = [PermisoPlaneacion]
 
+    def perform_create(self, serializer):
+        serializer.save(creado_por=self.request.user)
+
 
 class ObjetivoViewSet(viewsets.ModelViewSet):
     queryset = Objetivo.objects.select_related(
@@ -31,4 +34,7 @@ class ObjetivoViewSet(viewsets.ModelViewSet):
     ).all()
     serializer_class = ObjetivoSerializer
     permission_classes = [PermisoPlaneacion]
+
+    def perform_create(self, serializer):
+        serializer.save(creado_por=self.request.user)
 

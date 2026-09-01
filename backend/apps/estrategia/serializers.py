@@ -38,7 +38,18 @@ class EstrategiaSerializer(serializers.ModelSerializer):
             'estado',
             'fecha_creacion',
         ]
-        read_only_fields = ['id', 'fecha_creacion']
+        read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+
+    def validate(self, data):
+        fecha_inicio = data.get('fecha_inicio') or getattr(self.instance, 'fecha_inicio', None)
+        fecha_fin = data.get('fecha_fin') or getattr(self.instance, 'fecha_fin', None)
+
+        if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
+            raise serializers.ValidationError({
+                'fecha_fin': 'La fecha fin no puede ser menor que la fecha inicio.'
+            })
+
+        return data
 
 
 class ObjetivoSerializer(serializers.ModelSerializer):
@@ -66,5 +77,16 @@ class ObjetivoSerializer(serializers.ModelSerializer):
             'estado',
             'fecha_creacion',
         ]
-        read_only_fields = ['id', 'fecha_creacion']
+        read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+
+    def validate(self, data):
+        fecha_inicio = data.get('fecha_inicio') or getattr(self.instance, 'fecha_inicio', None)
+        fecha_fin = data.get('fecha_fin') or getattr(self.instance, 'fecha_fin', None)
+
+        if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
+            raise serializers.ValidationError({
+                'fecha_fin': 'La fecha fin no puede ser menor que la fecha inicio.'
+            })
+
+        return data
 

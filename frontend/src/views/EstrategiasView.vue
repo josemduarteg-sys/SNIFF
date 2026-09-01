@@ -1,7 +1,16 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
-import api from '../services/api'
+import ModalBase from '../components/ui/ModalBase.vue'
+import EstrategiaForm from '../components/estrategias/EstrategiaForm.vue'
+import {
+  actualizarEstrategia,
+  crearEstrategia,
+  inactivarEstrategia,
+  obtenerDatosFormularioEstrategia,
+  obtenerEstrategias,
+  reactivarEstrategia,
+} from '../services/estrategiaService'
 import { puedeGestionarEstrategias } from '../utils/permisos'
 
 const props = defineProps({
@@ -17,32 +26,31 @@ const puedeGestionar = computed(() => puedeGestionarEstrategias(props.usuario))
 const emit = defineEmits(['logout'])
 
 const estrategias = ref([])
+const areas = ref([])
 const cargando = ref(false)
 const error = ref('')
+const mensaje = ref('')
+
+const modalEstrategiaAbierto = ref(false)
+const estrategiaSeleccionada = ref(null)
+const guardandoEstrategia = ref(false)
 
 const estrategiasActivas = computed(() => {
   return estrategias.value.filter((item) => item.estado === 'activa' || item.estado === true).length
 })
-
-function normalizarRespuesta(response) {
-  if (Array.isArray(response.data)) {
-    return response.data
-  }
-
-  if (Array.isArray(response.data.results)) {
-    return response.data.results
-  }
-
-  return []
-}
 
 async function cargarEstrategias() {
   cargando.value = true
   error.value = ''
 
   try {
-    const response = await api.get('estrategias/')
-    estrategias.value = normalizarRespuesta(response)
+    const [estrategiasData, datosFormulario] = await Promise.all([
+      obtenerEstrategias(),
+      obtenerDatosFormularioEstrategia(),
+    ])
+
+    estrategias.value = estrategiasData
+    areas.value = datosFormulario.areas
   } catch (e) {
     error.value = 'No se pudieron cargar las estrategias.'
   } finally {
@@ -71,6 +79,105 @@ function textoEstado(estado) {
   return estados[estado] || estado || 'Sin estado'
 }
 
+function abrirNuevaEstrategia() {
+  estrategiaSeleccionada.value = null
+  modalEstrategiaAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+}
+
+function abrirEditarEstrategia(estrategia) {
+  estrategiaSeleccionada.value = estrategia
+  modalEstrategiaAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+}
+
+function cerrarModalEstrategia() {
+  modalEstrategiaAbierto.value = false
+  estrategiaSeleccionada.value = null
+  guardandoEstrategia.value = false
+}
+
+function obtenerMensajeError(e, mensajeDefault) {
+  const data = e.response?.data
+
+  if (data?.detail) {
+    return data.detail
+  }
+
+  if (typeof data === 'object' && data !== null) {
+    const primerCampo = Object.keys(data)[0]
+    const mensajeCampo = data[primerCampo]
+
+    return Array.isArray(mensajeCampo)
+      ? mensajeCampo.join(' ')
+      : String(mensajeCampo)
+  }
+
+  return mensajeDefault
+}
+
+async function guardarEstrategia(payload) {
+  guardandoEstrategia.value = true
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    if (estrategiaSeleccionada.value?.id) {
+      await actualizarEstrategia(estrategiaSeleccionada.value.id, payload)
+      mensaje.value = 'Estrategia actualizada correctamente.'
+    } else {
+      await crearEstrategia(payload)
+      mensaje.value = 'Estrategia creada correctamente.'
+    }
+
+    cerrarModalEstrategia()
+    await cargarEstrategias()
+  } catch (e) {
+    error.value = obtenerMensajeError(
+      e,
+      estrategiaSeleccionada.value?.id
+        ? 'No se pudo actualizar la estrategia.'
+        : 'No se pudo crear la estrategia.'
+    )
+  } finally {
+    guardandoEstrategia.value = false
+  }
+}
+
+async function manejarInactivarEstrategia(estrategia) {
+  const confirmar = window.confirm(
+    `¿Seguro que querés inactivar la estrategia "${estrategia.nombre}"?`
+  )
+
+  if (!confirmar) return
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await inactivarEstrategia(estrategia.id)
+    mensaje.value = 'Estrategia inactivada correctamente.'
+    await cargarEstrategias()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo inactivar la estrategia.')
+  }
+}
+
+async function manejarReactivarEstrategia(estrategia) {
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await reactivarEstrategia(estrategia.id)
+    mensaje.value = 'Estrategia reactivada correctamente.'
+    await cargarEstrategias()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo reactivar la estrategia.')
+  }
+}
+
 function cerrarSesion() {
   emit('logout')
 }
@@ -89,10 +196,18 @@ onMounted(() => {
     @logout="cerrarSesion"
   >
     <template v-if="puedeGestionar" #actions>
-      <button class="btn-primary">
+      <button class="btn-primary" type="button" @click="abrirNuevaEstrategia">
         + Nueva estrategia
       </button>
     </template>
+
+    <div v-if="mensaje" class="alert success">
+      {{ mensaje }}
+    </div>
+
+    <div v-if="error" class="alert error">
+      {{ error }}
+    </div>
 
     <section class="summary-grid">
       <article class="summary-card">
@@ -120,10 +235,6 @@ onMounted(() => {
         Cargando estrategias...
       </div>
 
-      <div v-else-if="error" class="message error">
-        {{ error }}
-      </div>
-
       <div v-else-if="!estrategias.length" class="empty-state">
         No hay estrategias registradas todavía.
       </div>
@@ -136,6 +247,7 @@ onMounted(() => {
             <th>Fecha inicio</th>
             <th>Fecha fin</th>
             <th>Estado</th>
+            <th v-if="puedeGestionar" style="text-align: right;">Acciones</th>
           </tr>
         </thead>
 
@@ -158,10 +270,62 @@ onMounted(() => {
                 {{ textoEstado(estrategia.estado) }}
               </span>
             </td>
+
+            <td v-if="puedeGestionar">
+              <div class="actions-cell">
+                <button
+                  class="action-btn"
+                  type="button"
+                  @click="abrirEditarEstrategia(estrategia)"
+                >
+                  Editar
+                </button>
+
+                <button
+                  v-if="estrategia.estado !== 'inactiva'"
+                  class="action-btn danger"
+                  type="button"
+                  @click="manejarInactivarEstrategia(estrategia)"
+                >
+                  Inactivar
+                </button>
+
+                <button
+                  v-else
+                  class="action-btn"
+                  type="button"
+                  @click="manejarReactivarEstrategia(estrategia)"
+                >
+                  Reactivar
+                </button>
+              </div>
+            </td>
           </tr>
         </tbody>
       </table>
     </section>
+
+    <ModalBase
+      :abierto="modalEstrategiaAbierto"
+      :titulo="estrategiaSeleccionada ? 'Editar estrategia' : 'Nueva estrategia'"
+      :subtitulo="
+        estrategiaSeleccionada
+          ? 'Actualiza los datos generales de la estrategia.'
+          : 'Registra una estrategia para agrupar objetivos e indicadores KPI.'
+      "
+      @cerrar="cerrarModalEstrategia"
+    >
+      <EstrategiaForm
+        :estrategia="estrategiaSeleccionada"
+        :areas="areas"
+        @guardar="guardarEstrategia"
+        @cancelar="cerrarModalEstrategia"
+      />
+
+      <div v-if="guardandoEstrategia" class="saving-message">
+        Guardando estrategia...
+      </div>
+    </ModalBase>
   </AppLayout>
 </template>
 
@@ -247,6 +411,24 @@ onMounted(() => {
   background: #152840;
 }
 
+.alert {
+  padding: 13px 15px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 750;
+  margin-bottom: 18px;
+}
+
+.alert.success {
+  background: rgba(42, 157, 143, 0.12);
+  color: #2a9d8f;
+}
+
+.alert.error {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
+}
+
 .message,
 .empty-state {
   padding: 16px;
@@ -257,9 +439,47 @@ onMounted(() => {
   font-weight: 700;
 }
 
-.message.error {
-  background: rgba(231, 111, 81, 0.12);
+.actions-cell {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.action-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  color: #457b9d;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  background: #eaf5f5;
+  border-color: #a8dadc;
+}
+
+.action-btn.danger {
   color: #e76f51;
+}
+
+.action-btn.danger:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
+}
+
+.saving-message {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: #eaf5f5;
+  color: #457b9d;
+  font-size: 12.5px;
+  font-weight: 800;
 }
 
 table {
