@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.utils import timezone
 
-from .models import Alerta, EstadoCumplimiento, Medicion, RangoKPI
+from .models import Alerta, EstadoCumplimiento, IndicadorKPI, Medicion, RangoKPI
 
 
 def calcular_porcentaje_cumplimiento(valor_resultado, valor_meta):
@@ -166,4 +166,103 @@ def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
     )
 
     return sumar_meses(ultimo_periodo, intervalo)
+
+
+def obtener_ultimo_dia_mes(fecha):
+    if fecha.month == 12:
+        siguiente_mes = date(fecha.year + 1, 1, 1)
+    else:
+        siguiente_mes = date(fecha.year, fecha.month + 1, 1)
+
+    return siguiente_mes - date.resolution
+
+
+def calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo_meses):
+    mes_final = sumar_meses(fecha_inicio_periodo, intervalo_meses - 1)
+
+    return obtener_ultimo_dia_mes(mes_final)
+
+
+def generar_alertas_periodos_vencidos(fecha_referencia=None):
+    fecha_referencia = fecha_referencia or date.today()
+
+    total_kpi_revisados = 0
+    total_alertas_creadas = 0
+    total_omitidas = 0
+    detalle = []
+
+    indicadores = IndicadorKPI.objects.filter(estado='autorizado').select_related('frecuencia')
+
+    for indicador in indicadores:
+        total_kpi_revisados += 1
+
+        if not indicador.fecha_inicio:
+            continue
+
+        periodo_esperado = obtener_siguiente_periodo_esperado(indicador)
+
+        if not periodo_esperado:
+            continue
+
+        if indicador.fecha_fin:
+            fecha_fin_kpi = date(
+                indicador.fecha_fin.year,
+                indicador.fecha_fin.month,
+                1,
+            )
+
+            if periodo_esperado > fecha_fin_kpi:
+                continue
+
+        intervalo = obtener_intervalo_meses(indicador)
+        fecha_cierre = calcular_fecha_cierre_periodo(periodo_esperado, intervalo)
+
+        if fecha_cierre >= fecha_referencia:
+            continue
+
+        periodo_nombre = formatear_periodo(periodo_esperado)
+
+        ya_existe = Alerta.objects.filter(
+            indicador=indicador,
+            tipo_alerta='Periodo vencido sin medición',
+            mensaje__icontains=periodo_nombre,
+        ).exists()
+
+        if ya_existe:
+            total_omitidas += 1
+            detalle.append({
+                'indicador_id': indicador.id,
+                'indicador': indicador.nombre,
+                'periodo': periodo_nombre,
+                'accion': 'omitida',
+            })
+            continue
+
+        mensaje = (
+            f'El indicador "{indicador.nombre}" tiene vencido el periodo de {periodo_nombre} '
+            f'(cierre {fecha_cierre.strftime("%d/%m/%Y")}) y no se registró ninguna medición.'
+        )
+
+        Alerta.objects.create(
+            indicador=indicador,
+            medicion=None,
+            tipo_alerta='Periodo vencido sin medición',
+            mensaje=mensaje,
+            estado_alerta='pendiente',
+        )
+
+        total_alertas_creadas += 1
+        detalle.append({
+            'indicador_id': indicador.id,
+            'indicador': indicador.nombre,
+            'periodo': periodo_nombre,
+            'accion': 'creada',
+        })
+
+    return {
+        'revisados': total_kpi_revisados,
+        'creadas': total_alertas_creadas,
+        'omitidas': total_omitidas,
+        'detalle': detalle,
+    }
 
