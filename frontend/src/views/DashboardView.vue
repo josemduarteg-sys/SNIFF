@@ -30,7 +30,7 @@ const estrategiasActivas = computed(() => {
 const objetivosRegistrados = computed(() => objetivos.value.length)
 
 const indicadoresActivos = computed(() => {
-  return indicadores.value.filter((item) => item.estado === 'activo' || item.estado === true).length
+  return indicadores.value.filter((item) => item.estado === 'autorizado').length
 })
 
 const alertasPendientes = computed(() => {
@@ -45,6 +45,184 @@ const cumplimientoGeneral = computed(() => {
   }, 0)
 
   return Math.round(total / mediciones.value.length)
+})
+
+function formatearFecha(fecha) {
+  if (!fecha) return 'No definida'
+
+  const soloFecha = fecha.split('T')[0]
+  const [anio, mes, dia] = soloFecha.split('-')
+
+  if (!anio || !mes || !dia) return fecha
+
+  return `${dia}/${mes}/${anio}`
+}
+
+function formatearPorcentaje(valor) {
+  const numero = Number(valor)
+
+  if (Number.isNaN(numero)) return '0%'
+
+  return `${Math.round(numero)}%`
+}
+
+function obtenerNombreIndicador(medicion) {
+  return medicion?.indicador_nombre || 'Sin KPI'
+}
+
+function obtenerIniciales(nombre) {
+  if (!nombre) return 'US'
+
+  return nombre
+    .split(' ')
+    .map((parte) => parte.charAt(0))
+    .join('')
+    .slice(0, 2)
+    .toUpperCase()
+}
+
+function obtenerFechaOrden(item) {
+  return item?.fecha_medicion || item?.fecha_registro || item?.fecha_generacion || item?.fecha_creacion || ''
+}
+
+function obtenerUltimaMedicionPorIndicador() {
+  const mapa = new Map()
+
+  mediciones.value.forEach((medicion) => {
+    const anterior = mapa.get(medicion.indicador)
+
+    if (!anterior || obtenerFechaOrden(medicion) > obtenerFechaOrden(anterior)) {
+      mapa.set(medicion.indicador, medicion)
+    }
+  })
+
+  return mapa
+}
+
+function obtenerObjetivoDeIndicador(indicadorId) {
+  const indicador = indicadores.value.find((item) => item.id === indicadorId)
+  return indicador?.objetivo_nombre || ''
+}
+
+function claseAlerta(alerta) {
+  const tipo = (alerta.tipo_alerta || '').toLowerCase()
+
+  if (tipo.includes('incumplido') || tipo.includes('crítico') || tipo.includes('critico')) {
+    return 'critical'
+  }
+
+  if (tipo.includes('riesgo') || tipo.includes('vencido')) {
+    return 'warning'
+  }
+
+  return 'info'
+}
+
+function claseCumplimiento(porcentaje) {
+  const valor = Number(porcentaje)
+
+  if (valor >= 85) return 'ok'
+  if (valor >= 70) return 'warning'
+  return 'critical'
+}
+
+function colorPorPorcentaje(porcentaje) {
+  const valor = Number(porcentaje)
+
+  if (valor >= 85) return 'var(--success)'
+  if (valor >= 70) return 'var(--orange)'
+  return 'var(--danger)'
+}
+
+const alertasRecientes = computed(() => {
+  return [...alertas.value]
+    .sort((a, b) => new Date(obtenerFechaOrden(b)) - new Date(obtenerFechaOrden(a)))
+    .slice(0, 5)
+})
+
+const ultimasMediciones = computed(() => {
+  return [...mediciones.value]
+    .sort((a, b) => new Date(obtenerFechaOrden(b)) - new Date(obtenerFechaOrden(a)))
+    .slice(0, 5)
+})
+
+const indicadoresMenorCumplimiento = computed(() => {
+  const mapaUltimaMedicion = obtenerUltimaMedicionPorIndicador()
+
+  return Array.from(mapaUltimaMedicion.values())
+    .filter((medicion) => medicion.porcentaje_cumplimiento !== null && medicion.porcentaje_cumplimiento !== undefined)
+    .sort((a, b) => Number(a.porcentaje_cumplimiento) - Number(b.porcentaje_cumplimiento))
+    .slice(0, 5)
+})
+
+const cumplimientoPorEstrategia = computed(() => {
+  const mapaUltimaMedicion = obtenerUltimaMedicionPorIndicador()
+
+  return estrategias.value
+    .map((estrategia) => {
+      const idsObjetivos = objetivos.value
+        .filter((objetivo) => Number(objetivo.estrategia) === Number(estrategia.id))
+        .map((objetivo) => objetivo.id)
+
+      const porcentajes = indicadores.value
+        .filter((indicador) => idsObjetivos.includes(indicador.objetivo))
+        .map((indicador) => mapaUltimaMedicion.get(indicador.id))
+        .filter(Boolean)
+        .map((medicion) => Number(medicion.porcentaje_cumplimiento))
+        .filter((valor) => !Number.isNaN(valor))
+
+      if (!porcentajes.length) {
+        return null
+      }
+
+      const promedio = porcentajes.reduce((acumulado, valor) => acumulado + valor, 0) / porcentajes.length
+
+      return {
+        id: estrategia.id,
+        nombre: estrategia.nombre,
+        porcentaje: Math.round(promedio),
+      }
+    })
+    .filter(Boolean)
+})
+
+function obtenerClaveMes(fecha) {
+  if (!fecha) return null
+
+  return fecha.slice(0, 7)
+}
+
+function formatearMesCorto(claveMes) {
+  const meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+  const [anio, mes] = claveMes.split('-')
+
+  return `${meses[Number(mes) - 1]} ${anio.slice(2)}`
+}
+
+const evolucionMediciones = computed(() => {
+  const grupos = new Map()
+
+  mediciones.value.forEach((medicion) => {
+    const clave = obtenerClaveMes(medicion.fecha_medicion || medicion.fecha_registro)
+    const porcentaje = Number(medicion.porcentaje_cumplimiento)
+
+    if (!clave || Number.isNaN(porcentaje)) return
+
+    if (!grupos.has(clave)) {
+      grupos.set(clave, [])
+    }
+
+    grupos.get(clave).push(porcentaje)
+  })
+
+  return Array.from(grupos.entries())
+    .map(([clave, valores]) => ({
+      clave,
+      etiqueta: formatearMesCorto(clave),
+      promedio: Math.round(valores.reduce((acumulado, valor) => acumulado + valor, 0) / valores.length),
+    }))
+    .sort((a, b) => a.clave.localeCompare(b.clave))
+    .slice(-6)
 })
 
 function normalizarRespuesta(response) {
@@ -110,8 +288,7 @@ onMounted(() => {
     <template #actions>
       <div class="period-select">
         <svg class="cal" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-        Segundo Trimestre 2026
-        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        Datos actualizados del sistema
       </div>
     </template>
 
@@ -128,15 +305,11 @@ onMounted(() => {
             <div class="kpi-icon navy">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
             </div>
-            <div class="kpi-trend up">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-              +4%
-            </div>
           </div>
           <div class="kpi-value">{{ cumplimientoGeneral }}%</div>
           <div class="kpi-label">Cumplimiento general</div>
           <div class="progress-track"><div class="progress-fill" :style="{ width: `${cumplimientoGeneral}%` }"></div></div>
-          <div class="kpi-foot">Meta del periodo: 90%</div>
+          <div class="kpi-foot">Promedio calculado según mediciones registradas</div>
         </div>
 
         <div class="kpi-card">
@@ -177,10 +350,6 @@ onMounted(() => {
             <div class="kpi-icon danger">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             </div>
-            <div class="kpi-trend down">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>
-              +2
-            </div>
           </div>
           <div class="kpi-value">{{ alertasPendientes }}</div>
           <div class="kpi-label">Indicadores en riesgo</div>
@@ -196,82 +365,65 @@ onMounted(() => {
           <div class="panel-head">
             <div>
               <h2>Cumplimiento por estrategia</h2>
-              <div class="desc">Porcentaje alcanzado frente a la meta del trimestre</div>
-            </div>
-            <div class="panel-tag">Q2 2026</div>
-          </div>
-
-          <div class="bar-chart">
-            <div class="bar-col">
-              <div class="bar-val">92%</div>
-              <div class="bar-shape" style="height:150px; background:var(--success);"></div>
-              <div class="bar-name">Crecimiento de Cartera</div>
-            </div>
-            <div class="bar-col">
-              <div class="bar-val">85%</div>
-              <div class="bar-shape" style="height:138px; background:var(--success);"></div>
-              <div class="bar-name">Satisfacción del Socio</div>
-            </div>
-            <div class="bar-col">
-              <div class="bar-val">78%</div>
-              <div class="bar-shape" style="height:126px; background:var(--orange);"></div>
-              <div class="bar-name">Eficiencia Operativa</div>
-            </div>
-            <div class="bar-col">
-              <div class="bar-val">88%</div>
-              <div class="bar-shape" style="height:143px; background:var(--success);"></div>
-              <div class="bar-name">Solidez Financiera</div>
-            </div>
-            <div class="bar-col">
-              <div class="bar-val">64%</div>
-              <div class="bar-shape" style="height:104px; background:var(--danger);"></div>
-              <div class="bar-name">Innovación Digital</div>
+              <div class="desc">Promedio de cumplimiento de los indicadores medidos, por estrategia</div>
             </div>
           </div>
 
-          <div class="chart-legend">
-            <div class="legend-item"><span class="legend-dot" style="background:var(--success);"></span>En meta (≥85%)</div>
-            <div class="legend-item"><span class="legend-dot" style="background:var(--orange);"></span>En riesgo (70–84%)</div>
-            <div class="legend-item"><span class="legend-dot" style="background:var(--danger);"></span>Crítico (&lt;70%)</div>
+          <div v-if="!cumplimientoPorEstrategia.length" class="dashboard-message">
+            Aún no hay mediciones suficientes para calcular cumplimiento por estrategia.
           </div>
+
+          <template v-else>
+            <div class="bar-chart">
+              <div
+                v-for="item in cumplimientoPorEstrategia"
+                :key="item.id"
+                class="bar-col"
+              >
+                <div class="bar-val">{{ formatearPorcentaje(item.porcentaje) }}</div>
+                <div
+                  class="bar-shape"
+                  :style="{ height: `${Math.min(item.porcentaje, 100) * 1.6}px`, background: colorPorPorcentaje(item.porcentaje) }"
+                ></div>
+                <div class="bar-name">{{ item.nombre }}</div>
+              </div>
+            </div>
+
+            <div class="chart-legend">
+              <div class="legend-item"><span class="legend-dot" style="background:var(--success);"></span>En meta (≥85%)</div>
+              <div class="legend-item"><span class="legend-dot" style="background:var(--orange);"></span>En riesgo (70–84%)</div>
+              <div class="legend-item"><span class="legend-dot" style="background:var(--danger);"></span>Crítico (&lt;70%)</div>
+            </div>
+          </template>
         </div>
 
         <div class="card-panel">
           <div class="panel-head">
             <div>
               <h2>Evolución de mediciones</h2>
-              <div class="desc">Cumplimiento general promedio, últimos 6 meses</div>
+              <div class="desc">Cumplimiento general promedio, últimos meses con datos</div>
             </div>
           </div>
 
-          <div class="line-chart-wrap">
-            <svg viewBox="0 0 320 190" width="100%" height="190" preserveAspectRatio="none">
-              <line x1="0" y1="10" x2="320" y2="10" stroke="#EEF2F5" stroke-width="1"/>
-              <line x1="0" y1="55" x2="320" y2="55" stroke="#EEF2F5" stroke-width="1"/>
-              <line x1="0" y1="100" x2="320" y2="100" stroke="#EEF2F5" stroke-width="1"/>
-              <line x1="0" y1="145" x2="320" y2="145" stroke="#EEF2F5" stroke-width="1"/>
-
-              <defs>
-                <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#A8DADC" stop-opacity="0.55"/>
-                  <stop offset="100%" stop-color="#A8DADC" stop-opacity="0"/>
-                </linearGradient>
-              </defs>
-
-              <path d="M10,120 L64,109 L118,100 L172,88 L226,75 L280,55 L280,180 L10,180 Z" fill="url(#areaFill)"/>
-              <polyline points="10,120 64,109 118,100 172,88 226,75 280,55" fill="none" stroke="var(--navy)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-
-              <circle cx="10" cy="120" r="4" fill="var(--white)" stroke="var(--steel)" stroke-width="2.4"/>
-              <circle cx="64" cy="109" r="4" fill="var(--white)" stroke="var(--steel)" stroke-width="2.4"/>
-              <circle cx="118" cy="100" r="4" fill="var(--white)" stroke="var(--steel)" stroke-width="2.4"/>
-              <circle cx="172" cy="88" r="4" fill="var(--white)" stroke="var(--steel)" stroke-width="2.4"/>
-              <circle cx="226" cy="75" r="4" fill="var(--white)" stroke="var(--steel)" stroke-width="2.4"/>
-              <circle cx="280" cy="55" r="5.5" fill="var(--navy)" stroke="var(--white)" stroke-width="2"/>
-            </svg>
+          <div v-if="!evolucionMediciones.length" class="dashboard-message">
+            No hay mediciones suficientes para mostrar una evolución mensual.
           </div>
-          <div class="line-chart-foot">
-            <span>Ene</span><span>Feb</span><span>Mar</span><span>Abr</span><span>May</span><span>Jun</span>
+
+          <div v-else class="bar-chart">
+            <div
+              v-for="item in evolucionMediciones"
+              :key="item.clave"
+              class="bar-col"
+            >
+              <div class="bar-val">{{ formatearPorcentaje(item.promedio) }}</div>
+              <div
+                class="bar-shape"
+                :style="{ height: `${Math.min(item.promedio, 100) * 1.6}px`, background: colorPorPorcentaje(item.promedio) }"
+              ></div>
+              <div class="bar-name">{{ item.etiqueta }}</div>
+            </div>
           </div>
+
         </div>
 
       </section>
@@ -281,11 +433,15 @@ onMounted(() => {
         <div class="panel-head">
           <div>
             <h2>Indicadores con menor cumplimiento</h2>
-            <div class="desc">Los 5 KPI que más se alejan de su meta este trimestre</div>
+            <div class="desc">Los 5 KPI que más se alejan de su meta, según su última medición</div>
           </div>
         </div>
 
-        <table>
+        <div v-if="!indicadoresMenorCumplimiento.length" class="dashboard-message">
+          Aún no hay mediciones suficientes para calcular cumplimiento.
+        </div>
+
+        <table v-else>
           <thead>
             <tr>
               <th>Indicador</th>
@@ -296,65 +452,30 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr>
+            <tr v-for="medicion in indicadoresMenorCumplimiento" :key="medicion.id">
               <td>
-                <div class="cell-main">Tasa de morosidad</div>
-                <div class="cell-sub">Solidez Financiera</div>
+                <div class="cell-main">{{ obtenerNombreIndicador(medicion) }}</div>
+                <div class="cell-sub">{{ obtenerObjetivoDeIndicador(medicion.indicador) || 'Sin objetivo' }}</div>
               </td>
-              <td>≤ 5.0%</td>
-              <td>8.4%</td>
+              <td>{{ medicion.valor_meta ?? 'Sin meta' }}</td>
+              <td>{{ medicion.valor_resultado }}</td>
               <td>
-                <div class="mini-progress"><div class="track"><div class="fill" style="width:52%; background:var(--danger);"></div></div><span class="pct">52%</span></div>
+                <div class="mini-progress">
+                  <div class="track">
+                    <div
+                      class="fill"
+                      :style="{ width: `${Math.min(Number(medicion.porcentaje_cumplimiento) || 0, 100)}%`, background: colorPorPorcentaje(medicion.porcentaje_cumplimiento) }"
+                    ></div>
+                  </div>
+                  <span class="pct">{{ formatearPorcentaje(medicion.porcentaje_cumplimiento) }}</span>
+                </div>
               </td>
-              <td><span class="badge critical"><span class="badge-dot"></span>Crítico</span></td>
-            </tr>
-            <tr>
               <td>
-                <div class="cell-main">Adopción de banca digital</div>
-                <div class="cell-sub">Innovación Digital</div>
+                <span class="badge" :class="claseCumplimiento(medicion.porcentaje_cumplimiento)">
+                  <span class="badge-dot"></span>
+                  {{ medicion.estado_cumplimiento_nombre || 'Sin estado' }}
+                </span>
               </td>
-              <td>60%</td>
-              <td>39%</td>
-              <td>
-                <div class="mini-progress"><div class="track"><div class="fill" style="width:65%; background:var(--orange);"></div></div><span class="pct">65%</span></div>
-              </td>
-              <td><span class="badge warning"><span class="badge-dot"></span>En riesgo</span></td>
-            </tr>
-            <tr>
-              <td>
-                <div class="cell-main">Tiempo de resolución de PQR</div>
-                <div class="cell-sub">Satisfacción del Socio</div>
-              </td>
-              <td>24 h</td>
-              <td>34 h</td>
-              <td>
-                <div class="mini-progress"><div class="track"><div class="fill" style="width:70%; background:var(--orange);"></div></div><span class="pct">70%</span></div>
-              </td>
-              <td><span class="badge warning"><span class="badge-dot"></span>En riesgo</span></td>
-            </tr>
-            <tr>
-              <td>
-                <div class="cell-main">Costo de servicio por socio</div>
-                <div class="cell-sub">Eficiencia Operativa</div>
-              </td>
-              <td>Q 450</td>
-              <td>Q 510</td>
-              <td>
-                <div class="mini-progress"><div class="track"><div class="fill" style="width:74%; background:var(--orange);"></div></div><span class="pct">74%</span></div>
-              </td>
-              <td><span class="badge warning"><span class="badge-dot"></span>En riesgo</span></td>
-            </tr>
-            <tr>
-              <td>
-                <div class="cell-main">Nuevos créditos colocados</div>
-                <div class="cell-sub">Crecimiento de Cartera</div>
-              </td>
-              <td>1,200</td>
-              <td>980</td>
-              <td>
-                <div class="mini-progress"><div class="track"><div class="fill" style="width:81%; background:var(--orange);"></div></div><span class="pct">81%</span></div>
-              </td>
-              <td><span class="badge warning"><span class="badge-dot"></span>En riesgo</span></td>
             </tr>
           </tbody>
         </table>
@@ -371,45 +492,25 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="alert-item">
-            <div class="alert-icon critical">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            </div>
-            <div>
-              <div class="alert-text">"Tasa de morosidad" superó el umbral crítico definido</div>
-              <div class="alert-time">Hace 2 horas</div>
-            </div>
+          <div v-if="!alertasRecientes.length" class="dashboard-message">
+            No hay alertas pendientes o recientes.
           </div>
 
-          <div class="alert-item">
-            <div class="alert-icon warning">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <template v-else>
+            <div
+              v-for="alerta in alertasRecientes"
+              :key="alerta.id"
+              class="alert-item"
+            >
+              <div class="alert-icon" :class="claseAlerta(alerta)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div>
+                <div class="alert-text">{{ alerta.mensaje }}</div>
+                <div class="alert-time">{{ formatearFecha(alerta.fecha_generacion) }}</div>
+              </div>
             </div>
-            <div>
-              <div class="alert-text">"Adopción de banca digital" por debajo de la meta trimestral</div>
-              <div class="alert-time">Hace 5 horas</div>
-            </div>
-          </div>
-
-          <div class="alert-item">
-            <div class="alert-icon warning">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            </div>
-            <div>
-              <div class="alert-text">3 indicadores sin medición registrada esta semana</div>
-              <div class="alert-time">Hace 1 día</div>
-            </div>
-          </div>
-
-          <div class="alert-item">
-            <div class="alert-icon info">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-            </div>
-            <div>
-              <div class="alert-text">Meta de "Crecimiento de Cartera" actualizada por Ana Martínez</div>
-              <div class="alert-time">Hace 2 días</div>
-            </div>
-          </div>
+          </template>
 
           <div class="link-see-all">Ver todas las alertas</div>
         </div>
@@ -422,60 +523,26 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="meas-item">
-            <div class="meas-left">
-              <div class="meas-avatar">CP</div>
-              <div>
-                <div class="meas-name">Cumplimiento general de cartera</div>
-                <div class="meas-sub">Carlos Pérez · 30 jun 2026</div>
-              </div>
-            </div>
-            <div class="meas-value">92%</div>
+          <div v-if="!ultimasMediciones.length" class="dashboard-message">
+            No hay mediciones registradas.
           </div>
 
-          <div class="meas-item">
-            <div class="meas-left">
-              <div class="meas-avatar">LR</div>
-              <div>
-                <div class="meas-name">Satisfacción del socio (NPS)</div>
-                <div class="meas-sub">Lucía Ramírez · 29 jun 2026</div>
+          <template v-else>
+            <div
+              v-for="medicion in ultimasMediciones"
+              :key="medicion.id"
+              class="meas-item"
+            >
+              <div class="meas-left">
+                <div class="meas-avatar">{{ obtenerIniciales(medicion.registrado_por_username) }}</div>
+                <div>
+                  <div class="meas-name">{{ obtenerNombreIndicador(medicion) }}</div>
+                  <div class="meas-sub">{{ medicion.registrado_por_username || 'Sistema' }} · {{ formatearFecha(medicion.fecha_registro) }}</div>
+                </div>
               </div>
+              <div class="meas-value">{{ medicion.valor_resultado }}</div>
             </div>
-            <div class="meas-value">85%</div>
-          </div>
-
-          <div class="meas-item">
-            <div class="meas-left">
-              <div class="meas-avatar">CP</div>
-              <div>
-                <div class="meas-name">Tasa de morosidad</div>
-                <div class="meas-sub">Carlos Pérez · 29 jun 2026</div>
-              </div>
-            </div>
-            <div class="meas-value">8.4%</div>
-          </div>
-
-          <div class="meas-item">
-            <div class="meas-left">
-              <div class="meas-avatar">AM</div>
-              <div>
-                <div class="meas-name">Costo de servicio por socio</div>
-                <div class="meas-sub">Ana Martínez · 28 jun 2026</div>
-              </div>
-            </div>
-            <div class="meas-value">Q 510</div>
-          </div>
-
-          <div class="meas-item">
-            <div class="meas-left">
-              <div class="meas-avatar">DS</div>
-              <div>
-                <div class="meas-name">Adopción de banca digital</div>
-                <div class="meas-sub">Diego Solís · 27 jun 2026</div>
-              </div>
-            </div>
-            <div class="meas-value">39%</div>
-          </div>
+          </template>
 
           <div class="link-see-all">Ver todas las mediciones</div>
         </div>
@@ -733,11 +800,10 @@ onMounted(() => {
     font-size:13px;
     font-weight:600;
     color:var(--navy);
-    cursor:pointer;
+    cursor:default;
     box-shadow:var(--shadow-card);
   }
   .period-select svg.cal{ color:var(--steel); }
-  .period-select svg.chev{ color:var(--text-muted); }
 
   /* ---- summary cards ---- */
   .summary-grid{
@@ -772,16 +838,6 @@ onMounted(() => {
   .kpi-icon.aqua{ background:var(--aqua-soft); color:var(--steel); }
   .kpi-icon.orange{ background:rgba(244,162,97,0.14); color:var(--orange); }
   .kpi-icon.danger{ background:rgba(231,111,81,0.12); color:var(--danger); }
-
-  .kpi-trend{
-    font-size:11px;
-    font-weight:700;
-    display:flex;
-    align-items:center;
-    gap:3px;
-  }
-  .kpi-trend.up{ color:var(--success); }
-  .kpi-trend.down{ color:var(--danger); }
 
   .kpi-value{
     font-size:26px;
@@ -842,16 +898,6 @@ onMounted(() => {
     font-weight:500;
     margin-top:3px;
   }
-  .panel-tag{
-    font-size:10.5px;
-    font-weight:700;
-    padding:5px 10px;
-    border-radius:20px;
-    background:var(--aqua-soft);
-    color:var(--steel);
-    white-space:nowrap;
-  }
-
   /* ---- charts row ---- */
   .charts-grid{
     display:grid;
@@ -870,10 +916,6 @@ onMounted(() => {
   .chart-legend{ display:flex; gap:16px; margin-top:16px; flex-wrap:wrap; }
   .legend-item{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; color:var(--text-secondary); }
   .legend-dot{ width:8px; height:8px; border-radius:50%; }
-
-  .line-chart-wrap{ position:relative; }
-  .line-chart-foot{ display:flex; justify-content:space-between; margin-top:8px; padding:0 4px; }
-  .line-chart-foot span{ font-size:10.5px; font-weight:600; color:var(--text-muted); }
 
   /* ---- table ---- */
   .table-card{ margin-bottom:20px; }
