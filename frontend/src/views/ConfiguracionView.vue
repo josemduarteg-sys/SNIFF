@@ -1,9 +1,12 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
+import ModalBase from '../components/ui/ModalBase.vue'
+import UserModal from '../components/configuracion/UserModal.vue'
 import api from '../services/api'
+import { puedeGestionarUsuarios } from '../utils/permisos'
 
-defineProps({
+const props = defineProps({
   usuario: {
     type: Object,
     required: false,
@@ -37,12 +40,33 @@ const password = reactive({
   confirmar_password: '',
 })
 
+const mostrarPasswordActual = ref(false)
+const mostrarNuevaPassword = ref(false)
+const mostrarConfirmarPassword = ref(false)
+
 const usuarios = ref([])
 const roles = ref([])
+
+const modalUsuarioAbierto = ref(false)
+const usuarioSeleccionado = ref(null)
+const guardandoUsuario = ref(false)
 
 const nombreCompleto = computed(() => {
   const nombre = `${perfil.first_name || ''} ${perfil.last_name || ''}`.trim()
   return nombre || perfil.username || 'Usuario'
+})
+
+const rolActualNombre = computed(() => rolNombre(perfil.rol))
+
+const usuarioParaPermisos = computed(() => ({
+  ...props.usuario,
+  ...perfil,
+  nombre_rol: rolActualNombre.value,
+  rol_nombre: rolActualNombre.value,
+}))
+
+const mostrarAdministracionUsuarios = computed(() => {
+  return puedeGestionarUsuarios(usuarioParaPermisos.value)
 })
 
 function cerrarSesion() {
@@ -96,13 +120,16 @@ async function cargarUsuariosYRoles() {
   cargandoUsuarios.value = true
 
   try {
-    const [responseUsuarios, responseRoles] = await Promise.all([
-      api.get('usuarios/'),
-      api.get('roles/'),
-    ])
-
-    usuarios.value = normalizarRespuesta(responseUsuarios)
+    const responseRoles = await api.get('roles/')
     roles.value = normalizarRespuesta(responseRoles)
+
+    if (!mostrarAdministracionUsuarios.value) {
+      usuarios.value = []
+      return
+    }
+
+    const responseUsuarios = await api.get('usuarios/')
+    usuarios.value = normalizarRespuesta(responseUsuarios)
   } catch (e) {
     usuarios.value = []
     roles.value = []
@@ -241,6 +268,106 @@ function rolNombre(rolId) {
   return rol?.nombre || rolId || 'Sin rol'
 }
 
+function abrirNuevoUsuario() {
+  usuarioSeleccionado.value = null
+  modalUsuarioAbierto.value = true
+  limpiarMensajes()
+}
+
+function abrirEditarUsuario(usuario) {
+  usuarioSeleccionado.value = usuario
+  modalUsuarioAbierto.value = true
+  limpiarMensajes()
+}
+
+function cerrarModalUsuario() {
+  modalUsuarioAbierto.value = false
+  usuarioSeleccionado.value = null
+  guardandoUsuario.value = false
+}
+
+function obtenerMensajeError(e, mensajeDefault) {
+  const data = e.response?.data
+
+  if (data?.detail) {
+    return data.detail
+  }
+
+  if (typeof data === 'object' && data !== null) {
+    const primerCampo = Object.keys(data)[0]
+    const mensajeCampo = data[primerCampo]
+
+    return Array.isArray(mensajeCampo)
+      ? mensajeCampo.join(' ')
+      : String(mensajeCampo)
+  }
+
+  return mensajeDefault
+}
+
+async function guardarUsuario(payload) {
+  guardandoUsuario.value = true
+  limpiarMensajes()
+
+  try {
+    if (usuarioSeleccionado.value?.id) {
+      await api.patch(`usuarios/${usuarioSeleccionado.value.id}/`, payload)
+      mensaje.value = 'Usuario actualizado correctamente.'
+    } else {
+      await api.post('usuarios/', payload)
+      mensaje.value = 'Usuario creado correctamente.'
+    }
+
+    cerrarModalUsuario()
+    await cargarUsuariosYRoles()
+  } catch (e) {
+    error.value = obtenerMensajeError(
+      e,
+      usuarioSeleccionado.value?.id
+        ? 'No se pudo actualizar el usuario.'
+        : 'No se pudo crear el usuario.'
+    )
+  } finally {
+    guardandoUsuario.value = false
+  }
+}
+
+async function inactivarUsuario(usuario) {
+  const confirmar = window.confirm(
+    `¿Seguro que querés inactivar al usuario "${usuario.username}"?`
+  )
+
+  if (!confirmar) {
+    return
+  }
+
+  limpiarMensajes()
+
+  try {
+    await api.delete(`usuarios/${usuario.id}/`)
+    mensaje.value = 'Usuario inactivado correctamente.'
+    await cargarUsuariosYRoles()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo inactivar el usuario.')
+  }
+}
+
+async function reactivarUsuario(usuario) {
+  limpiarMensajes()
+
+  try {
+    await api.patch(`usuarios/${usuario.id}/`, {
+      estado: true,
+      is_active: true,
+    })
+
+    mensaje.value = 'Usuario reactivado correctamente.'
+    await cargarUsuariosYRoles()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo reactivar el usuario.')
+  }
+}
+
 onMounted(() => {
   cargarConfiguracion()
 })
@@ -248,7 +375,7 @@ onMounted(() => {
 
 <template>
   <AppLayout
-    :usuario="usuario"
+    :usuario="props.usuario"
     titulo="Configuración"
     subtitulo="Administra tu perfil, contraseña y usuarios del sistema."
     breadcrumb-actual="Configuración"
@@ -325,29 +452,62 @@ onMounted(() => {
           <form class="form-grid" @submit.prevent="cambiarPassword">
             <label class="field field-full">
               <span>Contraseña actual</span>
-              <input
-                v-model="password.password_actual"
-                type="password"
-                placeholder="Ingresá tu contraseña actual"
-              />
+
+              <div class="password-wrapper">
+                <input
+                  v-model="password.password_actual"
+                  :type="mostrarPasswordActual ? 'text' : 'password'"
+                  placeholder="Ingresá tu contraseña actual"
+                />
+
+                <button
+                  class="password-toggle"
+                  type="button"
+                  @click="mostrarPasswordActual = !mostrarPasswordActual"
+                >
+                  {{ mostrarPasswordActual ? 'Ocultar' : 'Ver' }}
+                </button>
+              </div>
             </label>
 
             <label class="field">
               <span>Nueva contraseña</span>
-              <input
-                v-model="password.nueva_password"
-                type="password"
-                placeholder="Mínimo 8 caracteres"
-              />
+
+              <div class="password-wrapper">
+                <input
+                  v-model="password.nueva_password"
+                  :type="mostrarNuevaPassword ? 'text' : 'password'"
+                  placeholder="Mínimo 8 caracteres"
+                />
+
+                <button
+                  class="password-toggle"
+                  type="button"
+                  @click="mostrarNuevaPassword = !mostrarNuevaPassword"
+                >
+                  {{ mostrarNuevaPassword ? 'Ocultar' : 'Ver' }}
+                </button>
+              </div>
             </label>
 
             <label class="field">
               <span>Confirmar contraseña</span>
-              <input
-                v-model="password.confirmar_password"
-                type="password"
-                placeholder="Repetí la nueva contraseña"
-              />
+
+              <div class="password-wrapper">
+                <input
+                  v-model="password.confirmar_password"
+                  :type="mostrarConfirmarPassword ? 'text' : 'password'"
+                  placeholder="Repetí la nueva contraseña"
+                />
+
+                <button
+                  class="password-toggle"
+                  type="button"
+                  @click="mostrarConfirmarPassword = !mostrarConfirmarPassword"
+                >
+                  {{ mostrarConfirmarPassword ? 'Ocultar' : 'Ver' }}
+                </button>
+              </div>
             </label>
 
             <div class="help-box field-full">
@@ -363,14 +523,14 @@ onMounted(() => {
         </article>
       </section>
 
-      <section class="settings-card users-card">
+      <section v-if="mostrarAdministracionUsuarios" class="settings-card users-card">
         <div class="card-header">
           <div>
             <h3>Administración de usuarios</h3>
             <p>Consulta los usuarios registrados y su estado dentro del sistema.</p>
           </div>
 
-          <button class="btn-secondary" type="button" disabled>
+          <button class="btn-secondary" type="button" @click="abrirNuevoUsuario">
             Nuevo usuario
           </button>
         </div>
@@ -392,6 +552,7 @@ onMounted(() => {
                 <th>Correo</th>
                 <th>Rol</th>
                 <th>Estado</th>
+                <th style="text-align: right;">Acciones</th>
               </tr>
             </thead>
 
@@ -427,17 +588,69 @@ onMounted(() => {
                     {{ textoEstadoUsuario(item) }}
                   </span>
                 </td>
+
+                <td>
+                  <div class="actions-cell">
+                    <button
+                      class="action-btn"
+                      type="button"
+                      @click="abrirEditarUsuario(item)"
+                    >
+                      Editar
+                    </button>
+
+                    <button
+                      v-if="item.estado !== false"
+                      class="action-btn danger"
+                      type="button"
+                      @click="inactivarUsuario(item)"
+                    >
+                      Inactivar
+                    </button>
+
+                    <button
+                      v-else
+                      class="action-btn"
+                      type="button"
+                      @click="reactivarUsuario(item)"
+                    >
+                      Reactivar
+                    </button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <div class="help-box">
-          La creación y edición avanzada de usuarios se puede habilitar después.
-          Por ahora esta sección deja visible la administración general para la demo.
+          Solo los administradores pueden crear, editar e inactivar usuarios.
+          Un usuario inactivo no puede iniciar sesión hasta que se reactive.
         </div>
       </section>
     </template>
+
+    <ModalBase
+      :abierto="modalUsuarioAbierto"
+      :titulo="usuarioSeleccionado ? 'Editar usuario' : 'Nuevo usuario'"
+      :subtitulo="
+        usuarioSeleccionado
+          ? 'Actualiza los datos generales, rol y estado del usuario.'
+          : 'Registra un nuevo usuario con rol y contraseña inicial.'
+      "
+      @cerrar="cerrarModalUsuario"
+    >
+      <UserModal
+        :usuario="usuarioSeleccionado"
+        :roles="roles"
+        @guardar="guardarUsuario"
+        @cancelar="cerrarModalUsuario"
+      />
+
+      <div v-if="guardandoUsuario" class="saving-message">
+        Guardando usuario...
+      </div>
+    </ModalBase>
   </AppLayout>
 </template>
 
@@ -545,6 +758,37 @@ onMounted(() => {
   background: #f4f7f9;
   color: #9aa8b8;
   cursor: not-allowed;
+}
+
+.password-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.password-wrapper input {
+  padding-right: 72px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: #eaf5f5;
+  color: #457b9d;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.password-toggle:hover {
+  background: #dceff0;
+  color: #1d3557;
 }
 
 .form-actions {
@@ -688,6 +932,49 @@ tbody tr:last-child td {
 .status-chip.inactive {
   background: rgba(231, 111, 81, 0.12);
   color: #e76f51;
+}
+
+.actions-cell {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.action-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  color: #457b9d;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  background: #eaf5f5;
+  border-color: #a8dadc;
+}
+
+.action-btn.danger {
+  color: #e76f51;
+}
+
+.action-btn.danger:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
+}
+
+.saving-message {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: #eaf5f5;
+  color: #457b9d;
+  font-size: 12.5px;
+  font-weight: 800;
 }
 
 @media (max-width: 980px) {

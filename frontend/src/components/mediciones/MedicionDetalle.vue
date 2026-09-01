@@ -149,6 +149,11 @@ function textoEstadoCumplimiento(estado) {
       <p>{{ medicion.observacion || medicion.observaciones || 'Sin observaciones registradas.' }}</p>
     </div>
 
+    <div class="observation-box">
+      <span>Evidencias / respaldo de lo realizado</span>
+      <p>{{ medicion.evidencia || 'Sin evidencias registradas.' }}</p>
+    </div>
+
     <div class="note-box">
       <strong>Nota:</strong>
       El porcentaje y el estado de cumplimiento son calculados por el backend según la meta y vigencia configuradas en el KPI autorizado.

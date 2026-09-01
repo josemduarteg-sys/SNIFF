@@ -51,6 +51,16 @@ export async function eliminarMedicion(id) {
   return response.data
 }
 
+export async function obtenerSiguientePeriodo(indicadorId) {
+  const response = await api.get('mediciones/siguiente-periodo/', {
+    params: {
+      indicador: indicadorId,
+    },
+  })
+
+  return response.data
+}
+
 /*
   Estas funciones quedan solo para compatibilidad temporal.
   La lógica nueva ya no usa meta ni periodo manual desde frontend.
@@ -69,6 +79,7 @@ function limpiarPayloadMedicion(payload) {
     mes_medicion: payload.mes_medicion,
     valor_resultado: payload.valor_resultado,
     observacion: payload.observacion || '',
+    evidencia: payload.evidencia || '',
   }
 }
 

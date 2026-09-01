@@ -1,6 +1,10 @@
 <script setup>
 import { computed } from 'vue'
 import sniffLogo from '../../assets/images/sniff-logo.png'
+import {
+  puedeGestionarUsuarios,
+  puedeVerBitacora,
+} from '../../utils/permisos'
 
 const props = defineProps({
   usuario: {
@@ -20,6 +24,9 @@ const inicialesUsuario = computed(() => {
   const nombre = props.usuario?.username || 'Usuario'
   return nombre.slice(0, 2).toUpperCase()
 })
+
+const mostrarUsuarios = computed(() => puedeGestionarUsuarios(props.usuario))
+const mostrarBitacora = computed(() => puedeVerBitacora(props.usuario))
 </script>
 
 <template>

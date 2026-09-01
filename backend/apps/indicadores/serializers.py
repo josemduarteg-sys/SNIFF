@@ -271,6 +271,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             'porcentaje_cumplimiento',
             'observacion',
             'observaciones',
+            'evidencia',
             'fecha_registro',
         ]
         read_only_fields = [
@@ -385,6 +386,8 @@ class MedicionSerializer(serializers.ModelSerializer):
         return meta
 
     def preparar_datos_mensuales(self, attrs):
+        from .services import formatear_periodo, obtener_siguiente_periodo_esperado
+
         indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
         mes_medicion = attrs.pop('mes_medicion', None)
 
@@ -401,6 +404,25 @@ class MedicionSerializer(serializers.ModelSerializer):
             attrs['periodo'] = periodo
             attrs['fecha_medicion'] = periodo.fecha_fin
 
+            fecha_periodo = periodo.fecha_inicio
+
+            fecha_inicio_kpi = date(
+                indicador.fecha_inicio.year,
+                indicador.fecha_inicio.month,
+                1,
+            )
+
+            fecha_fin_kpi = date(
+                indicador.fecha_fin.year,
+                indicador.fecha_fin.month,
+                1,
+            )
+
+            if fecha_periodo < fecha_inicio_kpi or fecha_periodo > fecha_fin_kpi:
+                raise serializers.ValidationError({
+                    'mes_medicion': 'El periodo seleccionado está fuera de la vigencia del KPI.'
+                })
+
             medicion_existente = Medicion.objects.filter(
                 indicador=indicador,
                 periodo=periodo,
@@ -412,6 +434,27 @@ class MedicionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'mes_medicion': 'Ya existe una medición registrada para este KPI en el mes seleccionado.'
                 })
+
+            es_edicion_mismo_periodo = (
+                self.instance is not None
+                and getattr(self.instance, 'periodo_id', None) == periodo.id
+            )
+
+            if not es_edicion_mismo_periodo:
+                periodo_esperado = obtener_siguiente_periodo_esperado(
+                    indicador,
+                    excluir_medicion_id=self.instance.id if self.instance else None,
+                )
+
+                if fecha_periodo != periodo_esperado:
+                    raise serializers.ValidationError({
+                        'mes_medicion': (
+                            f'El siguiente periodo esperado para este KPI es '
+                            f'{formatear_periodo(periodo_esperado)}. '
+                            f'No se puede registrar {formatear_periodo(fecha_periodo)} '
+                            f'porque hay periodos anteriores pendientes.'
+                        )
+                    })
         elif not self.instance:
             raise serializers.ValidationError({
                 'mes_medicion': 'Seleccioná el mes que se va a medir.'
@@ -429,7 +472,7 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         if indicador.estado != 'autorizado':
             raise serializers.ValidationError({
-                'indicador': 'Solo se pueden registrar mediciones para KPI autorizados.'
+                'indicador': 'Solo se pueden registrar mediciones para KPI activos.'
             })
 
         if not indicador.valor_meta:

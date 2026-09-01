@@ -2,14 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import api from '../services/api'
+import { puedeGestionarEstrategias } from '../utils/permisos'
 
-defineProps({
+const props = defineProps({
   usuario: {
     type: Object,
     required: false,
     default: null,
   },
 })
+
+const puedeGestionar = computed(() => puedeGestionarEstrategias(props.usuario))
 
 const emit = defineEmits(['logout'])
 
@@ -79,13 +82,13 @@ onMounted(() => {
 
 <template>
   <AppLayout
-    :usuario="usuario"
+    :usuario="props.usuario"
     titulo="Gestión de Estrategias"
     subtitulo="Administra las estrategias empresariales vinculadas al seguimiento de indicadores KPI."
     breadcrumb-actual="Estrategias"
     @logout="cerrarSesion"
   >
-    <template #actions>
+    <template v-if="puedeGestionar" #actions>
       <button class="btn-primary">
         + Nueva estrategia
       </button>

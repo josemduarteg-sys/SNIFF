@@ -1,31 +1,16 @@
 from rest_framework import status, viewsets
-from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Rol, Usuario
+from .permissions import EsAdministradorSistema
 from .serializers import (
     CambiarPasswordSerializer,
     RolSerializer,
     UsuarioActualSerializer,
     UsuarioSerializer,
 )
-
-
-class EsAdministradorSistema(BasePermission):
-    message = 'No tenés permisos para administrar usuarios.'
-
-    def has_permission(self, request, view):
-        usuario = request.user
-
-        if not usuario or not usuario.is_authenticated:
-            return False
-
-        if usuario.is_superuser or usuario.is_staff:
-            return True
-
-        rol_nombre = getattr(getattr(usuario, 'rol', None), 'nombre', '')
-        return rol_nombre.lower() == 'administrador'
 
 
 class RolViewSet(viewsets.ReadOnlyModelViewSet):

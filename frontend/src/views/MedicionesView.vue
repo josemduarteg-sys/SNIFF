@@ -8,6 +8,10 @@ import {
   obtenerDatosFormularioMedicion,
   obtenerMediciones,
 } from '../services/medicionService'
+import {
+  puedeEditarMedicion,
+  puedeRegistrarMedicion,
+} from '../utils/permisos'
 
 const props = defineProps({
   usuario: {
@@ -35,6 +39,9 @@ const mensajeExito = ref('')
 const mostrarModalDetalle = ref(false)
 const medicionDetalle = ref(null)
 
+const puedeRegistrar = computed(() => puedeRegistrarMedicion(props.usuario))
+const puedeEditar = computed(() => puedeEditarMedicion(props.usuario))
+
 const tituloModal = computed(() => {
   return medicionSeleccionada.value?.id ? 'Editar medición' : 'Nueva medición'
 })
@@ -57,7 +64,8 @@ const medicionesFiltradas = computed(() => {
       medicion.periodo_nombre?.toLowerCase().includes(texto) ||
       medicion.estado_cumplimiento_nombre?.toLowerCase().includes(texto) ||
       medicion.observacion?.toLowerCase().includes(texto) ||
-      medicion.observaciones?.toLowerCase().includes(texto)
+      medicion.observaciones?.toLowerCase().includes(texto) ||
+      medicion.evidencia?.toLowerCase().includes(texto)
 
     const coincideIndicador =
       !indicadorSeleccionado.value ||
@@ -230,7 +238,7 @@ onMounted(() => {
     @logout="cerrarSesion"
   >
     <template #actions>
-      <button class="btn-primary-page" type="button" @click="abrirModalCrear">
+      <button v-if="puedeRegistrar" class="btn-primary-page" type="button" @click="abrirModalCrear">
         <svg
           width="15"
           height="15"
@@ -466,7 +474,7 @@ onMounted(() => {
                   </svg>
                 </button>
 
-                <button class="action-icon-btn" type="button" title="Editar" @click="abrirModalEditar(medicion)">
+                <button v-if="puedeEditar" class="action-icon-btn" type="button" title="Editar" @click="abrirModalEditar(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                     <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />

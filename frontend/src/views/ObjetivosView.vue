@@ -2,14 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import api from '../services/api'
+import { puedeGestionarObjetivos } from '../utils/permisos'
 
-defineProps({
+const props = defineProps({
   usuario: {
     type: Object,
     required: false,
     default: null,
   },
 })
+
+const puedeGestionar = computed(() => puedeGestionarObjetivos(props.usuario))
 
 const emit = defineEmits(['logout'])
 
@@ -136,13 +139,13 @@ onMounted(() => {
 
 <template>
   <AppLayout
-    :usuario="usuario"
+    :usuario="props.usuario"
     titulo="Gestión de Objetivos Estratégicos"
     subtitulo="Administra los objetivos derivados de cada estrategia institucional."
     breadcrumb-actual="Objetivos"
     @logout="cerrarSesion"
   >
-    <template #actions>
+    <template v-if="puedeGestionar" #actions>
       <button class="btn-primary-page" type="button">
         <svg
           width="15"
@@ -390,7 +393,7 @@ onMounted(() => {
                   </svg>
                 </button>
 
-                <button class="action-icon-btn" type="button" title="Editar">
+                <button v-if="puedeGestionar" class="action-icon-btn" type="button" title="Editar">
                   <svg
                     width="14"
                     height="14"
@@ -406,7 +409,7 @@ onMounted(() => {
                   </svg>
                 </button>
 
-                <button class="action-icon-btn danger" type="button" title="Inactivar">
+                <button v-if="puedeGestionar" class="action-icon-btn danger" type="button" title="Inactivar">
                   <svg
                     width="14"
                     height="14"

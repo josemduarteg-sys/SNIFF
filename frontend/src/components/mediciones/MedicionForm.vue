@@ -1,6 +1,10 @@
 <script setup>
 import { computed, reactive, watch } from 'vue'
-import { actualizarMedicion, crearMedicion } from '../../services/medicionService'
+import {
+  actualizarMedicion,
+  crearMedicion,
+  obtenerSiguientePeriodo,
+} from '../../services/medicionService'
 
 const props = defineProps({
   indicadores: {
@@ -21,11 +25,15 @@ const form = reactive({
   mes_medicion: '',
   valor_resultado: '',
   observacion: '',
+  evidencia: '',
 })
 
 const estado = reactive({
   guardando: false,
   error: '',
+  cargandoPeriodo: false,
+  periodoDisponible: true,
+  mensajePeriodo: '',
 })
 
 const esEdicion = computed(() => !!props.medicionEditar?.id)
@@ -79,6 +87,7 @@ watch(
       form.mes_medicion = obtenerMesDesdeMedicion(medicion)
       form.valor_resultado = medicion.valor_resultado || ''
       form.observacion = medicion.observacion || medicion.observaciones || ''
+      form.evidencia = medicion.evidencia || ''
       return
     }
 
@@ -89,8 +98,9 @@ watch(
 
 watch(
   () => form.indicador,
-  () => {
+  (nuevoIndicador) => {
     estado.error = ''
+    cargarSiguientePeriodo(nuevoIndicador)
   }
 )
 
@@ -99,6 +109,38 @@ function limpiarFormulario() {
   form.mes_medicion = ''
   form.valor_resultado = ''
   form.observacion = ''
+  form.evidencia = ''
+}
+
+async function cargarSiguientePeriodo(indicadorId) {
+  if (!indicadorId || esEdicion.value) {
+    estado.mensajePeriodo = ''
+    estado.periodoDisponible = true
+    return
+  }
+
+  form.mes_medicion = ''
+  estado.mensajePeriodo = ''
+  estado.periodoDisponible = true
+  estado.cargandoPeriodo = true
+
+  try {
+    const data = await obtenerSiguientePeriodo(indicadorId)
+
+    estado.periodoDisponible = data.disponible !== false
+    estado.mensajePeriodo = data.mensaje || ''
+
+    if (data.disponible && data.mes_medicion) {
+      form.mes_medicion = data.mes_medicion
+    }
+  } catch (error) {
+    estado.periodoDisponible = false
+    estado.mensajePeriodo =
+      error.response?.data?.detail ||
+      'No se pudo calcular el siguiente periodo de medición.'
+  } finally {
+    estado.cargandoPeriodo = false
+  }
 }
 
 function obtenerMesDesdeMedicion(medicion) {
@@ -152,7 +194,11 @@ function validarFormulario() {
     return 'El KPI seleccionado no tiene una meta configurada. Primero configurá la meta en el KPI.'
   }
 
-  if (!form.mes_medicion) return 'Seleccioná el mes que se va a medir.'
+  if (!estado.periodoDisponible) {
+    return estado.mensajePeriodo || 'Este KPI no tiene periodos disponibles para registrar.'
+  }
+
+  if (!form.mes_medicion) return 'No se pudo determinar el periodo de medición.'
 
   if (form.valor_resultado === '' || form.valor_resultado === null) {
     return 'Ingresá el valor obtenido en el mes.'
@@ -183,6 +229,7 @@ async function guardar() {
     mes_medicion: form.mes_medicion,
     valor_resultado: form.valor_resultado,
     observacion: form.observacion,
+    evidencia: form.evidencia.trim(),
   }
 
   try {
@@ -264,8 +311,21 @@ async function guardar() {
       <input
         v-model="form.mes_medicion"
         type="month"
+        disabled
       />
       <small>La medición se registra por corte mensual.</small>
+
+      <p v-if="estado.cargandoPeriodo" class="field-hint">
+        Calculando siguiente periodo...
+      </p>
+
+      <p
+        v-else-if="estado.mensajePeriodo"
+        class="field-hint"
+        :class="{ error: !estado.periodoDisponible }"
+      >
+        {{ estado.mensajePeriodo }}
+      </p>
     </div>
 
     <div class="form-group">
@@ -289,6 +349,15 @@ async function guardar() {
         v-model="form.observacion"
         rows="4"
         placeholder="Explicá brevemente el resultado obtenido, causas o contexto del mes evaluado."
+      ></textarea>
+    </div>
+
+    <div class="form-group full">
+      <label>Evidencias / respaldo de lo realizado</label>
+      <textarea
+        v-model="form.evidencia"
+        rows="6"
+        placeholder="Describe el respaldo de la medición: acciones realizadas, acuerdos, documentos revisados, resultados obtenidos, justificación del avance, etc."
       ></textarea>
     </div>
 
@@ -379,10 +448,30 @@ textarea:focus {
   border-color: #a8dadc;
 }
 
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: #f4f7f9;
+  color: #9aa8b8;
+  cursor: not-allowed;
+}
+
 small {
   color: #9aa8b8;
   font-size: 11.5px;
   font-weight: 600;
+}
+
+.field-hint {
+  margin: 4px 0 0;
+  color: #7f8fa3;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.field-hint.error {
+  color: #e76f51;
 }
 
 .kpi-context {

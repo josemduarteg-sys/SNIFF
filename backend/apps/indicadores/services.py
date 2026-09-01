@@ -1,8 +1,9 @@
+from datetime import date
 from decimal import Decimal
 
 from django.utils import timezone
 
-from .models import Alerta, EstadoCumplimiento, RangoKPI
+from .models import Alerta, EstadoCumplimiento, Medicion, RangoKPI
 
 
 def calcular_porcentaje_cumplimiento(valor_resultado, valor_meta):
@@ -90,4 +91,79 @@ def generar_alerta_para_medicion(medicion):
         mensaje=mensaje,
         estado_alerta='pendiente',
     )
+
+
+def obtener_intervalo_meses(indicador):
+    frecuencia = (indicador.frecuencia.nombre or '').lower()
+
+    if 'bimestral' in frecuencia or 'bimensual' in frecuencia:
+        return 2
+
+    if 'trimestral' in frecuencia:
+        return 3
+
+    if 'semestral' in frecuencia:
+        return 6
+
+    if 'anual' in frecuencia:
+        return 12
+
+    return 1
+
+
+def sumar_meses(fecha, meses):
+    mes = fecha.month - 1 + meses
+    anio = fecha.year + mes // 12
+    mes = mes % 12 + 1
+
+    return date(anio, mes, 1)
+
+
+def formatear_periodo(fecha):
+    meses = {
+        1: 'enero',
+        2: 'febrero',
+        3: 'marzo',
+        4: 'abril',
+        5: 'mayo',
+        6: 'junio',
+        7: 'julio',
+        8: 'agosto',
+        9: 'septiembre',
+        10: 'octubre',
+        11: 'noviembre',
+        12: 'diciembre',
+    }
+
+    return f"{meses.get(fecha.month, fecha.month)} {fecha.year}"
+
+
+def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
+    intervalo = obtener_intervalo_meses(indicador)
+
+    primer_periodo = date(
+        indicador.fecha_inicio.year,
+        indicador.fecha_inicio.month,
+        1,
+    )
+
+    ultima_medicion = (
+        Medicion.objects
+        .filter(indicador=indicador)
+        .exclude(id=excluir_medicion_id)
+        .select_related('periodo')
+        .order_by('-periodo__fecha_inicio')
+        .first()
+    )
+
+    if not ultima_medicion or not ultima_medicion.periodo:
+        return primer_periodo
+
+    ultimo_periodo = date(
+        ultima_medicion.periodo.fecha_inicio.year,
+        ultima_medicion.periodo.fecha_inicio.month,
+        1,
+    )
+
+    return sumar_meses(ultimo_periodo, intervalo)
 

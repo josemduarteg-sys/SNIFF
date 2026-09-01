@@ -1,6 +1,6 @@
 from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
 
+from apps.usuarios.permissions import PermisoCatalogoSoloAdmin, PermisoPlaneacion
 from .models import Area, Estrategia, Objetivo
 from .serializers import (
     AreaSerializer,
@@ -12,7 +12,7 @@ from .serializers import (
 class AreaViewSet(viewsets.ModelViewSet):
     queryset = Area.objects.all()
     serializer_class = AreaSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [PermisoCatalogoSoloAdmin]
 
 
 class EstrategiaViewSet(viewsets.ModelViewSet):
@@ -21,7 +21,7 @@ class EstrategiaViewSet(viewsets.ModelViewSet):
         'creado_por',
     ).all()
     serializer_class = EstrategiaSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [PermisoPlaneacion]
 
 
 class ObjetivoViewSet(viewsets.ModelViewSet):
@@ -30,5 +30,5 @@ class ObjetivoViewSet(viewsets.ModelViewSet):
         'creado_por',
     ).all()
     serializer_class = ObjetivoSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [PermisoPlaneacion]
 

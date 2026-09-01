@@ -342,6 +342,11 @@ class Medicion(models.Model):
     fecha_medicion = models.DateField()
     valor_resultado = models.DecimalField(max_digits=14, decimal_places=4)
     observacion = models.TextField(blank=True, null=True)
+    evidencia = models.TextField(
+        blank=True,
+        null=True,
+        help_text='Evidencias, respaldo o detalle de lo realizado durante la medición.'
+    )
     fecha_registro = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -11,8 +11,14 @@ import {
   obtenerDatosFormularioIndicador,
   obtenerIndicadoresKpi,
 } from '../services/indicadorService'
+import {
+  puedeAnularKpi,
+  puedeAutorizarKpi,
+  puedeCrearKpi,
+  puedeEditarKpi,
+} from '../utils/permisos'
 
-defineProps({
+const props = defineProps({
   usuario: {
     type: Object,
     required: false,
@@ -42,6 +48,14 @@ const mensaje = ref('')
 const modalAbierto = ref(false)
 const indicadorSeleccionado = ref(null)
 const guardando = ref(false)
+
+const puedeCrear = computed(() => puedeCrearKpi(props.usuario))
+const puedeAutorizarRol = computed(() => puedeAutorizarKpi(props.usuario))
+const puedeAnularRol = computed(() => puedeAnularKpi(props.usuario))
+const puedeEditarRol = computed(() => puedeEditarKpi(props.usuario))
+const mostrarAccionesKpi = computed(() => {
+  return puedeAutorizarRol.value || puedeEditarRol.value || puedeAnularRol.value
+})
 
 async function cargarDatos() {
   cargando.value = true
@@ -125,7 +139,7 @@ const indicadoresInactivos = computed(() => {
 function textoEstado(estado) {
   const estados = {
     borrador: 'Borrador',
-    autorizado: 'Autorizado',
+    autorizado: 'Activo',
     inactivo: 'Inactivo',
     anulado: 'Anulado',
   }
@@ -195,7 +209,7 @@ function puedeAnular(indicador) {
 }
 
 function puedeEditar(indicador) {
-  return indicador.puede_modificarse === true || indicador.estado === 'borrador'
+  return puedeEditarKpi(props.usuario, indicador)
 }
 
 async function manejarAutorizar(indicador) {
@@ -209,7 +223,7 @@ async function manejarAutorizar(indicador) {
 
   try {
     await autorizarIndicador(indicador.id)
-    mensaje.value = 'KPI autorizado correctamente.'
+    mensaje.value = 'KPI autorizado correctamente. Ahora está activo.'
     await cargarDatos()
   } catch (e) {
     error.value =
@@ -251,7 +265,7 @@ async function manejarAnular(indicador) {
 function manejarEditar(indicador) {
   if (!puedeEditar(indicador)) {
     mensaje.value = ''
-    error.value = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
+    error.value = 'Este KPI ya está activo y no permite modificar sus datos principales.'
     return
   }
 
@@ -269,7 +283,7 @@ function abrirNuevoIndicador() {
 function abrirEditarIndicador(indicador) {
   if (!puedeEditar(indicador)) {
     mensaje.value = ''
-    error.value = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
+    error.value = 'Este KPI ya está activo y no permite modificar sus datos principales.'
     return
   }
 
@@ -335,14 +349,14 @@ onMounted(() => {
 
 <template>
   <AppLayout
-    :usuario="usuario"
+    :usuario="props.usuario"
     titulo="Gestión de Indicadores KPI"
     subtitulo="Administra indicadores, metas, vigencia y estado de autorización."
     breadcrumb-actual="Indicadores KPI"
     @logout="cerrarSesion"
   >
     <template #actions>
-      <button class="btn-primary-page" type="button" @click="abrirNuevoIndicador">
+      <button v-if="puedeCrear" class="btn-primary-page" type="button" @click="abrirNuevoIndicador">
         <svg
           width="15"
           height="15"
@@ -430,7 +444,7 @@ onMounted(() => {
         </div>
 
         <div class="kpi-value">{{ indicadoresAutorizados }}</div>
-        <div class="kpi-label">Autorizados</div>
+        <div class="kpi-label">Activos</div>
         <div class="kpi-foot">Listos para seguimiento mensual</div>
       </article>
 
@@ -544,7 +558,7 @@ onMounted(() => {
         <select v-model="estadoSeleccionado">
           <option value="">Todos</option>
           <option value="borrador">Borrador</option>
-          <option value="autorizado">Autorizado</option>
+          <option value="autorizado">Activo</option>
           <option value="inactivo">Inactivo</option>
           <option value="anulado">Anulado</option>
         </select>
@@ -646,8 +660,9 @@ onMounted(() => {
             </td>
 
             <td>
-              <div class="actions-cell">
+              <div v-if="mostrarAccionesKpi" class="actions-cell">
                 <button
+                  v-if="puedeAutorizarRol"
                   class="action-text-btn ok"
                   type="button"
                   title="Autorizar KPI"
@@ -658,6 +673,7 @@ onMounted(() => {
                 </button>
 
                 <button
+                  v-if="puedeEditarRol"
                   class="action-icon-btn"
                   type="button"
                   title="Editar"
@@ -681,6 +697,7 @@ onMounted(() => {
                 </button>
 
                 <button
+                  v-if="puedeAnularRol"
                   class="action-icon-btn danger"
                   type="button"
                   title="Anular"
@@ -702,6 +719,12 @@ onMounted(() => {
                     <line x1="15" y1="9" x2="9" y2="15" />
                   </svg>
                 </button>
+              </div>
+
+              <div v-else class="actions-cell">
+                <span class="readonly-chip">
+                  Solo lectura
+                </span>
               </div>
             </td>
           </tr>
@@ -1085,6 +1108,17 @@ tbody tr:hover {
 .source-chip.neutral {
   background: rgba(154, 168, 184, 0.16);
   color: #5e6e82;
+}
+
+.readonly-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: rgba(154, 168, 184, 0.16);
+  color: #5e6e82;
+  font-size: 11.5px;
+  font-weight: 800;
 }
 
 .badge {
