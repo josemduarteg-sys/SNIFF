@@ -304,9 +304,8 @@ function cancelar() {
     </div>
 
     <div class="help-box">
-      <strong>Regla de autorización:</strong>
-      El KPI se crea como borrador. Cuando tenga meta y vigencia, puede ser autorizado.
-      Una vez autorizado, pasa a estado activo y sus datos principales quedan bloqueados.
+      El KPI se guardará como borrador y quedará pendiente de autorización antes de
+      iniciar su seguimiento.
     </div>
 
     <div class="form-actions">

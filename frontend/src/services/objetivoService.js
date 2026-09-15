@@ -30,19 +30,18 @@ export async function actualizarObjetivo(id, payload) {
   return response.data
 }
 
-export async function inactivarObjetivo(id) {
-  const response = await api.patch(`objetivos/${id}/`, {
-    estado: 'inactivo',
-  })
-
+export async function activarObjetivo(id) {
+  const response = await api.post(`objetivos/${id}/activar/`)
   return response.data
 }
 
-export async function reactivarObjetivo(id) {
-  const response = await api.patch(`objetivos/${id}/`, {
-    estado: 'activo',
-  })
+export async function finalizarObjetivo(id) {
+  const response = await api.post(`objetivos/${id}/finalizar/`)
+  return response.data
+}
 
+export async function inactivarObjetivo(id) {
+  const response = await api.post(`objetivos/${id}/inactivar/`)
   return response.data
 }
 
@@ -53,7 +52,6 @@ function limpiarPayloadObjetivo(payload) {
     descripcion: payload.descripcion || '',
     fecha_inicio: payload.fecha_inicio || null,
     fecha_fin: payload.fecha_fin || null,
-    estado: payload.estado || 'activo',
   }
 }
 

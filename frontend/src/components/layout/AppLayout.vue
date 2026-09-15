@@ -1,7 +1,14 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import SidebarMenu from './SidebarMenu.vue'
 import ProfileDropdown from './ProfileDropdown.vue'
+import { obtenerAlertasPendientes } from '../../services/alertaService'
+import {
+  obtenerNotificacionesNoLeidas,
+  marcarNotificacionLeida,
+  marcarTodasNotificacionesLeidas,
+} from '../../services/notificacionService'
+import { puedeGestionarPlaneacion } from '../../utils/permisos'
 
 const props = defineProps({
   usuario: {
@@ -28,13 +35,162 @@ const emit = defineEmits(['logout'])
 
 const sidebarContraido = ref(false)
 
+const alertasPendientes = ref([])
+const notificacionesNoLeidas = ref([])
+const cargandoAlertas = ref(false)
+const errorAlertas = ref('')
+const menuAlertasAbierto = ref(false)
+
+let intervaloAlertas = null
+
+const puedeVerAlertasKpi = computed(() => puedeGestionarPlaneacion(props.usuario))
+
+const alertasParaHeader = computed(() => {
+  if (!puedeVerAlertasKpi.value) {
+    return []
+  }
+
+  return alertasPendientes.value
+})
+
+const totalNotificacionesHeader = computed(() => {
+  return notificacionesNoLeidas.value.length + alertasParaHeader.value.length
+})
+
+const elementosMenuNotificaciones = computed(() => {
+  const notificaciones = notificacionesNoLeidas.value.map((notificacion) => ({
+    id: `notificacion-${notificacion.id}`,
+    tipoElemento: 'notificacion',
+    idOriginal: notificacion.id,
+    titulo: notificacion.titulo || 'Notificación',
+    mensaje: notificacion.mensaje,
+    fecha: notificacion.fecha_creacion,
+    tipo: notificacion.tipo,
+    enlace: notificacion.enlace,
+  }))
+
+  const alertas = alertasParaHeader.value.map((alerta) => ({
+    id: `alerta-${alerta.id}`,
+    tipoElemento: 'alerta',
+    idOriginal: alerta.id,
+    titulo: alerta.tipo_alerta || 'Alerta KPI',
+    mensaje: alerta.mensaje,
+    fecha: alerta.fecha_generacion,
+    tipo: alerta.tipo_alerta,
+    enlace: '/dashboard',
+  }))
+
+  return [...notificaciones, ...alertas]
+    .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0))
+    .slice(0, 6)
+})
+
 function alternarSidebar() {
   sidebarContraido.value = !sidebarContraido.value
+}
+
+async function cargarCentroNotificaciones() {
+  cargandoAlertas.value = true
+  errorAlertas.value = ''
+
+  try {
+    const [notificacionesData, alertasData] = await Promise.all([
+      obtenerNotificacionesNoLeidas(),
+      puedeVerAlertasKpi.value ? obtenerAlertasPendientes() : Promise.resolve([]),
+    ])
+
+    notificacionesNoLeidas.value = notificacionesData
+    alertasPendientes.value = alertasData
+  } catch (e) {
+    console.error('No se pudo cargar el centro de notificaciones:', e)
+    errorAlertas.value = 'No se pudieron cargar las notificaciones.'
+    notificacionesNoLeidas.value = []
+    alertasPendientes.value = []
+  } finally {
+    cargandoAlertas.value = false
+  }
+}
+
+function alternarMenuAlertas() {
+  menuAlertasAbierto.value = !menuAlertasAbierto.value
+
+  if (menuAlertasAbierto.value) {
+    cargarCentroNotificaciones()
+  }
+}
+
+function cerrarMenuAlertas() {
+  menuAlertasAbierto.value = false
+}
+
+function formatearFechaAlerta(fecha) {
+  if (!fecha) return 'Sin fecha'
+
+  const date = new Date(fecha)
+
+  if (Number.isNaN(date.getTime())) {
+    return fecha
+  }
+
+  return date.toLocaleDateString('es-GT', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+}
+
+function claseAlerta(item) {
+  if (item.tipoElemento === 'notificacion') {
+    return 'info'
+  }
+
+  const texto = `${item.tipo || ''} ${item.mensaje || ''}`.toLowerCase()
+
+  if (texto.includes('crítico') || texto.includes('critico') || texto.includes('incumplido')) {
+    return 'danger'
+  }
+
+  if (texto.includes('riesgo') || texto.includes('vencido')) {
+    return 'warning'
+  }
+
+  return 'info'
+}
+
+async function marcarLeida(item) {
+  if (item.tipoElemento !== 'notificacion') return
+
+  try {
+    await marcarNotificacionLeida(item.idOriginal)
+    await cargarCentroNotificaciones()
+  } catch (e) {
+    console.error('No se pudo marcar la notificación como leída:', e)
+  }
+}
+
+async function marcarTodasLeidas() {
+  try {
+    await marcarTodasNotificacionesLeidas()
+    await cargarCentroNotificaciones()
+  } catch (e) {
+    console.error('No se pudieron marcar todas las notificaciones como leídas:', e)
+  }
 }
 
 function cerrarSesion() {
   emit('logout')
 }
+
+onMounted(() => {
+  cargarCentroNotificaciones()
+  intervaloAlertas = window.setInterval(cargarCentroNotificaciones, 60000)
+})
+
+onBeforeUnmount(() => {
+  if (intervaloAlertas) {
+    window.clearInterval(intervaloAlertas)
+  }
+})
 </script>
 
 <template>
@@ -67,13 +223,103 @@ function cerrarSesion() {
         </div>
 
         <div class="topbar-actions">
-          <div class="icon-btn">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
-              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-            </svg>
+          <div class="notification-wrapper">
+            <button
+              class="icon-btn notification-button"
+              type="button"
+              title="Alertas"
+              @click="alternarMenuAlertas"
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
 
-            <span class="dot"></span>
+              <span
+                v-if="totalNotificacionesHeader > 0"
+                class="notification-badge"
+              >
+                {{ totalNotificacionesHeader > 9 ? '9+' : totalNotificacionesHeader }}
+              </span>
+            </button>
+
+            <div
+              v-if="menuAlertasAbierto"
+              class="notifications-dropdown"
+            >
+              <div class="notifications-header">
+                <div>
+                  <strong>Centro de notificaciones</strong>
+                  <span>{{ totalNotificacionesHeader }} pendientes</span>
+
+                  <button
+                    v-if="notificacionesNoLeidas.length > 0"
+                    class="notifications-mark-all"
+                    type="button"
+                    @click="marcarTodasLeidas"
+                  >
+                    Marcar todas
+                  </button>
+                </div>
+
+                <button
+                  class="notifications-close"
+                  type="button"
+                  @click="cerrarMenuAlertas"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div v-if="cargandoAlertas" class="notifications-empty">
+                Cargando notificaciones...
+              </div>
+
+              <div v-else-if="errorAlertas" class="notifications-empty error">
+                {{ errorAlertas }}
+              </div>
+
+              <div v-else-if="!elementosMenuNotificaciones.length" class="notifications-empty">
+                No hay notificaciones pendientes.
+              </div>
+
+              <div v-else class="notifications-list">
+                <article
+                  v-for="item in elementosMenuNotificaciones"
+                  :key="item.id"
+                  class="notification-item"
+                  :class="claseAlerta(item)"
+                >
+                  <div class="notification-icon">
+                    !
+                  </div>
+
+                  <div class="notification-content">
+                    <strong>{{ item.titulo }}</strong>
+                    <p>{{ item.mensaje }}</p>
+                    <span>{{ formatearFechaAlerta(item.fecha) }}</span>
+
+                    <div v-if="item.tipoElemento === 'notificacion'" class="notification-actions">
+                      <button
+                        class="notification-mark-read"
+                        type="button"
+                        @click="marcarLeida(item)"
+                      >
+                        Marcar leída
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <RouterLink
+                class="notifications-link"
+                to="/dashboard"
+                @click="cerrarMenuAlertas"
+              >
+                Ver dashboard
+              </RouterLink>
+            </div>
           </div>
 
           <ProfileDropdown
@@ -232,15 +478,214 @@ function cerrarSesion() {
   stroke-linejoin: round;
 }
 
-.icon-btn .dot {
+.notification-wrapper {
+  position: relative;
+}
+
+.notification-button {
+  position: relative;
+  cursor: pointer;
+}
+
+.notification-badge {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--orange);
-  border: 1.5px solid var(--white);
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e76f51;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #ffffff;
+}
+
+.notifications-dropdown {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e4eaef;
+  box-shadow: 0 18px 45px rgba(29, 53, 87, 0.16);
+  z-index: 80;
+  overflow: hidden;
+}
+
+.notifications-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 16px;
+  border-bottom: 1px solid #eef2f5;
+}
+
+.notifications-header strong {
+  display: block;
+  color: #1d3557;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.notifications-header span {
+  display: block;
+  margin-top: 2px;
+  color: #8a9bb0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.notifications-mark-all {
+  display: block;
+  margin-top: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: #457b9d;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.notifications-mark-all:hover {
+  text-decoration: underline;
+}
+
+.notifications-close {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: none;
+  background: #f4f7f9;
+  color: #6c7a89;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.notifications-empty {
+  padding: 22px 16px;
+  text-align: center;
+  color: #8a9bb0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.notifications-empty.error {
+  color: #e76f51;
+}
+
+.notifications-list {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.notification-item {
+  display: flex;
+  gap: 11px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #eef2f5;
+}
+
+.notification-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 10px;
+  background: #eaf5f5;
+  color: #457b9d;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.notification-item.warning .notification-icon {
+  background: rgba(244, 162, 97, 0.14);
+  color: #d9822b;
+}
+
+.notification-item.danger .notification-icon {
+  background: rgba(231, 111, 81, 0.14);
+  color: #e76f51;
+}
+
+.notification-content {
+  min-width: 0;
+}
+
+.notification-content strong {
+  display: block;
+  color: #1d3557;
+  font-size: 12.5px;
+  font-weight: 900;
+}
+
+.notification-content p {
+  margin: 3px 0 4px;
+  color: #1d3557;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.notification-content span {
+  color: #8a9bb0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.notification-actions {
+  margin-top: 6px;
+}
+
+.notification-mark-read {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: #457b9d;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.notification-mark-read:hover {
+  text-decoration: underline;
+}
+
+.notifications-link {
+  display: block;
+  padding: 12px 16px;
+  text-align: center;
+  color: #457b9d;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+  background: #f8fafb;
+}
+
+.notifications-link:hover {
+  background: #eaf5f5;
+}
+
+@media (max-width: 680px) {
+  .notifications-dropdown {
+    position: fixed;
+    top: 74px;
+    right: 16px;
+    left: 16px;
+    width: auto;
+    max-width: none;
+  }
 }
 
 .content {

@@ -4,14 +4,15 @@ import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import EstrategiaForm from '../components/estrategias/EstrategiaForm.vue'
 import {
+  activarEstrategia,
   actualizarEstrategia,
   crearEstrategia,
+  finalizarEstrategia,
   inactivarEstrategia,
   obtenerDatosFormularioEstrategia,
   obtenerEstrategias,
-  reactivarEstrategia,
 } from '../services/estrategiaService'
-import { puedeGestionarEstrategias } from '../utils/permisos'
+import { esAdministrador, puedeGestionarEstrategias } from '../utils/permisos'
 
 const props = defineProps({
   usuario: {
@@ -22,6 +23,7 @@ const props = defineProps({
 })
 
 const puedeGestionar = computed(() => puedeGestionarEstrategias(props.usuario))
+const esAdmin = computed(() => esAdministrador(props.usuario))
 
 const emit = defineEmits(['logout'])
 
@@ -34,6 +36,7 @@ const mensaje = ref('')
 const modalEstrategiaAbierto = ref(false)
 const estrategiaSeleccionada = ref(null)
 const guardandoEstrategia = ref(false)
+const errorModalEstrategia = ref('')
 
 const estrategiasActivas = computed(() => {
   return estrategias.value.filter((item) => item.estado === 'activa' || item.estado === true).length
@@ -84,6 +87,7 @@ function abrirNuevaEstrategia() {
   modalEstrategiaAbierto.value = true
   error.value = ''
   mensaje.value = ''
+  errorModalEstrategia.value = ''
 }
 
 function abrirEditarEstrategia(estrategia) {
@@ -91,12 +95,14 @@ function abrirEditarEstrategia(estrategia) {
   modalEstrategiaAbierto.value = true
   error.value = ''
   mensaje.value = ''
+  errorModalEstrategia.value = ''
 }
 
 function cerrarModalEstrategia() {
   modalEstrategiaAbierto.value = false
   estrategiaSeleccionada.value = null
   guardandoEstrategia.value = false
+  errorModalEstrategia.value = ''
 }
 
 function obtenerMensajeError(e, mensajeDefault) {
@@ -120,7 +126,7 @@ function obtenerMensajeError(e, mensajeDefault) {
 
 async function guardarEstrategia(payload) {
   guardandoEstrategia.value = true
-  error.value = ''
+  errorModalEstrategia.value = ''
   mensaje.value = ''
 
   try {
@@ -135,7 +141,7 @@ async function guardarEstrategia(payload) {
     cerrarModalEstrategia()
     await cargarEstrategias()
   } catch (e) {
-    error.value = obtenerMensajeError(
+    errorModalEstrategia.value = obtenerMensajeError(
       e,
       estrategiaSeleccionada.value?.id
         ? 'No se pudo actualizar la estrategia.'
@@ -143,6 +149,38 @@ async function guardarEstrategia(payload) {
     )
   } finally {
     guardandoEstrategia.value = false
+  }
+}
+
+async function manejarActivarEstrategia(estrategia) {
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await activarEstrategia(estrategia.id)
+    mensaje.value = 'Estrategia activada correctamente.'
+    await cargarEstrategias()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo activar la estrategia.')
+  }
+}
+
+async function manejarFinalizarEstrategia(estrategia) {
+  const confirmar = window.confirm(
+    `¿Seguro que querés finalizar la estrategia "${estrategia.nombre}"?`
+  )
+
+  if (!confirmar) return
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await finalizarEstrategia(estrategia.id)
+    mensaje.value = 'Estrategia finalizada correctamente.'
+    await cargarEstrategias()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo finalizar la estrategia.')
   }
 }
 
@@ -162,19 +200,6 @@ async function manejarInactivarEstrategia(estrategia) {
     await cargarEstrategias()
   } catch (e) {
     error.value = obtenerMensajeError(e, 'No se pudo inactivar la estrategia.')
-  }
-}
-
-async function manejarReactivarEstrategia(estrategia) {
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await reactivarEstrategia(estrategia.id)
-    mensaje.value = 'Estrategia reactivada correctamente.'
-    await cargarEstrategias()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo reactivar la estrategia.')
   }
 }
 
@@ -274,6 +299,7 @@ onMounted(() => {
             <td v-if="puedeGestionar">
               <div class="actions-cell">
                 <button
+                  v-if="esAdmin || estrategia.estado === 'en_revision'"
                   class="action-btn"
                   type="button"
                   @click="abrirEditarEstrategia(estrategia)"
@@ -281,23 +307,34 @@ onMounted(() => {
                   Editar
                 </button>
 
-                <button
-                  v-if="estrategia.estado !== 'inactiva'"
-                  class="action-btn danger"
-                  type="button"
-                  @click="manejarInactivarEstrategia(estrategia)"
-                >
-                  Inactivar
-                </button>
+                <template v-if="esAdmin">
+                  <button
+                    v-if="estrategia.estado !== 'activa'"
+                    class="action-btn"
+                    type="button"
+                    @click="manejarActivarEstrategia(estrategia)"
+                  >
+                    Activar
+                  </button>
 
-                <button
-                  v-else
-                  class="action-btn"
-                  type="button"
-                  @click="manejarReactivarEstrategia(estrategia)"
-                >
-                  Reactivar
-                </button>
+                  <button
+                    v-if="estrategia.estado !== 'finalizada'"
+                    class="action-btn"
+                    type="button"
+                    @click="manejarFinalizarEstrategia(estrategia)"
+                  >
+                    Finalizar
+                  </button>
+
+                  <button
+                    v-if="estrategia.estado !== 'inactiva'"
+                    class="action-btn danger"
+                    type="button"
+                    @click="manejarInactivarEstrategia(estrategia)"
+                  >
+                    Inactivar
+                  </button>
+                </template>
               </div>
             </td>
           </tr>
@@ -315,6 +352,10 @@ onMounted(() => {
       "
       @cerrar="cerrarModalEstrategia"
     >
+      <div v-if="errorModalEstrategia" class="alert error">
+        {{ errorModalEstrategia }}
+      </div>
+
       <EstrategiaForm
         :estrategia="estrategiaSeleccionada"
         :areas="areas"

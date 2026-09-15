@@ -59,6 +59,7 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
     tipo_calculo_nombre = serializers.CharField(source='tipo_calculo.nombre', read_only=True)
     fuente_dato_nombre = serializers.CharField(source='fuente_dato.nombre', read_only=True)
     autorizado_por_username = serializers.CharField(source='autorizado_por.username', read_only=True)
+    creado_por_username = serializers.CharField(source='creado_por.username', read_only=True)
     puede_modificarse = serializers.SerializerMethodField()
 
     class Meta:
@@ -83,6 +84,8 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'fecha_autorizacion',
             'autorizado_por',
             'autorizado_por_username',
+            'creado_por',
+            'creado_por_username',
             'puede_modificarse',
             'fecha_creacion',
         ]
@@ -92,6 +95,8 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'fecha_autorizacion',
             'autorizado_por',
             'autorizado_por_username',
+            'creado_por',
+            'creado_por_username',
             'puede_modificarse',
         ]
 

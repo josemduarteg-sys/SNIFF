@@ -4,14 +4,15 @@ import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import ObjetivoForm from '../components/objetivos/ObjetivoForm.vue'
 import {
+  activarObjetivo,
   actualizarObjetivo,
   crearObjetivo,
+  finalizarObjetivo,
   inactivarObjetivo,
   obtenerDatosFormularioObjetivo,
   obtenerObjetivos,
-  reactivarObjetivo,
 } from '../services/objetivoService'
-import { puedeGestionarObjetivos } from '../utils/permisos'
+import { esAdministrador, puedeGestionarObjetivos } from '../utils/permisos'
 
 const props = defineProps({
   usuario: {
@@ -22,6 +23,7 @@ const props = defineProps({
 })
 
 const puedeGestionar = computed(() => puedeGestionarObjetivos(props.usuario))
+const esAdmin = computed(() => esAdministrador(props.usuario))
 
 const emit = defineEmits(['logout'])
 
@@ -37,6 +39,7 @@ const modalObjetivoAbierto = ref(false)
 const modalDetalleAbierto = ref(false)
 const objetivoSeleccionado = ref(null)
 const guardandoObjetivo = ref(false)
+const errorModalObjetivo = ref('')
 
 async function cargarDatos() {
   cargando.value = true
@@ -136,6 +139,7 @@ function abrirNuevoObjetivo() {
   modalObjetivoAbierto.value = true
   error.value = ''
   mensaje.value = ''
+  errorModalObjetivo.value = ''
 }
 
 function abrirEditarObjetivo(objetivo) {
@@ -143,6 +147,7 @@ function abrirEditarObjetivo(objetivo) {
   modalObjetivoAbierto.value = true
   error.value = ''
   mensaje.value = ''
+  errorModalObjetivo.value = ''
 }
 
 function abrirDetalleObjetivo(objetivo) {
@@ -154,6 +159,7 @@ function cerrarModalObjetivo() {
   modalObjetivoAbierto.value = false
   objetivoSeleccionado.value = null
   guardandoObjetivo.value = false
+  errorModalObjetivo.value = ''
 }
 
 function cerrarModalDetalle() {
@@ -182,7 +188,7 @@ function obtenerMensajeError(e, mensajeDefault) {
 
 async function guardarObjetivo(payload) {
   guardandoObjetivo.value = true
-  error.value = ''
+  errorModalObjetivo.value = ''
   mensaje.value = ''
 
   try {
@@ -197,7 +203,7 @@ async function guardarObjetivo(payload) {
     cerrarModalObjetivo()
     await cargarDatos()
   } catch (e) {
-    error.value = obtenerMensajeError(
+    errorModalObjetivo.value = obtenerMensajeError(
       e,
       objetivoSeleccionado.value?.id
         ? 'No se pudo actualizar el objetivo.'
@@ -205,6 +211,38 @@ async function guardarObjetivo(payload) {
     )
   } finally {
     guardandoObjetivo.value = false
+  }
+}
+
+async function manejarActivarObjetivo(objetivo) {
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await activarObjetivo(objetivo.id)
+    mensaje.value = 'Objetivo activado correctamente.'
+    await cargarDatos()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo activar el objetivo.')
+  }
+}
+
+async function manejarFinalizarObjetivo(objetivo) {
+  const confirmar = window.confirm(
+    `¿Seguro que querés finalizar el objetivo "${objetivo.nombre}"?`
+  )
+
+  if (!confirmar) return
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await finalizarObjetivo(objetivo.id)
+    mensaje.value = 'Objetivo finalizado correctamente.'
+    await cargarDatos()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo finalizar el objetivo.')
   }
 }
 
@@ -224,19 +262,6 @@ async function manejarInactivarObjetivo(objetivo) {
     await cargarDatos()
   } catch (e) {
     error.value = obtenerMensajeError(e, 'No se pudo inactivar el objetivo.')
-  }
-}
-
-async function manejarReactivarObjetivo(objetivo) {
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await reactivarObjetivo(objetivo.id)
-    mensaje.value = 'Objetivo reactivado correctamente.'
-    await cargarDatos()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo reactivar el objetivo.')
   }
 }
 
@@ -502,7 +527,7 @@ onMounted(() => {
                 </button>
 
                 <button
-                  v-if="puedeGestionar"
+                  v-if="puedeGestionar && (esAdmin || objetivo.estado === 'en_revision')"
                   class="action-btn"
                   type="button"
                   @click="abrirEditarObjetivo(objetivo)"
@@ -510,23 +535,34 @@ onMounted(() => {
                   Editar
                 </button>
 
-                <button
-                  v-if="puedeGestionar && objetivo.estado !== 'inactivo'"
-                  class="action-btn danger"
-                  type="button"
-                  @click="manejarInactivarObjetivo(objetivo)"
-                >
-                  Inactivar
-                </button>
+                <template v-if="esAdmin">
+                  <button
+                    v-if="objetivo.estado !== 'activo'"
+                    class="action-btn"
+                    type="button"
+                    @click="manejarActivarObjetivo(objetivo)"
+                  >
+                    Activar
+                  </button>
 
-                <button
-                  v-if="puedeGestionar && objetivo.estado === 'inactivo'"
-                  class="action-btn"
-                  type="button"
-                  @click="manejarReactivarObjetivo(objetivo)"
-                >
-                  Reactivar
-                </button>
+                  <button
+                    v-if="objetivo.estado !== 'finalizado'"
+                    class="action-btn"
+                    type="button"
+                    @click="manejarFinalizarObjetivo(objetivo)"
+                  >
+                    Finalizar
+                  </button>
+
+                  <button
+                    v-if="objetivo.estado !== 'inactivo'"
+                    class="action-btn danger"
+                    type="button"
+                    @click="manejarInactivarObjetivo(objetivo)"
+                  >
+                    Inactivar
+                  </button>
+                </template>
               </div>
             </td>
           </tr>
@@ -586,6 +622,10 @@ onMounted(() => {
       "
       @cerrar="cerrarModalObjetivo"
     >
+      <div v-if="errorModalObjetivo" class="alert error">
+        {{ errorModalObjetivo }}
+      </div>
+
       <ObjetivoForm
         :objetivo="objetivoSeleccionado"
         :estrategias="estrategias"

@@ -69,8 +69,23 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
     serializer_class = IndicadorKPISerializer
     permission_classes = [PermisoIndicadorKPI]
 
+    def perform_create(self, serializer):
+        from apps.auditoria.services import notificar_usuarios_gestion
+
+        indicador = serializer.save(creado_por=self.request.user)
+
+        notificar_usuarios_gestion(
+            tipo='kpi_creado',
+            titulo='Nuevo KPI pendiente de autorización',
+            mensaje=f'{self.request.user.username} registró el KPI "{indicador.nombre}".',
+            enlace='/indicadores',
+            excluir_usuario=self.request.user,
+        )
+
     @action(detail=True, methods=['post'])
     def autorizar(self, request, pk=None):
+        from apps.auditoria.services import crear_notificacion
+
         indicador = self.get_object()
 
         if indicador.estado == 'autorizado':
@@ -102,15 +117,35 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             ]
         )
 
+        if indicador.creado_por_id and indicador.creado_por_id != request.user.id:
+            crear_notificacion(
+                usuario_destino=indicador.creado_por,
+                tipo='kpi_autorizado',
+                titulo='KPI autorizado',
+                mensaje=f'Tu KPI "{indicador.nombre}" fue autorizado.',
+                enlace='/indicadores',
+            )
+
         serializer = self.get_serializer(indicador)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def anular(self, request, pk=None):
+        from apps.auditoria.services import crear_notificacion
+
         indicador = self.get_object()
 
         indicador.estado = 'anulado'
         indicador.save(update_fields=['estado'])
+
+        if indicador.creado_por_id and indicador.creado_por_id != request.user.id:
+            crear_notificacion(
+                usuario_destino=indicador.creado_por,
+                tipo='kpi_anulado',
+                titulo='KPI anulado',
+                mensaje=f'Tu KPI "{indicador.nombre}" fue anulado.',
+                enlace='/indicadores',
+            )
 
         serializer = self.get_serializer(indicador)
         return Response(serializer.data, status=status.HTTP_200_OK)

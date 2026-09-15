@@ -30,19 +30,18 @@ export async function actualizarEstrategia(id, payload) {
   return response.data
 }
 
-export async function inactivarEstrategia(id) {
-  const response = await api.patch(`estrategias/${id}/`, {
-    estado: 'inactiva',
-  })
-
+export async function activarEstrategia(id) {
+  const response = await api.post(`estrategias/${id}/activar/`)
   return response.data
 }
 
-export async function reactivarEstrategia(id) {
-  const response = await api.patch(`estrategias/${id}/`, {
-    estado: 'activa',
-  })
+export async function finalizarEstrategia(id) {
+  const response = await api.post(`estrategias/${id}/finalizar/`)
+  return response.data
+}
 
+export async function inactivarEstrategia(id) {
+  const response = await api.post(`estrategias/${id}/inactivar/`)
   return response.data
 }
 
@@ -53,7 +52,6 @@ function limpiarPayloadEstrategia(payload) {
     descripcion: payload.descripcion || '',
     fecha_inicio: payload.fecha_inicio || null,
     fecha_fin: payload.fecha_fin || null,
-    estado: payload.estado || 'activa',
   }
 }
 

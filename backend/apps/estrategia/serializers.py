@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueTogetherValidator
 
 from .models import Area, Estrategia, Objetivo
 
@@ -39,6 +40,13 @@ class EstrategiaSerializer(serializers.ModelSerializer):
             'fecha_creacion',
         ]
         read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+        validators = [
+            UniqueTogetherValidator(
+                queryset=Estrategia.objects.all(),
+                fields=['area', 'nombre'],
+                message='Ya existe una estrategia con ese nombre dentro del área seleccionada.',
+            )
+        ]
 
     def validate(self, data):
         fecha_inicio = data.get('fecha_inicio') or getattr(self.instance, 'fecha_inicio', None)
@@ -78,6 +86,13 @@ class ObjetivoSerializer(serializers.ModelSerializer):
             'fecha_creacion',
         ]
         read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+        validators = [
+            UniqueTogetherValidator(
+                queryset=Objetivo.objects.all(),
+                fields=['estrategia', 'nombre'],
+                message='Ya existe un objetivo con ese nombre dentro de la estrategia seleccionada.',
+            )
+        ]
 
     def validate(self, data):
         fecha_inicio = data.get('fecha_inicio') or getattr(self.instance, 'fecha_inicio', None)

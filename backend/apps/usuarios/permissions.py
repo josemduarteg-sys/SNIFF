@@ -66,6 +66,31 @@ class PermisoPlaneacion(BasePermission):
         return es_administrador(request.user) or es_operativo_o_supervisor(request.user)
 
 
+class PermisoEstrategiaObjetivo(PermisoPlaneacion):
+    """Estrategia/Objetivo: además de PermisoPlaneacion, las acciones de cambio de
+    estado (activar/finalizar/inactivar) son solo para administrador, y
+    supervisor/operativo solo puede editar mientras el registro está en revisión."""
+
+    ACCIONES_SOLO_ADMIN = ('activar', 'finalizar', 'inactivar')
+
+    def has_permission(self, request, view):
+        if getattr(view, 'action', None) in self.ACCIONES_SOLO_ADMIN:
+            return es_administrador(request.user)
+
+        return super().has_permission(request, view)
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+
+        if es_administrador(request.user):
+            return True
+
+        # Si llegamos acá, has_permission ya garantizó que es operativo/supervisor
+        # y que el método no es DELETE.
+        return getattr(obj, 'estado', None) == 'en_revision'
+
+
 class PermisoIndicadorKPI(BasePermission):
     message = 'No tenés permisos para modificar indicadores KPI.'
 

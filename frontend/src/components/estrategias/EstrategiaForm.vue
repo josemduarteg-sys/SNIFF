@@ -20,7 +20,6 @@ const estado = reactive({
   descripcion: '',
   fecha_inicio: '',
   fecha_fin: '',
-  estado: 'activa',
   error: '',
 })
 
@@ -44,7 +43,6 @@ function cargarFormulario() {
   estado.descripcion = props.estrategia?.descripcion || ''
   estado.fecha_inicio = props.estrategia?.fecha_inicio || ''
   estado.fecha_fin = props.estrategia?.fecha_fin || ''
-  estado.estado = props.estrategia?.estado || 'activa'
   estado.error = ''
 }
 
@@ -66,11 +64,6 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.estado) {
-    estado.error = 'Seleccioná el estado de la estrategia.'
-    return false
-  }
-
   return true
 }
 
@@ -85,7 +78,6 @@ function guardar() {
     descripcion: estado.descripcion.trim(),
     fecha_inicio: estado.fecha_inicio || null,
     fecha_fin: estado.fecha_fin || null,
-    estado: estado.estado,
   })
 }
 
@@ -155,21 +147,11 @@ function cancelar() {
         />
       </label>
 
-      <label class="field field-full">
-        <span>Estado</span>
-
-        <select v-model="estado.estado">
-          <option value="activa">Activa</option>
-          <option value="en_revision">En revisión</option>
-          <option value="finalizada">Finalizada</option>
-          <option value="inactiva">Inactiva</option>
-        </select>
-      </label>
     </div>
 
     <div class="help-box">
-      La estrategia representa el plan general que agrupa objetivos e indicadores KPI
-      para dar seguimiento al cumplimiento del área.
+      Completa los datos generales de la estrategia. El sistema gestionará su estado
+      durante el proceso de revisión.
     </div>
 
     <div class="form-actions">

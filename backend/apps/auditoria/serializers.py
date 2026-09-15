@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Bitacora
+from .models import Bitacora, Notificacion
 
 
 class BitacoraSerializer(serializers.ModelSerializer):
@@ -24,5 +24,31 @@ class BitacoraSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id',
             'fecha_hora',
+        ]
+
+
+class NotificacionSerializer(serializers.ModelSerializer):
+    usuario_destino_username = serializers.CharField(
+        source='usuario_destino.username',
+        read_only=True
+    )
+
+    class Meta:
+        model = Notificacion
+        fields = [
+            'id',
+            'usuario_destino',
+            'usuario_destino_username',
+            'tipo',
+            'titulo',
+            'mensaje',
+            'leida',
+            'enlace',
+            'fecha_creacion',
+        ]
+        read_only_fields = [
+            'id',
+            'usuario_destino',
+            'fecha_creacion',
         ]
 

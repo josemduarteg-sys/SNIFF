@@ -20,7 +20,6 @@ const estado = reactive({
   descripcion: '',
   fecha_inicio: '',
   fecha_fin: '',
-  estado: 'activo',
   error: '',
 })
 
@@ -44,7 +43,6 @@ function cargarFormulario() {
   estado.descripcion = props.objetivo?.descripcion || ''
   estado.fecha_inicio = props.objetivo?.fecha_inicio || ''
   estado.fecha_fin = props.objetivo?.fecha_fin || ''
-  estado.estado = props.objetivo?.estado || 'activo'
   estado.error = ''
 }
 
@@ -66,11 +64,6 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.estado) {
-    estado.error = 'Seleccioná el estado del objetivo.'
-    return false
-  }
-
   return true
 }
 
@@ -85,7 +78,6 @@ function guardar() {
     descripcion: estado.descripcion.trim(),
     fecha_inicio: estado.fecha_inicio || null,
     fecha_fin: estado.fecha_fin || null,
-    estado: estado.estado,
   })
 }
 
@@ -155,21 +147,11 @@ function cancelar() {
         />
       </label>
 
-      <label class="field field-full">
-        <span>Estado</span>
-
-        <select v-model="estado.estado">
-          <option value="activo">Activo</option>
-          <option value="en_revision">En revisión</option>
-          <option value="finalizado">Finalizado</option>
-          <option value="inactivo">Inactivo</option>
-        </select>
-      </label>
     </div>
 
     <div class="help-box">
-      El objetivo define una meta específica dentro de una estrategia. Luego se
-      podrá relacionar con indicadores KPI para medir su cumplimiento.
+      Completa los datos generales del objetivo. El sistema gestionará su estado
+      durante el proceso de revisión.
     </div>
 
     <div class="form-actions">

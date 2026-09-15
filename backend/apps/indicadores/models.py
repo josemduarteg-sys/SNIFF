@@ -115,6 +115,13 @@ class IndicadorKPI(models.Model):
         blank=True,
         null=True
     )
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='indicadores_creados',
+        blank=True,
+        null=True
+    )
 
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
