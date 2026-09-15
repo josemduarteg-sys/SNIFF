@@ -39,7 +39,7 @@ class EstrategiaViewSet(viewsets.ModelViewSet):
             tipo='estrategia_creada',
             titulo='Nueva estrategia registrada',
             mensaje=f'{self.request.user.username} registró la estrategia "{estrategia.nombre}".',
-            enlace='/estrategias',
+            enlace=f'/estrategias?resaltar={estrategia.id}',
             excluir_usuario=self.request.user,
         )
 
@@ -95,7 +95,7 @@ class ObjetivoViewSet(viewsets.ModelViewSet):
             tipo='objetivo_creado',
             titulo='Nuevo objetivo registrado',
             mensaje=f'{self.request.user.username} registró el objetivo "{objetivo.nombre}".',
-            enlace='/objetivos',
+            enlace=f'/objetivos?resaltar={objetivo.id}',
             excluir_usuario=self.request.user,
         )
 

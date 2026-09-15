@@ -78,7 +78,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             tipo='kpi_creado',
             titulo='Nuevo KPI pendiente de autorización',
             mensaje=f'{self.request.user.username} registró el KPI "{indicador.nombre}".',
-            enlace='/indicadores',
+            enlace=f'/indicadores?resaltar={indicador.id}',
             excluir_usuario=self.request.user,
         )
 
@@ -123,7 +123,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
                 tipo='kpi_autorizado',
                 titulo='KPI autorizado',
                 mensaje=f'Tu KPI "{indicador.nombre}" fue autorizado.',
-                enlace='/indicadores',
+                enlace=f'/indicadores?resaltar={indicador.id}',
             )
 
         serializer = self.get_serializer(indicador)
@@ -144,7 +144,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
                 tipo='kpi_anulado',
                 titulo='KPI anulado',
                 mensaje=f'Tu KPI "{indicador.nombre}" fue anulado.',
-                enlace='/indicadores',
+                enlace=f'/indicadores?resaltar={indicador.id}',
             )
 
         serializer = self.get_serializer(indicador)

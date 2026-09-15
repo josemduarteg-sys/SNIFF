@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import ObjetivoForm from '../components/objetivos/ObjetivoForm.vue'
@@ -27,6 +28,10 @@ const puedeGestionar = computed(() => puedeGestionarObjetivos(props.usuario))
 const esAdmin = computed(() => esAdministrador(props.usuario))
 
 const emit = defineEmits(['logout'])
+
+const route = useRoute()
+const idResaltado = ref(null)
+let timeoutResaltado = null
 
 const objetivos = ref([])
 const estrategiasFormulario = ref([])
@@ -63,6 +68,44 @@ async function cargarDatos() {
     cargando.value = false
   }
 }
+
+async function aplicarResaltadoDesdeRuta() {
+  const idQuery = Number(route.query.resaltar)
+
+  if (!idQuery) {
+    return
+  }
+
+  idResaltado.value = idQuery
+
+  await nextTick()
+
+  const fila = document.getElementById(`fila-${idQuery}`)
+
+  if (fila) {
+    fila.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+  }
+
+  if (timeoutResaltado) {
+    window.clearTimeout(timeoutResaltado)
+  }
+
+  timeoutResaltado = window.setTimeout(() => {
+    if (idResaltado.value === idQuery) {
+      idResaltado.value = null
+    }
+  }, 3500)
+}
+
+watch(
+  () => route.query.resaltar,
+  () => {
+    aplicarResaltadoDesdeRuta()
+  }
+)
 
 const objetivosFiltrados = computed(() => {
   const texto = busqueda.value.trim().toLowerCase()
@@ -273,8 +316,15 @@ function cerrarSesion() {
   emit('logout')
 }
 
-onMounted(() => {
-  cargarDatos()
+onMounted(async () => {
+  await cargarDatos()
+  await aplicarResaltadoDesdeRuta()
+})
+
+onBeforeUnmount(() => {
+  if (timeoutResaltado) {
+    window.clearTimeout(timeoutResaltado)
+  }
 })
 </script>
 
@@ -483,6 +533,8 @@ onMounted(() => {
           <tr
             v-for="objetivo in objetivosFiltrados"
             :key="objetivo.id"
+            :id="`fila-${objetivo.id}`"
+            :class="{ 'highlight-row': idResaltado === Number(objetivo.id) }"
           >
             <td>
               <div class="cell-main">
@@ -1199,6 +1251,27 @@ tbody tr:hover {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+  }
+}
+
+.highlight-row {
+  animation: highlightPulse 3.5s ease;
+}
+
+@keyframes highlightPulse {
+  0% {
+    background: rgba(244, 162, 97, 0.24);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  45% {
+    background: rgba(244, 162, 97, 0.18);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 transparent;
   }
 }
 </style>

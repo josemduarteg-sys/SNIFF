@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import EstrategiaForm from '../components/estrategias/EstrategiaForm.vue'
@@ -26,6 +27,10 @@ const puedeGestionar = computed(() => puedeGestionarEstrategias(props.usuario))
 const esAdmin = computed(() => esAdministrador(props.usuario))
 
 const emit = defineEmits(['logout'])
+
+const route = useRoute()
+const idResaltado = ref(null)
+let timeoutResaltado = null
 
 const estrategias = ref([])
 const areas = ref([])
@@ -60,6 +65,44 @@ async function cargarEstrategias() {
     cargando.value = false
   }
 }
+
+async function aplicarResaltadoDesdeRuta() {
+  const idQuery = Number(route.query.resaltar)
+
+  if (!idQuery) {
+    return
+  }
+
+  idResaltado.value = idQuery
+
+  await nextTick()
+
+  const fila = document.getElementById(`fila-${idQuery}`)
+
+  if (fila) {
+    fila.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+  }
+
+  if (timeoutResaltado) {
+    window.clearTimeout(timeoutResaltado)
+  }
+
+  timeoutResaltado = window.setTimeout(() => {
+    if (idResaltado.value === idQuery) {
+      idResaltado.value = null
+    }
+  }, 3500)
+}
+
+watch(
+  () => route.query.resaltar,
+  () => {
+    aplicarResaltadoDesdeRuta()
+  }
+)
 
 function estadoClase(estado) {
   if (estado === 'activa' || estado === true) return 'active'
@@ -207,8 +250,15 @@ function cerrarSesion() {
   emit('logout')
 }
 
-onMounted(() => {
-  cargarEstrategias()
+onMounted(async () => {
+  await cargarEstrategias()
+  await aplicarResaltadoDesdeRuta()
+})
+
+onBeforeUnmount(() => {
+  if (timeoutResaltado) {
+    window.clearTimeout(timeoutResaltado)
+  }
 })
 </script>
 
@@ -280,6 +330,8 @@ onMounted(() => {
           <tr
             v-for="estrategia in estrategias"
             :key="estrategia.id"
+            :id="`fila-${estrategia.id}`"
+            :class="{ 'highlight-row': idResaltado === Number(estrategia.id) }"
           >
             <td>
               <div class="cell-main">{{ estrategia.nombre }}</div>
@@ -600,6 +652,27 @@ td {
   table {
     display: block;
     overflow-x: auto;
+  }
+}
+
+.highlight-row {
+  animation: highlightPulse 3.5s ease;
+}
+
+@keyframes highlightPulse {
+  0% {
+    background: rgba(244, 162, 97, 0.24);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  45% {
+    background: rgba(244, 162, 97, 0.18);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 transparent;
   }
 }
 </style>

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import SidebarMenu from './SidebarMenu.vue'
 import ProfileDropdown from './ProfileDropdown.vue'
 import { obtenerAlertasPendientes } from '../../services/alertaService'
@@ -32,6 +33,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['logout'])
+
+const router = useRouter()
 
 const sidebarContraido = ref(false)
 
@@ -77,7 +80,9 @@ const elementosMenuNotificaciones = computed(() => {
     mensaje: alerta.mensaje,
     fecha: alerta.fecha_generacion,
     tipo: alerta.tipo_alerta,
-    enlace: '/dashboard',
+    enlace: alerta.indicador
+      ? `/indicadores?resaltar=${alerta.indicador}`
+      : '/dashboard',
   }))
 
   return [...notificaciones, ...alertas]
@@ -132,10 +137,12 @@ function formatearFechaAlerta(fecha) {
     return fecha
   }
 
-  return date.toLocaleDateString('es-GT', {
+  return date.toLocaleString('es-GT', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 
@@ -168,6 +175,24 @@ async function marcarLeida(item) {
   }
 }
 
+async function abrirElementoNotificacion(item) {
+  const enlace = item.enlace || '/dashboard'
+
+  try {
+    if (item.tipoElemento === 'notificacion') {
+      await marcarNotificacionLeida(item.idOriginal)
+      await cargarCentroNotificaciones()
+    }
+
+    cerrarMenuAlertas()
+    await router.push(enlace)
+  } catch (e) {
+    console.error('No se pudo abrir la notificación:', e)
+    cerrarMenuAlertas()
+    await router.push(enlace)
+  }
+}
+
 async function marcarTodasLeidas() {
   try {
     await marcarTodasNotificacionesLeidas()
@@ -183,7 +208,11 @@ function cerrarSesion() {
 
 onMounted(() => {
   cargarCentroNotificaciones()
-  intervaloAlertas = window.setInterval(cargarCentroNotificaciones, 60000)
+  intervaloAlertas = window.setInterval(() => {
+    if (!menuAlertasAbierto.value) {
+      cargarCentroNotificaciones()
+    }
+  }, 60000)
 })
 
 onBeforeUnmount(() => {
@@ -287,8 +316,9 @@ onBeforeUnmount(() => {
                 <article
                   v-for="item in elementosMenuNotificaciones"
                   :key="item.id"
-                  class="notification-item"
+                  class="notification-item notification-clickable"
                   :class="claseAlerta(item)"
+                  @click="abrirElementoNotificacion(item)"
                 >
                   <div class="notification-icon">
                     !
@@ -303,7 +333,7 @@ onBeforeUnmount(() => {
                       <button
                         class="notification-mark-read"
                         type="button"
-                        @click="marcarLeida(item)"
+                        @click.stop="marcarLeida(item)"
                       >
                         Marcar leída
                       </button>
@@ -593,6 +623,15 @@ onBeforeUnmount(() => {
   gap: 11px;
   padding: 13px 16px;
   border-bottom: 1px solid #eef2f5;
+}
+
+.notification-clickable {
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.notification-clickable:hover {
+  background: #f8fafb;
 }
 
 .notification-icon {
