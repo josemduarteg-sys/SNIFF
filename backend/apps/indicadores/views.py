@@ -72,7 +72,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         from apps.auditoria.services import notificar_usuarios_gestion
 
-        indicador = serializer.save(creado_por=self.request.user)
+        indicador = serializer.save(creado_por=self.request.user, estado='borrador')
 
         notificar_usuarios_gestion(
             tipo='kpi_creado',

@@ -26,6 +26,17 @@ const props = defineProps({
 
 const emit = defineEmits(['guardar', 'cancelar'])
 
+const UNIDADES_MEDIDA = [
+  { valor: '%', etiqueta: '%' },
+  { valor: 'Q', etiqueta: 'Q' },
+  { valor: 'unidades', etiqueta: 'Unidades' },
+  { valor: 'días', etiqueta: 'Días' },
+  { valor: 'horas', etiqueta: 'Horas' },
+  { valor: 'cantidad', etiqueta: 'Cantidad' },
+  { valor: 'índice', etiqueta: 'Índice' },
+  { valor: 'otro', etiqueta: 'Otro' },
+]
+
 const estado = reactive({
   objetivo: '',
   frecuencia: '',
@@ -34,6 +45,7 @@ const estado = reactive({
   nombre: '',
   descripcion: '',
   unidad_medida: '',
+  unidad_personalizada: '',
   valor_meta: '',
   fecha_inicio: '',
   fecha_fin: '',
@@ -41,6 +53,34 @@ const estado = reactive({
 })
 
 const esEdicion = computed(() => Boolean(props.indicador?.id))
+
+const esPorcentaje = computed(() => estado.unidad_medida === '%')
+
+const notaFuente = computed(() => {
+  const fuente = props.fuentesDato.find(
+    (item) => Number(item.id) === Number(estado.fuente_dato)
+  )
+
+  if (!fuente) {
+    return 'Selecciona la fuente de datos que respaldará el seguimiento del KPI.'
+  }
+
+  const nombre = (fuente.nombre || '').toLowerCase()
+
+  if (nombre.includes('manual')) {
+    return 'Las mediciones de este KPI serán registradas manualmente desde el módulo de mediciones.'
+  }
+
+  if (nombre.includes('csv')) {
+    return 'Esta fuente deja el KPI preparado para carga por archivo CSV. La importación se configurará en una etapa posterior; por ahora el seguimiento puede registrarse manualmente.'
+  }
+
+  if (nombre.includes('warehouse') || nombre.includes('data')) {
+    return 'Esta fuente identifica un origen de datos institucional. La conexión automática con Data Warehouse se configurará en una etapa posterior.'
+  }
+
+  return 'Selecciona la fuente de datos que respaldará el seguimiento del KPI.'
+})
 
 const puedeEditar = computed(() => {
   if (!props.indicador) {
@@ -69,11 +109,21 @@ function cargarFormulario() {
   estado.fuente_dato = props.indicador?.fuente_dato || ''
   estado.nombre = props.indicador?.nombre || ''
   estado.descripcion = props.indicador?.descripcion || ''
-  estado.unidad_medida = props.indicador?.unidad_medida || ''
   estado.valor_meta = props.indicador?.valor_meta || ''
   estado.fecha_inicio = props.indicador?.fecha_inicio || ''
   estado.fecha_fin = props.indicador?.fecha_fin || ''
   estado.error = ''
+
+  const unidadExistente = props.indicador?.unidad_medida || ''
+  const esOpcionConocida = UNIDADES_MEDIDA.some((unidad) => unidad.valor === unidadExistente)
+
+  if (unidadExistente && !esOpcionConocida) {
+    estado.unidad_medida = 'otro'
+    estado.unidad_personalizada = unidadExistente
+  } else {
+    estado.unidad_medida = unidadExistente
+    estado.unidad_personalizada = ''
+  }
 }
 
 function validarFormulario() {
@@ -94,13 +144,23 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.unidad_medida.trim()) {
-    estado.error = 'Ingresá la unidad de medida del KPI.'
+  if (!estado.unidad_medida) {
+    estado.error = 'Seleccioná la unidad de medida del KPI.'
+    return false
+  }
+
+  if (estado.unidad_medida === 'otro' && !estado.unidad_personalizada.trim()) {
+    estado.error = 'Ingresá la unidad de medida personalizada.'
     return false
   }
 
   if (!estado.valor_meta || Number(estado.valor_meta) <= 0) {
     estado.error = 'Ingresá una meta mayor a cero.'
+    return false
+  }
+
+  if (esPorcentaje.value && (Number(estado.valor_meta) < 0 || Number(estado.valor_meta) > 100)) {
+    estado.error = 'Cuando la unidad de medida es porcentaje, la meta debe estar entre 0 y 100.'
     return false
   }
 
@@ -142,6 +202,11 @@ function guardar() {
     return
   }
 
+  const unidadFinal =
+    estado.unidad_medida === 'otro'
+      ? estado.unidad_personalizada.trim()
+      : estado.unidad_medida
+
   emit('guardar', {
     objetivo: estado.objetivo,
     frecuencia: estado.frecuencia,
@@ -149,7 +214,7 @@ function guardar() {
     fuente_dato: estado.fuente_dato,
     nombre: estado.nombre.trim(),
     descripcion: estado.descripcion.trim(),
-    unidad_medida: estado.unidad_medida.trim(),
+    unidad_medida: unidadFinal,
     valor_meta: estado.valor_meta,
     fecha_inicio: estado.fecha_inicio,
     fecha_fin: estado.fecha_fin,
@@ -213,10 +278,26 @@ function cancelar() {
       <label class="field">
         <span>Unidad de medida</span>
 
+        <select v-model="estado.unidad_medida" :disabled="!puedeEditar">
+          <option value="">Seleccionar unidad</option>
+
+          <option
+            v-for="unidad in UNIDADES_MEDIDA"
+            :key="unidad.valor"
+            :value="unidad.valor"
+          >
+            {{ unidad.etiqueta }}
+          </option>
+        </select>
+      </label>
+
+      <label v-if="estado.unidad_medida === 'otro'" class="field">
+        <span>Unidad personalizada</span>
+
         <input
-          v-model="estado.unidad_medida"
+          v-model="estado.unidad_personalizada"
           type="text"
-          placeholder="%, Q, casos, días..."
+          placeholder="Ejemplo: casos, puntos, transacciones"
           :disabled="!puedeEditar"
         />
       </label>
@@ -228,8 +309,9 @@ function cancelar() {
           v-model="estado.valor_meta"
           type="number"
           min="0"
+          :max="esPorcentaje ? 100 : undefined"
           step="0.01"
-          placeholder="Ejemplo: 100 o 300000"
+          placeholder="Ejemplo: 85.00"
           :disabled="!puedeEditar"
         />
       </label>
@@ -300,6 +382,8 @@ function cancelar() {
             {{ fuente.nombre }}
           </option>
         </select>
+
+        <p class="field-note">{{ notaFuente }}</p>
       </label>
     </div>
 
@@ -374,6 +458,14 @@ function cancelar() {
   font-size: 12px;
   font-weight: 800;
   color: #1d3557;
+}
+
+.field-note {
+  margin: 2px 2px 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: #457b9d;
+  line-height: 1.4;
 }
 
 .field input,

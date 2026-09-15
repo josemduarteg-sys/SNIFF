@@ -92,6 +92,7 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id',
             'fecha_creacion',
+            'estado',
             'fecha_autorizacion',
             'autorizado_por',
             'autorizado_por_username',
@@ -134,6 +135,18 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 'La fecha de finalización no puede ser anterior a la fecha de inicio.'
             )
+
+        unidad_medida = attrs.get('unidad_medida', getattr(instance, 'unidad_medida', None))
+        valor_meta = attrs.get('valor_meta')
+
+        if valor_meta is None and instance is not None and 'valor_meta' not in attrs:
+            valor_meta = instance.valor_meta
+
+        if unidad_medida == '%' and valor_meta is not None:
+            if valor_meta < 0 or valor_meta > 100:
+                raise serializers.ValidationError({
+                    'valor_meta': 'Cuando la unidad de medida es porcentaje, la meta debe estar entre 0 y 100.'
+                })
 
         return attrs
 
