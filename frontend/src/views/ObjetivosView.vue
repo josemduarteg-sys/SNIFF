@@ -10,6 +10,7 @@ import {
   finalizarObjetivo,
   inactivarObjetivo,
   obtenerDatosFormularioObjetivo,
+  obtenerEstrategiasParaObjetivo,
   obtenerObjetivos,
 } from '../services/objetivoService'
 import { esAdministrador, puedeGestionarObjetivos } from '../utils/permisos'
@@ -28,7 +29,8 @@ const esAdmin = computed(() => esAdministrador(props.usuario))
 const emit = defineEmits(['logout'])
 
 const objetivos = ref([])
-const estrategias = ref([])
+const estrategiasFormulario = ref([])
+const estrategiasFiltro = ref([])
 const busqueda = ref('')
 const estrategiaSeleccionada = ref('')
 const cargando = ref(false)
@@ -46,13 +48,15 @@ async function cargarDatos() {
   error.value = ''
 
   try {
-    const [objetivosData, datosFormulario] = await Promise.all([
+    const [objetivosData, datosFormulario, estrategiasTodas] = await Promise.all([
       obtenerObjetivos(),
       obtenerDatosFormularioObjetivo(),
+      obtenerEstrategiasParaObjetivo(),
     ])
 
     objetivos.value = objetivosData
-    estrategias.value = datosFormulario.estrategias
+    estrategiasFormulario.value = datosFormulario.estrategias
+    estrategiasFiltro.value = estrategiasTodas
   } catch (e) {
     error.value = 'No se pudieron cargar los objetivos.'
   } finally {
@@ -439,7 +443,7 @@ onMounted(() => {
           <option value="">Todas</option>
 
           <option
-            v-for="estrategia in estrategias"
+            v-for="estrategia in estrategiasFiltro"
             :key="estrategia.id"
             :value="estrategia.id"
           >
@@ -628,7 +632,7 @@ onMounted(() => {
 
       <ObjetivoForm
         :objetivo="objetivoSeleccionado"
-        :estrategias="estrategias"
+        :estrategias="estrategiasFormulario"
         @guardar="guardarObjetivo"
         @cancelar="cerrarModalObjetivo"
       />
