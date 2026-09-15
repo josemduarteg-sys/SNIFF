@@ -279,7 +279,10 @@ onBeforeUnmount(() => {
               <div class="notifications-header">
                 <div>
                   <strong>Centro de notificaciones</strong>
-                  <span>{{ totalNotificacionesHeader }} pendientes</span>
+                  <span>
+                    {{ notificacionesNoLeidas.length }} notificaciones ·
+                    {{ alertasParaHeader.length }} alertas KPI
+                  </span>
 
                   <button
                     v-if="notificacionesNoLeidas.length > 0"
@@ -289,6 +292,13 @@ onBeforeUnmount(() => {
                   >
                     Marcar todas
                   </button>
+
+                  <p
+                    v-else-if="alertasParaHeader.length > 0"
+                    class="notifications-helper-text"
+                  >
+                    Las alertas KPI se revisan desde el dashboard.
+                  </p>
                 </div>
 
                 <button
@@ -325,6 +335,10 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="notification-content">
+                    <span class="notification-type-label">
+                      {{ item.tipoElemento === 'notificacion' ? 'Notificación' : 'Alerta KPI' }}
+                    </span>
+
                     <strong>{{ item.titulo }}</strong>
                     <p>{{ item.mensaje }}</p>
                     <span>{{ formatearFechaAlerta(item.fecha) }}</span>
@@ -589,6 +603,13 @@ onBeforeUnmount(() => {
   text-decoration: underline;
 }
 
+.notifications-helper-text {
+  margin: 6px 0 0;
+  color: #8a9bb0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .notifications-close {
   width: 26px;
   height: 26px;
@@ -660,6 +681,25 @@ onBeforeUnmount(() => {
 
 .notification-content {
   min-width: 0;
+}
+
+.notification-type-label {
+  display: inline-block;
+  margin-bottom: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eaf5f5;
+  color: #457b9d;
+  font-size: 9.5px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.notification-item.warning .notification-type-label,
+.notification-item.danger .notification-type-label {
+  background: rgba(244, 162, 97, 0.16);
+  color: #b9701e;
 }
 
 .notification-content strong {
