@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import sniffLogo from '../../assets/images/sniff-logo.png'
 import {
+  puedeGestionarAreas,
   puedeGestionarUsuarios,
   puedeVerBitacora,
 } from '../../utils/permisos'
@@ -27,6 +28,7 @@ const inicialesUsuario = computed(() => {
 
 const mostrarUsuarios = computed(() => puedeGestionarUsuarios(props.usuario))
 const mostrarBitacora = computed(() => puedeVerBitacora(props.usuario))
+const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
 </script>
 
 <template>
@@ -100,6 +102,19 @@ const mostrarBitacora = computed(() => puedeVerBitacora(props.usuario))
       </RouterLink>
 
       <div class="nav-label top-space">Sistema</div>
+
+      <RouterLink
+        v-if="mostrarAreas"
+        to="/areas"
+        class="nav-item"
+        active-class="active"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M3 21V8l9-5 9 5v13" />
+          <path d="M9 21v-8h6v8" />
+        </svg>
+        <span>Áreas</span>
+      </RouterLink>
 
       <RouterLink to="/configuracion" class="nav-item" active-class="active">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">

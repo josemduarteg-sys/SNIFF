@@ -1,10 +1,20 @@
 from rest_framework import serializers
-from rest_framework.validators import UniqueTogetherValidator
+from rest_framework.validators import UniqueTogetherValidator, UniqueValidator
 
 from .models import Area, Estrategia, Objetivo
 
 
 class AreaSerializer(serializers.ModelSerializer):
+    nombre = serializers.CharField(
+        max_length=150,
+        validators=[
+            UniqueValidator(
+                queryset=Area.objects.all(),
+                message='Ya existe un área registrada con ese nombre.'
+            )
+        ]
+    )
+
     class Meta:
         model = Area
         fields = [

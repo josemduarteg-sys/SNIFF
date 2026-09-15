@@ -103,3 +103,7 @@ export function puedeGestionarObjetivos(usuario) {
 export function puedeVerAccionesLectura(usuario) {
   return true
 }
+
+export function puedeGestionarAreas(usuario) {
+  return esAdministrador(usuario)
+}
