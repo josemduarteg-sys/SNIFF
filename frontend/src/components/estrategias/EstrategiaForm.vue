@@ -29,6 +29,23 @@ const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar estrategia' : 'Crear estrategia'
 })
 
+const areasDisponibles = computed(() => {
+  const areaActualId = props.estrategia?.area
+  const yaIncluida = props.areas.some((area) => Number(area.id) === Number(areaActualId))
+
+  if (esEdicion.value && areaActualId && !yaIncluida) {
+    return [
+      ...props.areas,
+      {
+        id: areaActualId,
+        nombre: `${props.estrategia?.area_nombre || 'Área'} (inactiva)`,
+      },
+    ]
+  }
+
+  return props.areas
+})
+
 watch(
   () => props.estrategia,
   () => {
@@ -100,7 +117,7 @@ function cancelar() {
           <option value="">Seleccionar área</option>
 
           <option
-            v-for="area in areas"
+            v-for="area in areasDisponibles"
             :key="area.id"
             :value="area.id"
           >

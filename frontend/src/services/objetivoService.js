@@ -15,8 +15,12 @@ export async function obtenerDatosFormularioObjetivo() {
     obtenerEstrategiasParaObjetivo(),
   ])
 
+  const estrategiasPermitidas = estrategias.filter((estrategia) =>
+    ['activa', 'en_revision'].includes(estrategia.estado)
+  )
+
   return {
-    estrategias,
+    estrategias: estrategiasPermitidas,
   }
 }
 

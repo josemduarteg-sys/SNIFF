@@ -15,8 +15,10 @@ export async function obtenerDatosFormularioEstrategia() {
     obtenerAreas(),
   ])
 
+  const areasActivas = areas.filter((area) => area.estado === true)
+
   return {
-    areas,
+    areas: areasActivas,
   }
 }
 

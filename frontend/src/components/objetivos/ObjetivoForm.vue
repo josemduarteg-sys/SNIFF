@@ -1,5 +1,6 @@
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { obtenerEstrategiasParaObjetivo } from '../../services/objetivoService'
 
 const props = defineProps({
   objetivo: {
@@ -23,19 +24,89 @@ const estado = reactive({
   error: '',
 })
 
+const estrategiaFaltante = ref(null)
+
 const esEdicion = computed(() => Boolean(props.objetivo?.id))
 
 const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar objetivo' : 'Crear objetivo'
 })
 
+const estrategiasDisponibles = computed(() => {
+  const estrategiaActualId = props.objetivo?.estrategia
+
+  const yaIncluida = props.estrategias.some(
+    (estrategia) => Number(estrategia.id) === Number(estrategiaActualId)
+  )
+
+  const lista = props.estrategias.map((estrategia) => ({
+    id: estrategia.id,
+    nombre: agregarSufijoEstado(estrategia.nombre, estrategia.estado),
+  }))
+
+  if (esEdicion.value && estrategiaActualId && !yaIncluida) {
+    const nombreBase =
+      estrategiaFaltante.value?.nombre || props.objetivo?.estrategia_nombre || 'Estrategia'
+
+    lista.push({
+      id: estrategiaActualId,
+      nombre: agregarSufijoEstado(nombreBase, estrategiaFaltante.value?.estado, true),
+    })
+  }
+
+  return lista
+})
+
+function agregarSufijoEstado(nombre, estadoEstrategia, esFallback = false) {
+  if (estadoEstrategia === 'finalizada') {
+    return `${nombre} (finalizada)`
+  }
+
+  if (estadoEstrategia === 'inactiva') {
+    return `${nombre} (inactiva)`
+  }
+
+  if (estadoEstrategia === 'en_revision') {
+    return `${nombre} (en revisión)`
+  }
+
+  return esFallback ? `${nombre} (no disponible)` : nombre
+}
+
 watch(
   () => props.objetivo,
   () => {
     cargarFormulario()
+    cargarEstrategiaFaltante()
   },
   { immediate: true }
 )
+
+async function cargarEstrategiaFaltante() {
+  estrategiaFaltante.value = null
+
+  const estrategiaActualId = props.objetivo?.estrategia
+
+  if (!estrategiaActualId) {
+    return
+  }
+
+  const yaIncluida = props.estrategias.some(
+    (estrategia) => Number(estrategia.id) === Number(estrategiaActualId)
+  )
+
+  if (yaIncluida) {
+    return
+  }
+
+  try {
+    const todas = await obtenerEstrategiasParaObjetivo()
+    estrategiaFaltante.value =
+      todas.find((estrategia) => Number(estrategia.id) === Number(estrategiaActualId)) || null
+  } catch {
+    estrategiaFaltante.value = null
+  }
+}
 
 function cargarFormulario() {
   estado.estrategia = props.objetivo?.estrategia || ''
@@ -100,7 +171,7 @@ function cancelar() {
           <option value="">Seleccionar estrategia</option>
 
           <option
-            v-for="estrategia in estrategias"
+            v-for="estrategia in estrategiasDisponibles"
             :key="estrategia.id"
             :value="estrategia.id"
           >
