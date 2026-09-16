@@ -9,6 +9,7 @@ import IndicadoresView from '../views/IndicadoresView.vue'
 import MedicionesView from '../views/MedicionesView.vue'
 import ConfiguracionView from '../views/ConfiguracionView.vue'
 import AreasView from '../views/AreasView.vue'
+import UsuariosView from '../views/UsuariosView.vue'
 
 const routes = [
   {
@@ -77,6 +78,14 @@ const routes = [
     path: '/areas',
     name: 'areas',
     component: AreasView,
+    meta: {
+      requiresAuth: true,
+    },
+  },
+  {
+    path: '/usuarios',
+    name: 'usuarios',
+    component: UsuariosView,
     meta: {
       requiresAuth: true,
     },
