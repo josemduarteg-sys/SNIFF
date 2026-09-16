@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.usuarios.permissions import es_administrador
+from apps.usuarios.permissions import EsAdministradorSistema, es_administrador
 
 from .models import Bitacora, Notificacion
 from .serializers import BitacoraSerializer, NotificacionSerializer
@@ -14,7 +14,7 @@ class BitacoraViewSet(viewsets.ReadOnlyModelViewSet):
         'usuario',
     ).all().order_by('-fecha_hora')
     serializer_class = BitacoraSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [EsAdministradorSistema]
 
 
 class NotificacionViewSet(viewsets.ReadOnlyModelViewSet):

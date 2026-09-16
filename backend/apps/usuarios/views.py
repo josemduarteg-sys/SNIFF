@@ -29,7 +29,49 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     serializer_class = UsuarioSerializer
     permission_classes = [IsAuthenticated, EsAdministradorSistema]
 
+    def perform_create(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        usuario_creado = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Usuarios',
+            descripcion=f'Creó el usuario {usuario_creado.username}.',
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        estaba_inactivo = (
+            serializer.instance.estado is False or serializer.instance.is_active is False
+        )
+
+        usuario_actualizado = serializer.save()
+
+        quedo_activo = (
+            usuario_actualizado.estado is not False
+            and usuario_actualizado.is_active is not False
+        )
+
+        if estaba_inactivo and quedo_activo:
+            descripcion = f'Reactivó el usuario {usuario_actualizado.username}.'
+        else:
+            descripcion = f'Actualizó datos del usuario {usuario_actualizado.username}.'
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Usuarios',
+            descripcion=descripcion,
+            request=self.request,
+        )
+
     def destroy(self, request, *args, **kwargs):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         usuario = self.get_object()
 
         if usuario.id == request.user.id:
@@ -41,6 +83,14 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         usuario.estado = False
         usuario.is_active = False
         usuario.save(update_fields=['estado', 'is_active'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='eliminar',
+            modulo='Usuarios',
+            descripcion=f'Inactivó el usuario {usuario.username}.',
+            request=request,
+        )
 
         return Response(
             {'detail': 'Usuario inactivado correctamente.'},
@@ -94,7 +144,7 @@ class SolicitarRestablecimientoPasswordView(APIView):
     )
 
     def post(self, request):
-        from apps.auditoria.services import notificar_administradores
+        from apps.auditoria.services import notificar_administradores, registrar_bitacora_seguro
 
         serializer = SolicitarRestablecimientoPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -120,6 +170,16 @@ class SolicitarRestablecimientoPasswordView(APIView):
                     motivo=motivo,
                 )
 
+                registrar_bitacora_seguro(
+                    usuario=usuario,
+                    accion='crear',
+                    modulo='Restablecimiento de contraseña',
+                    descripcion=(
+                        f'El usuario {usuario.username} solicitó restablecimiento de contraseña.'
+                    ),
+                    request=request,
+                )
+
                 notificar_administradores(
                     tipo='solicitud_restablecimiento_password',
                     titulo='Solicitud de restablecimiento de contraseña',
@@ -141,6 +201,8 @@ class SolicitudRestablecimientoPasswordViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'])
     def aprobar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         solicitud = self.get_object()
 
         if solicitud.estado != 'pendiente':
@@ -159,11 +221,24 @@ class SolicitudRestablecimientoPasswordViewSet(viewsets.ReadOnlyModelViewSet):
             update_fields=['estado', 'revisado_por', 'fecha_revision', 'observacion_admin']
         )
 
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Restablecimiento de contraseña',
+            descripcion=(
+                f'Aprobó la solicitud de restablecimiento #{solicitud.id} '
+                f'del usuario {solicitud.usuario.username}.'
+            ),
+            request=request,
+        )
+
         serializer = self.get_serializer(solicitud)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def rechazar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         solicitud = self.get_object()
 
         if solicitud.estado != 'pendiente':
@@ -182,11 +257,24 @@ class SolicitudRestablecimientoPasswordViewSet(viewsets.ReadOnlyModelViewSet):
             update_fields=['estado', 'revisado_por', 'fecha_revision', 'observacion_admin']
         )
 
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Restablecimiento de contraseña',
+            descripcion=(
+                f'Rechazó la solicitud de restablecimiento #{solicitud.id} '
+                f'del usuario {solicitud.usuario.username}.'
+            ),
+            request=request,
+        )
+
         serializer = self.get_serializer(solicitud)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='asignar-password-temporal')
     def asignar_password_temporal(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         solicitud = self.get_object()
 
         if solicitud.estado not in ('pendiente', 'aprobada'):
@@ -223,6 +311,17 @@ class SolicitudRestablecimientoPasswordViewSet(viewsets.ReadOnlyModelViewSet):
         solicitud.atendido_por = request.user
         solicitud.fecha_atencion = ahora
         solicitud.save()
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Restablecimiento de contraseña',
+            descripcion=(
+                f'Asignó contraseña temporal al usuario {solicitud.usuario.username} '
+                f'mediante la solicitud #{solicitud.id}.'
+            ),
+            request=request,
+        )
 
         return Response(
             {'detail': 'Contraseña temporal asignada correctamente.'},

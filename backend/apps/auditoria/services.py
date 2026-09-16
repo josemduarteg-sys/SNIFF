@@ -1,6 +1,10 @@
+import logging
+
 from django.db.models import Q
 
 from .models import Bitacora, Notificacion
+
+logger = logging.getLogger(__name__)
 
 
 def obtener_ip_usuario(request):
@@ -25,6 +29,27 @@ def registrar_bitacora(usuario, accion, modulo, descripcion, request=None):
         descripcion=descripcion,
         ip_usuario=ip_usuario,
     )
+
+
+def registrar_bitacora_seguro(usuario, accion, modulo, descripcion, request=None):
+    """Igual que registrar_bitacora, pero nunca interrumpe la acción principal
+    si el registro falla — solo lo deja loggeado."""
+    try:
+        return registrar_bitacora(
+            usuario=usuario,
+            accion=accion,
+            modulo=modulo,
+            descripcion=descripcion,
+            request=request,
+        )
+    except Exception:
+        logger.exception(
+            'No se pudo registrar en bitácora (usuario=%s, accion=%s, modulo=%s).',
+            getattr(usuario, 'username', usuario),
+            accion,
+            modulo,
+        )
+        return None
 
 
 def crear_notificacion(usuario_destino, tipo, titulo, mensaje, enlace=None):

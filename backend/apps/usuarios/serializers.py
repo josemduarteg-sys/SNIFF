@@ -194,10 +194,32 @@ class CambiarPasswordSerializer(serializers.Serializer):
         return attrs
 
     def save(self, **kwargs):
-        usuario = self.context['request'].user
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        request = self.context.get('request')
+        usuario = request.user
+        venia_de_password_temporal = usuario.debe_cambiar_password
+
         usuario.set_password(self.validated_data['password_nuevo'])
         usuario.debe_cambiar_password = False
         usuario.save()
+
+        if venia_de_password_temporal:
+            descripcion = (
+                f'El usuario {usuario.username} completó el cambio obligatorio '
+                f'de contraseña temporal.'
+            )
+        else:
+            descripcion = f'El usuario {usuario.username} cambió su contraseña.'
+
+        registrar_bitacora_seguro(
+            usuario=usuario,
+            accion='actualizar',
+            modulo='Contraseña',
+            descripcion=descripcion,
+            request=request,
+        )
+
         return usuario
 
 
