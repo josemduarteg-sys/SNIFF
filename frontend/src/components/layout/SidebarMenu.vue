@@ -131,6 +131,21 @@ const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
         <span>Usuarios</span>
       </RouterLink>
 
+      <RouterLink
+        v-if="mostrarBitacora"
+        to="/bitacora"
+        class="nav-item"
+        active-class="active"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />
+          <path d="M9 7h7" />
+          <path d="M9 11h7" />
+        </svg>
+        <span>Bitácora</span>
+      </RouterLink>
+
       <RouterLink to="/configuracion" class="nav-item" active-class="active">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="3" />

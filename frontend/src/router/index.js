@@ -11,6 +11,7 @@ import ConfiguracionView from '../views/ConfiguracionView.vue'
 import AreasView from '../views/AreasView.vue'
 import UsuariosView from '../views/UsuariosView.vue'
 import CambioPasswordObligatorioView from '../views/CambioPasswordObligatorioView.vue'
+import BitacoraView from '../views/BitacoraView.vue'
 
 const routes = [
   {
@@ -98,6 +99,14 @@ const routes = [
     meta: {
       requiresAuth: true,
       permitePasswordTemporal: true,
+    },
+  },
+  {
+    path: '/bitacora',
+    name: 'bitacora',
+    component: BitacoraView,
+    meta: {
+      requiresAuth: true,
     },
   },
 ]
