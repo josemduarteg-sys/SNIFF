@@ -1,7 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from .models import Rol, Usuario
+from .models import Rol, SolicitudRestablecimientoPassword, Usuario
 
 
 class RolSerializer(serializers.ModelSerializer):
@@ -39,6 +39,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
             'is_superuser',
             'ultimo_acceso',
             'date_joined',
+            'debe_cambiar_password',
             'password',
         ]
         read_only_fields = [
@@ -48,6 +49,7 @@ class UsuarioSerializer(serializers.ModelSerializer):
             'nombre_completo',
             'rol_nombre',
             'is_superuser',
+            'debe_cambiar_password',
         ]
 
     def get_nombre_completo(self, obj):
@@ -55,6 +57,14 @@ class UsuarioSerializer(serializers.ModelSerializer):
         return nombre if nombre else obj.username
 
     def validate(self, attrs):
+        if self.instance is not None and attrs.get('password'):
+            raise serializers.ValidationError({
+                'password': (
+                    'Para restablecer la contraseña se requiere una solicitud '
+                    'de restablecimiento válida.'
+                )
+            })
+
         correo = attrs.get('correo')
         email = attrs.get('email')
 
@@ -125,6 +135,7 @@ class UsuarioActualSerializer(serializers.ModelSerializer):
             'is_staff',
             'is_superuser',
             'ultimo_acceso',
+            'debe_cambiar_password',
         ]
         read_only_fields = [
             'id',
@@ -136,6 +147,7 @@ class UsuarioActualSerializer(serializers.ModelSerializer):
             'is_staff',
             'is_superuser',
             'ultimo_acceso',
+            'debe_cambiar_password',
         ]
 
     def get_nombre_completo(self, obj):
@@ -184,5 +196,59 @@ class CambiarPasswordSerializer(serializers.Serializer):
     def save(self, **kwargs):
         usuario = self.context['request'].user
         usuario.set_password(self.validated_data['password_nuevo'])
+        usuario.debe_cambiar_password = False
         usuario.save()
         return usuario
+
+
+class SolicitarRestablecimientoPasswordSerializer(serializers.Serializer):
+    identificador = serializers.CharField()
+    motivo = serializers.CharField(required=False, allow_blank=True)
+
+
+class SolicitudRestablecimientoPasswordSerializer(serializers.ModelSerializer):
+    usuario_nombre = serializers.SerializerMethodField()
+    usuario_username = serializers.CharField(source='usuario.username', read_only=True)
+    usuario_correo = serializers.CharField(source='usuario.correo', read_only=True)
+    revisado_por_nombre = serializers.SerializerMethodField()
+    atendido_por_nombre = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SolicitudRestablecimientoPassword
+        fields = [
+            'id',
+            'usuario',
+            'usuario_nombre',
+            'usuario_username',
+            'usuario_correo',
+            'identificador_ingresado',
+            'motivo',
+            'estado',
+            'fecha_solicitud',
+            'fecha_revision',
+            'fecha_atencion',
+            'revisado_por',
+            'revisado_por_nombre',
+            'atendido_por',
+            'atendido_por_nombre',
+            'observacion_admin',
+        ]
+        read_only_fields = fields
+
+    def get_usuario_nombre(self, obj):
+        nombre = obj.usuario.get_full_name()
+        return nombre if nombre else obj.usuario.username
+
+    def get_revisado_por_nombre(self, obj):
+        if not obj.revisado_por:
+            return None
+
+        nombre = obj.revisado_por.get_full_name()
+        return nombre if nombre else obj.revisado_por.username
+
+    def get_atendido_por_nombre(self, obj):
+        if not obj.atendido_por:
+            return None
+
+        nombre = obj.atendido_por.get_full_name()
+        return nombre if nombre else obj.atendido_por.username

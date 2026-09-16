@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { estaAutenticado } from '../services/authService'
+import { debeCambiarPassword, estaAutenticado } from '../services/authService'
 
 import LoginView from '../views/LoginView.vue'
 import DashboardView from '../views/DashboardView.vue'
@@ -10,6 +10,7 @@ import MedicionesView from '../views/MedicionesView.vue'
 import ConfiguracionView from '../views/ConfiguracionView.vue'
 import AreasView from '../views/AreasView.vue'
 import UsuariosView from '../views/UsuariosView.vue'
+import CambioPasswordObligatorioView from '../views/CambioPasswordObligatorioView.vue'
 
 const routes = [
   {
@@ -90,6 +91,15 @@ const routes = [
       requiresAuth: true,
     },
   },
+  {
+    path: '/cambio-password-obligatorio',
+    name: 'cambio-password-obligatorio',
+    component: CambioPasswordObligatorioView,
+    meta: {
+      requiresAuth: true,
+      permitePasswordTemporal: true,
+    },
+  },
 ]
 
 const router = createRouter({
@@ -104,7 +114,19 @@ router.beforeEach((to) => {
     return '/login'
   }
 
+  if (autenticado && debeCambiarPassword()) {
+    if (!to.meta.permitePasswordTemporal) {
+      return '/cambio-password-obligatorio'
+    }
+
+    return true
+  }
+
   if (to.path === '/login' && autenticado) {
+    return '/dashboard'
+  }
+
+  if (to.path === '/cambio-password-obligatorio' && autenticado) {
     return '/dashboard'
   }
 

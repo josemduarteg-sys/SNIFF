@@ -21,6 +21,10 @@ async function cargarSesion() {
 
   try {
     usuario.value = await obtenerUsuarioActual()
+
+    if (usuario.value?.debe_cambiar_password && router.currentRoute.value.path !== '/cambio-password-obligatorio') {
+      router.replace('/cambio-password-obligatorio')
+    }
   } catch (error) {
     logout()
     usuario.value = null
@@ -32,13 +36,17 @@ async function cargarSesion() {
 
 function manejarLoginExitoso(usuarioAutenticado) {
   usuario.value = usuarioAutenticado
-  router.push('/dashboard')
+  router.push(usuarioAutenticado?.debe_cambiar_password ? '/cambio-password-obligatorio' : '/dashboard')
 }
 
 function manejarLogout() {
   logout()
   usuario.value = null
   router.push('/login')
+}
+
+function manejarUsuarioActualizado(usuarioActualizado) {
+  usuario.value = usuarioActualizado
 }
 
 onMounted(() => {
@@ -57,6 +65,7 @@ onMounted(() => {
       :usuario="usuario"
       @login-success="manejarLoginExitoso"
       @logout="manejarLogout"
+      @usuario-actualizado="manejarUsuarioActualizado"
     />
   </router-view>
 </template>

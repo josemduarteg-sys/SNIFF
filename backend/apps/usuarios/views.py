@@ -1,13 +1,18 @@
+from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status, viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Rol, Usuario
+from .models import Rol, SolicitudRestablecimientoPassword, Usuario
 from .permissions import EsAdministradorSistema
 from .serializers import (
     CambiarPasswordSerializer,
     RolSerializer,
+    SolicitarRestablecimientoPasswordSerializer,
+    SolicitudRestablecimientoPasswordSerializer,
     UsuarioActualSerializer,
     UsuarioSerializer,
 )
@@ -77,5 +82,149 @@ class CambiarPasswordView(APIView):
 
         return Response(
             {'detail': 'Contraseña actualizada correctamente.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+class SolicitarRestablecimientoPasswordView(APIView):
+    permission_classes = [AllowAny]
+
+    MENSAJE_GENERICO = (
+        'Si la cuenta existe, la solicitud fue enviada para revisión administrativa.'
+    )
+
+    def post(self, request):
+        from apps.auditoria.services import notificar_administradores
+
+        serializer = SolicitarRestablecimientoPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        identificador = serializer.validated_data['identificador'].strip()
+        motivo = serializer.validated_data.get('motivo', '').strip()
+
+        usuario = Usuario.objects.filter(
+            Q(username__iexact=identificador) | Q(correo__iexact=identificador),
+            is_active=True,
+        ).first()
+
+        if usuario:
+            ya_tiene_solicitud_activa = SolicitudRestablecimientoPassword.objects.filter(
+                usuario=usuario,
+                estado__in=['pendiente', 'aprobada'],
+            ).exists()
+
+            if not ya_tiene_solicitud_activa:
+                solicitud = SolicitudRestablecimientoPassword.objects.create(
+                    usuario=usuario,
+                    identificador_ingresado=identificador,
+                    motivo=motivo,
+                )
+
+                notificar_administradores(
+                    tipo='solicitud_restablecimiento_password',
+                    titulo='Solicitud de restablecimiento de contraseña',
+                    mensaje=f'El usuario {usuario.username} solicitó restablecer su contraseña.',
+                    enlace=f'/usuarios?tab=solicitudes&resaltarSolicitud={solicitud.id}',
+                )
+
+        return Response({'detail': self.MENSAJE_GENERICO}, status=status.HTTP_200_OK)
+
+
+class SolicitudRestablecimientoPasswordViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = SolicitudRestablecimientoPassword.objects.select_related(
+        'usuario',
+        'revisado_por',
+        'atendido_por',
+    ).all()
+    serializer_class = SolicitudRestablecimientoPasswordSerializer
+    permission_classes = [IsAuthenticated, EsAdministradorSistema]
+
+    @action(detail=True, methods=['post'])
+    def aprobar(self, request, pk=None):
+        solicitud = self.get_object()
+
+        if solicitud.estado != 'pendiente':
+            return Response(
+                {'detail': 'Solo se pueden aprobar solicitudes pendientes.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        solicitud.estado = 'aprobada'
+        solicitud.revisado_por = request.user
+        solicitud.fecha_revision = timezone.now()
+        solicitud.observacion_admin = request.data.get(
+            'observacion_admin', solicitud.observacion_admin
+        )
+        solicitud.save(
+            update_fields=['estado', 'revisado_por', 'fecha_revision', 'observacion_admin']
+        )
+
+        serializer = self.get_serializer(solicitud)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def rechazar(self, request, pk=None):
+        solicitud = self.get_object()
+
+        if solicitud.estado != 'pendiente':
+            return Response(
+                {'detail': 'Solo se pueden rechazar solicitudes pendientes.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        solicitud.estado = 'rechazada'
+        solicitud.revisado_por = request.user
+        solicitud.fecha_revision = timezone.now()
+        solicitud.observacion_admin = request.data.get(
+            'observacion_admin', solicitud.observacion_admin
+        )
+        solicitud.save(
+            update_fields=['estado', 'revisado_por', 'fecha_revision', 'observacion_admin']
+        )
+
+        serializer = self.get_serializer(solicitud)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='asignar-password-temporal')
+    def asignar_password_temporal(self, request, pk=None):
+        solicitud = self.get_object()
+
+        if solicitud.estado not in ('pendiente', 'aprobada'):
+            return Response(
+                {
+                    'detail': (
+                        'Solo se puede asignar contraseña temporal a solicitudes '
+                        'pendientes o aprobadas.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        password_temporal = request.data.get('password_temporal')
+
+        if not password_temporal:
+            return Response(
+                {'detail': 'Debe enviar la contraseña temporal.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        usuario = solicitud.usuario
+        usuario.set_password(password_temporal)
+        usuario.debe_cambiar_password = True
+        usuario.save(update_fields=['password', 'debe_cambiar_password'])
+
+        ahora = timezone.now()
+
+        if solicitud.estado == 'pendiente':
+            solicitud.revisado_por = request.user
+            solicitud.fecha_revision = ahora
+
+        solicitud.estado = 'atendida'
+        solicitud.atendido_por = request.user
+        solicitud.fecha_atencion = ahora
+        solicitud.save()
+
+        return Response(
+            {'detail': 'Contraseña temporal asignada correctamente.'},
             status=status.HTTP_200_OK,
         )

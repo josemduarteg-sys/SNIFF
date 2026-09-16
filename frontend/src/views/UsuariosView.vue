@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import UserModal from '../components/configuracion/UserModal.vue'
@@ -10,6 +11,12 @@ import {
   obtenerRoles,
   obtenerUsuarios,
 } from '../services/usuarioService'
+import {
+  aprobarSolicitudRestablecimiento,
+  asignarPasswordTemporal,
+  obtenerSolicitudesRestablecimiento,
+  rechazarSolicitudRestablecimiento,
+} from '../services/solicitudRestablecimientoService'
 import { puedeGestionarUsuarios } from '../utils/permisos'
 
 const props = defineProps({
@@ -22,7 +29,12 @@ const props = defineProps({
 
 const emit = defineEmits(['logout'])
 
+const route = useRoute()
+const router = useRouter()
+
 const puedeGestionar = computed(() => puedeGestionarUsuarios(props.usuario))
+
+const tabActiva = ref('usuarios')
 
 const usuarios = ref([])
 const roles = ref([])
@@ -30,10 +42,20 @@ const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
 
+const busquedaUsuarios = ref('')
+
 const modalUsuarioAbierto = ref(false)
 const usuarioSeleccionado = ref(null)
 const guardandoUsuario = ref(false)
 const errorModalUsuario = ref('')
+
+const solicitudes = ref([])
+const cargandoSolicitudes = ref(false)
+const errorSolicitudes = ref('')
+const solicitudResaltada = ref(null)
+let timeoutSolicitudResaltada = null
+
+const busquedaSolicitudes = ref('')
 
 const totalUsuarios = computed(() => usuarios.value.length)
 
@@ -47,6 +69,72 @@ const usuariosInactivos = computed(() => {
   return usuarios.value.filter(
     (item) => item.estado === false || item.is_active === false
   ).length
+})
+
+const usuariosFiltrados = computed(() => {
+  const termino = busquedaUsuarios.value.trim().toLowerCase()
+
+  if (!termino) {
+    return usuarios.value
+  }
+
+  return usuarios.value.filter((item) => {
+    const nombreCompleto = `${item.first_name || ''} ${item.last_name || ''}`.toLowerCase()
+    const username = String(item.username || '').toLowerCase()
+    const correo = String(item.email || item.correo || '').toLowerCase()
+    const rol = String(rolNombre(item.rol) || item.rol_nombre || item.nombre_rol || '').toLowerCase()
+    const estado = textoEstadoUsuario(item).toLowerCase()
+
+    return (
+      username.includes(termino) ||
+      nombreCompleto.includes(termino) ||
+      correo.includes(termino) ||
+      rol.includes(termino) ||
+      estado.includes(termino)
+    )
+  })
+})
+
+const solicitudesPendientes = computed(() => {
+  return solicitudes.value.filter((s) => s.estado === 'pendiente').length
+})
+
+const solicitudesAprobadas = computed(() => {
+  return solicitudes.value.filter((s) => s.estado === 'aprobada').length
+})
+
+const solicitudesRechazadas = computed(() => {
+  return solicitudes.value.filter((s) => s.estado === 'rechazada').length
+})
+
+const solicitudesAtendidas = computed(() => {
+  return solicitudes.value.filter((s) => s.estado === 'atendida').length
+})
+
+const solicitudesFiltradas = computed(() => {
+  const termino = busquedaSolicitudes.value.trim().toLowerCase()
+
+  if (!termino) {
+    return solicitudes.value
+  }
+
+  return solicitudes.value.filter((item) => {
+    const username = String(item.usuario_username || '').toLowerCase()
+    const nombre = String(item.usuario_nombre || '').toLowerCase()
+    const correo = String(item.usuario_correo || '').toLowerCase()
+    const identificador = String(item.identificador_ingresado || '').toLowerCase()
+    const motivo = String(item.motivo || '').toLowerCase()
+    const estado = String(item.estado || '').toLowerCase()
+
+    return (
+      username.includes(termino) ||
+      nombre.includes(termino) ||
+      correo.includes(termino) ||
+      identificador.includes(termino) ||
+      motivo.includes(termino) ||
+      estado.includes(termino)
+    )
+  })
 })
 
 async function cargarUsuariosYRoles() {
@@ -69,6 +157,180 @@ async function cargarUsuariosYRoles() {
     error.value = 'No se pudieron cargar los usuarios.'
   } finally {
     cargando.value = false
+  }
+}
+
+async function cargarSolicitudesRestablecimiento() {
+  if (!puedeGestionar.value) {
+    return
+  }
+
+  cargandoSolicitudes.value = true
+  errorSolicitudes.value = ''
+
+  try {
+    solicitudes.value = await obtenerSolicitudesRestablecimiento()
+  } catch (e) {
+    errorSolicitudes.value = obtenerMensajeError(
+      e,
+      'No se pudieron cargar las solicitudes de restablecimiento.'
+    )
+  } finally {
+    cargandoSolicitudes.value = false
+  }
+}
+
+async function cambiarTab(tab) {
+  tabActiva.value = tab
+
+  await router.replace({
+    path: '/usuarios',
+    query: tab === 'solicitudes' ? { tab: 'solicitudes' } : {},
+  })
+
+  if (tab === 'solicitudes') {
+    await cargarSolicitudesRestablecimiento()
+  }
+}
+
+async function aplicarResaltadoSolicitudDesdeRuta() {
+  const idQuery = Number(route.query.resaltarSolicitud)
+
+  if (!idQuery) {
+    return
+  }
+
+  tabActiva.value = 'solicitudes'
+
+  await cargarSolicitudesRestablecimiento()
+
+  solicitudResaltada.value = idQuery
+
+  await nextTick()
+
+  const fila = document.getElementById(`fila-solicitud-${idQuery}`)
+
+  if (fila) {
+    fila.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+  }
+
+  if (timeoutSolicitudResaltada) {
+    window.clearTimeout(timeoutSolicitudResaltada)
+  }
+
+  timeoutSolicitudResaltada = window.setTimeout(() => {
+    if (solicitudResaltada.value === idQuery) {
+      solicitudResaltada.value = null
+    }
+  }, 3500)
+}
+
+watch(
+  () => route.query.tab,
+  async (tab) => {
+    tabActiva.value = tab === 'solicitudes' ? 'solicitudes' : 'usuarios'
+
+    if (tabActiva.value === 'solicitudes' && puedeGestionar.value) {
+      await cargarSolicitudesRestablecimiento()
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () => route.query.resaltarSolicitud,
+  () => {
+    aplicarResaltadoSolicitudDesdeRuta()
+  }
+)
+
+function textoEstadoSolicitud(estado) {
+  const mapa = {
+    pendiente: 'Pendiente',
+    aprobada: 'Aprobada',
+    rechazada: 'Rechazada',
+    atendida: 'Atendida',
+  }
+
+  return mapa[estado] || estado || 'Sin estado'
+}
+
+function claseEstadoSolicitud(estado) {
+  return {
+    'status-pending': estado === 'pendiente',
+    'status-active': estado === 'aprobada',
+    'status-inactive': estado === 'rechazada',
+    'status-done': estado === 'atendida',
+  }
+}
+
+async function manejarAprobarSolicitud(solicitud) {
+  const confirmar = window.confirm(
+    `¿Confirmás aprobar la solicitud de "${solicitud.usuario_username}"?`
+  )
+
+  if (!confirmar) return
+
+  const observacion = window.prompt('Observación administrativa opcional:', '')
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await aprobarSolicitudRestablecimiento(solicitud.id, { observacion_admin: observacion || '' })
+    mensaje.value = 'Solicitud aprobada correctamente.'
+    await cargarSolicitudesRestablecimiento()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo aprobar la solicitud.')
+  }
+}
+
+async function manejarRechazarSolicitud(solicitud) {
+  const confirmar = window.confirm(
+    `¿Confirmás rechazar la solicitud de "${solicitud.usuario_username}"?`
+  )
+
+  if (!confirmar) return
+
+  const observacion = window.prompt('Motivo del rechazo:', '')
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await rechazarSolicitudRestablecimiento(solicitud.id, { observacion_admin: observacion || '' })
+    mensaje.value = 'Solicitud rechazada correctamente.'
+    await cargarSolicitudesRestablecimiento()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo rechazar la solicitud.')
+  }
+}
+
+async function manejarAsignarPasswordTemporal(solicitud) {
+  const passwordTemporal = window.prompt('Ingrese la contraseña temporal:', '')
+
+  if (!passwordTemporal || !passwordTemporal.trim()) {
+    return
+  }
+
+  const confirmar = window.confirm(
+    '¿Confirmás asignar esta contraseña temporal? El usuario deberá cambiarla al iniciar sesión.'
+  )
+
+  if (!confirmar) return
+
+  error.value = ''
+  mensaje.value = ''
+
+  try {
+    await asignarPasswordTemporal(solicitud.id, { password_temporal: passwordTemporal })
+    mensaje.value = 'Contraseña temporal asignada correctamente.'
+    await cargarSolicitudesRestablecimiento()
+  } catch (e) {
+    error.value = obtenerMensajeError(e, 'No se pudo asignar la contraseña temporal.')
   }
 }
 
@@ -207,8 +469,19 @@ function cerrarSesion() {
   emit('logout')
 }
 
-onMounted(() => {
-  cargarUsuariosYRoles()
+onMounted(async () => {
+  await Promise.all([
+    cargarUsuariosYRoles(),
+    cargarSolicitudesRestablecimiento(),
+  ])
+
+  await aplicarResaltadoSolicitudDesdeRuta()
+})
+
+onBeforeUnmount(() => {
+  if (timeoutSolicitudResaltada) {
+    window.clearTimeout(timeoutSolicitudResaltada)
+  }
 })
 </script>
 
@@ -220,7 +493,7 @@ onMounted(() => {
     breadcrumb-actual="Usuarios"
     @logout="cerrarSesion"
   >
-    <template v-if="puedeGestionar" #actions>
+    <template v-if="puedeGestionar && tabActiva === 'usuarios'" #actions>
       <button class="btn-primary" type="button" @click="abrirNuevoUsuario">
         + Nuevo usuario
       </button>
@@ -232,6 +505,26 @@ onMounted(() => {
     </div>
 
     <template v-else>
+      <div class="tabs">
+        <button
+          class="tab-btn"
+          type="button"
+          :class="{ active: tabActiva === 'usuarios' }"
+          @click="cambiarTab('usuarios')"
+        >
+          Usuarios
+        </button>
+
+        <button
+          class="tab-btn"
+          type="button"
+          :class="{ active: tabActiva === 'solicitudes' }"
+          @click="cambiarTab('solicitudes')"
+        >
+          Solicitudes de restablecimiento
+        </button>
+      </div>
+
       <div v-if="mensaje" class="alert success">
         {{ mensaje }}
       </div>
@@ -240,7 +533,7 @@ onMounted(() => {
         {{ error }}
       </div>
 
-      <section class="summary-grid">
+      <section v-if="tabActiva === 'usuarios'" class="summary-grid">
         <article class="summary-card">
           <span>Total de usuarios</span>
           <strong>{{ totalUsuarios }}</strong>
@@ -260,7 +553,7 @@ onMounted(() => {
         </article>
       </section>
 
-      <section class="card-panel">
+      <section v-if="tabActiva === 'usuarios'" class="card-panel">
         <div class="panel-head">
           <div>
             <h2>Listado de usuarios</h2>
@@ -268,12 +561,20 @@ onMounted(() => {
           </div>
         </div>
 
+        <div class="search-box">
+          <input
+            v-model="busquedaUsuarios"
+            type="text"
+            placeholder="Buscar por usuario, nombre, correo, rol o estado..."
+          />
+        </div>
+
         <div v-if="cargando" class="message">
           Cargando usuarios...
         </div>
 
-        <div v-else-if="!usuarios.length" class="empty-state">
-          No hay usuarios registrados todavía.
+        <div v-else-if="!usuariosFiltrados.length" class="empty-state">
+          No hay usuarios para mostrar.
         </div>
 
         <table v-else>
@@ -291,7 +592,7 @@ onMounted(() => {
 
           <tbody>
             <tr
-              v-for="item in usuarios"
+              v-for="item in usuariosFiltrados"
               :key="item.id"
             >
               <td>
@@ -357,6 +658,165 @@ onMounted(() => {
                   >
                     Reactivar
                   </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section v-if="tabActiva === 'solicitudes'" class="summary-grid">
+        <article class="summary-card">
+          <span>Pendientes</span>
+          <strong>{{ solicitudesPendientes }}</strong>
+          <p>Esperando revisión administrativa</p>
+        </article>
+
+        <article class="summary-card">
+          <span>Aprobadas</span>
+          <strong>{{ solicitudesAprobadas }}</strong>
+          <p>Falta asignar contraseña temporal</p>
+        </article>
+
+        <article class="summary-card">
+          <span>Rechazadas</span>
+          <strong>{{ solicitudesRechazadas }}</strong>
+          <p>No autorizadas por administración</p>
+        </article>
+
+        <article class="summary-card">
+          <span>Atendidas</span>
+          <strong>{{ solicitudesAtendidas }}</strong>
+          <p>Con contraseña temporal asignada</p>
+        </article>
+      </section>
+
+      <section v-if="tabActiva === 'solicitudes'" class="card-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Solicitudes de restablecimiento</h2>
+            <p>Usuarios que solicitaron restablecer su contraseña por no poder iniciar sesión.</p>
+          </div>
+
+          <button
+            class="action-btn"
+            type="button"
+            :disabled="cargandoSolicitudes"
+            @click="cargarSolicitudesRestablecimiento"
+          >
+            Actualizar
+          </button>
+        </div>
+
+        <div class="search-box">
+          <input
+            v-model="busquedaSolicitudes"
+            type="text"
+            placeholder="Buscar por usuario, correo, motivo o estado..."
+          />
+        </div>
+
+        <div v-if="cargandoSolicitudes" class="message">
+          Cargando solicitudes...
+        </div>
+
+        <div v-else-if="errorSolicitudes" class="alert error">
+          {{ errorSolicitudes }}
+        </div>
+
+        <div v-else-if="!solicitudesFiltradas.length" class="empty-state">
+          No hay solicitudes de restablecimiento para mostrar.
+        </div>
+
+        <table v-else>
+          <thead>
+            <tr>
+              <th>Usuario</th>
+              <th>Identificador ingresado</th>
+              <th>Motivo</th>
+              <th>Estado</th>
+              <th>Fecha solicitud</th>
+              <th>Revisado por</th>
+              <th>Atendido por</th>
+              <th style="text-align: right;">Acciones</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            <tr
+              v-for="solicitud in solicitudesFiltradas"
+              :key="solicitud.id"
+              :id="`fila-solicitud-${solicitud.id}`"
+              :class="{ 'highlight-row': solicitudResaltada === Number(solicitud.id) }"
+            >
+              <td>
+                <div class="cell-main">{{ solicitud.usuario_username }}</div>
+                <div class="cell-sub">{{ solicitud.usuario_nombre }}</div>
+                <div class="cell-sub">{{ solicitud.usuario_correo }}</div>
+              </td>
+
+              <td>
+                <div class="cell-sub">{{ solicitud.identificador_ingresado }}</div>
+              </td>
+
+              <td>
+                <div class="cell-sub">{{ solicitud.motivo || 'Sin motivo' }}</div>
+              </td>
+
+              <td>
+                <span class="status-chip" :class="claseEstadoSolicitud(solicitud.estado)">
+                  {{ textoEstadoSolicitud(solicitud.estado) }}
+                </span>
+              </td>
+
+              <td>{{ formatearFecha(solicitud.fecha_solicitud) }}</td>
+
+              <td>
+                <div class="cell-sub">{{ solicitud.revisado_por_nombre || 'Sin revisar' }}</div>
+              </td>
+
+              <td>
+                <div class="cell-sub">{{ solicitud.atendido_por_nombre || 'Sin atender' }}</div>
+              </td>
+
+              <td>
+                <div class="actions-cell">
+                  <template v-if="solicitud.estado === 'pendiente'">
+                    <button
+                      class="action-btn"
+                      type="button"
+                      @click="manejarAprobarSolicitud(solicitud)"
+                    >
+                      Aprobar
+                    </button>
+
+                    <button
+                      class="action-btn danger"
+                      type="button"
+                      @click="manejarRechazarSolicitud(solicitud)"
+                    >
+                      Rechazar
+                    </button>
+
+                    <button
+                      class="action-btn"
+                      type="button"
+                      @click="manejarAsignarPasswordTemporal(solicitud)"
+                    >
+                      Asignar contraseña temporal
+                    </button>
+                  </template>
+
+                  <button
+                    v-else-if="solicitud.estado === 'aprobada'"
+                    class="action-btn"
+                    type="button"
+                    @click="manejarAsignarPasswordTemporal(solicitud)"
+                  >
+                    Asignar contraseña temporal
+                  </button>
+
+                  <span v-else class="cell-sub">Sin acciones disponibles</span>
                 </div>
               </td>
             </tr>
@@ -555,6 +1015,11 @@ onMounted(() => {
   border-color: rgba(231, 111, 81, 0.25);
 }
 
+.action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .current-user-info {
   display: flex;
   flex-direction: column;
@@ -650,6 +1115,106 @@ td {
 .status-chip.inactive {
   background: rgba(231, 111, 81, 0.12);
   color: #e76f51;
+}
+
+.status-chip.status-pending {
+  background: rgba(244, 162, 97, 0.16);
+  color: #b9701e;
+}
+
+.status-chip.status-active {
+  background: rgba(69, 123, 157, 0.12);
+  color: #457b9d;
+}
+
+.status-chip.status-inactive {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
+}
+
+.status-chip.status-done {
+  background: rgba(42, 157, 143, 0.12);
+  color: #2a9d8f;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #e4eaef;
+}
+
+.tab-btn {
+  height: 40px;
+  padding: 0 4px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #9aa8b8;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.tab-btn:hover {
+  color: #457b9d;
+}
+
+.tab-btn.active {
+  color: #1d3557;
+  border-bottom-color: #1d3557;
+}
+
+.search-box {
+  margin-bottom: 16px;
+}
+
+.search-box input {
+  width: 100%;
+  max-width: 420px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1.5px solid #e4eaef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1d3557;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search-box input::placeholder {
+  color: #9aa8b8;
+}
+
+.search-box input:focus {
+  border-color: #a8dadc;
+  box-shadow: 0 0 0 4px rgba(168, 218, 220, 0.25);
+}
+
+.highlight-row {
+  animation: highlightPulse 3.5s ease;
+}
+
+@keyframes highlightPulse {
+  0% {
+    background: rgba(244, 162, 97, 0.24);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  45% {
+    background: rgba(244, 162, 97, 0.18);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 transparent;
+  }
 }
 
 @media (max-width: 800px) {

@@ -1,15 +1,28 @@
 <script setup>
 import { ref } from 'vue'
 import sniffLogo from '../assets/images/sniff-logo.png'
-import { login, logout, obtenerUsuarioActual } from '../services/authService'
+import {
+  login,
+  logout,
+  obtenerUsuarioActual,
+  solicitarRestablecimientoPassword,
+} from '../services/authService'
 
 const emit = defineEmits(['login-success'])
+
+const vista = ref('login')
 
 const username = ref('')
 const password = ref('')
 const mostrarPassword = ref(false)
 const error = ref('')
 const cargando = ref(false)
+
+const identificadorRecuperar = ref('')
+const motivoRecuperar = ref('')
+const errorRecuperar = ref('')
+const mensajeRecuperar = ref('')
+const enviandoRecuperar = ref(false)
 
 async function iniciarSesion() {
   error.value = ''
@@ -37,6 +50,49 @@ async function iniciarSesion() {
 function togglePassword() {
   mostrarPassword.value = !mostrarPassword.value
 }
+
+function mostrarRecuperar() {
+  vista.value = 'recuperar'
+  errorRecuperar.value = ''
+  mensajeRecuperar.value = ''
+  identificadorRecuperar.value = ''
+  motivoRecuperar.value = ''
+}
+
+function volverAlLogin() {
+  vista.value = 'login'
+  errorRecuperar.value = ''
+  mensajeRecuperar.value = ''
+}
+
+async function enviarSolicitudRecuperacion() {
+  errorRecuperar.value = ''
+  mensajeRecuperar.value = ''
+
+  if (!identificadorRecuperar.value.trim()) {
+    errorRecuperar.value = 'Ingresá tu usuario o correo.'
+    return
+  }
+
+  enviandoRecuperar.value = true
+
+  try {
+    await solicitarRestablecimientoPassword({
+      identificador: identificadorRecuperar.value.trim(),
+      motivo: motivoRecuperar.value.trim(),
+    })
+
+    mensajeRecuperar.value =
+      'Si la cuenta existe y está activa, la solicitud fue enviada para revisión administrativa.'
+    identificadorRecuperar.value = ''
+    motivoRecuperar.value = ''
+  } catch (e) {
+    errorRecuperar.value =
+      'No se pudo enviar la solicitud. Intenta nuevamente o comunícate con administración.'
+  } finally {
+    enviandoRecuperar.value = false
+  }
+}
 </script>
 
 <template>
@@ -63,7 +119,7 @@ function togglePassword() {
           </div>
         </div>
 
-        <form @submit.prevent="iniciarSesion">
+        <form v-if="vista === 'login'" @submit.prevent="iniciarSesion">
           <div class="field">
             <label for="usuario">Usuario</label>
 
@@ -160,7 +216,7 @@ function togglePassword() {
           </div>
 
           <div class="row-end">
-            <a href="#" class="link">¿Olvidaste tu contraseña?</a>
+            <a href="#" class="link" @click.prevent="mostrarRecuperar">¿Olvidaste tu contraseña?</a>
           </div>
 
           <p v-if="error" class="error">
@@ -170,6 +226,76 @@ function togglePassword() {
           <button type="submit" class="btn-primary" :disabled="cargando">
             {{ cargando ? 'Iniciando sesión...' : 'Iniciar sesión' }}
           </button>
+        </form>
+
+        <form v-else @submit.prevent="enviarSolicitudRecuperacion">
+          <div class="recover-heading">
+            <h2>Recuperar acceso</h2>
+            <p>Ingresa tu usuario o correo registrado. La solicitud será revisada por administración.</p>
+          </div>
+
+          <div v-if="!mensajeRecuperar" class="field">
+            <label for="identificador">Usuario o correo</label>
+
+            <div class="input-wrap">
+              <svg
+                class="icon-left"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+
+              <input
+                id="identificador"
+                v-model="identificadorRecuperar"
+                type="text"
+                placeholder="Usuario o correo"
+                autocomplete="username"
+                :disabled="enviandoRecuperar"
+              />
+            </div>
+          </div>
+
+          <div v-if="!mensajeRecuperar" class="field">
+            <label for="motivo">Motivo (opcional)</label>
+
+            <textarea
+              id="motivo"
+              v-model="motivoRecuperar"
+              rows="3"
+              placeholder="Describe brevemente el motivo de la solicitud"
+              :disabled="enviandoRecuperar"
+            ></textarea>
+          </div>
+
+          <p v-if="errorRecuperar" class="error">
+            {{ errorRecuperar }}
+          </p>
+
+          <p v-if="mensajeRecuperar" class="success">
+            {{ mensajeRecuperar }}
+          </p>
+
+          <button
+            v-if="!mensajeRecuperar"
+            type="submit"
+            class="btn-primary"
+            :disabled="enviandoRecuperar"
+          >
+            {{ enviandoRecuperar ? 'Enviando...' : 'Enviar solicitud' }}
+          </button>
+
+          <div class="row-end center">
+            <a href="#" class="link" @click.prevent="volverAlLogin">Volver al inicio de sesión</a>
+          </div>
         </form>
       </div>
 
@@ -401,6 +527,76 @@ form {
   border-color: var(--steel);
   background: var(--white);
   box-shadow: 0 0 0 4px rgba(69, 123, 157, 0.12);
+}
+
+.input-wrap input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.recover-heading {
+  margin-bottom: 4px;
+}
+
+.recover-heading h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--navy);
+}
+
+.recover-heading p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.field textarea {
+  width: 100%;
+  min-height: 78px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: #FBFCFD;
+  padding: 10px 14px;
+  font-family: 'Montserrat', Arial, sans-serif;
+  font-size: 14px;
+  color: var(--navy);
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.field textarea::placeholder {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.field textarea:focus {
+  border-color: var(--steel);
+  background: var(--white);
+  box-shadow: 0 0 0 4px rgba(69, 123, 157, 0.12);
+}
+
+.field textarea:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.success {
+  background: rgba(42, 157, 143, 0.12);
+  color: #1f7a6c;
+  border: 1px solid rgba(42, 157, 143, 0.3);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.row-end.center {
+  justify-content: center;
+  margin-top: 4px;
 }
 
 .toggle-visibility {
