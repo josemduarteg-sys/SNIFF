@@ -70,9 +70,17 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
     permission_classes = [PermisoIndicadorKPI]
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
 
         indicador = serializer.save(creado_por=self.request.user, estado='borrador')
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Indicadores KPI',
+            descripcion=f'Creó el KPI {indicador.nombre}.',
+            request=self.request,
+        )
 
         notificar_usuarios_gestion(
             tipo='kpi_creado',
@@ -82,9 +90,22 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             excluir_usuario=self.request.user,
         )
 
+    def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        indicador = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Indicadores KPI',
+            descripcion=f'Actualizó el KPI {indicador.nombre}.',
+            request=self.request,
+        )
+
     @action(detail=True, methods=['post'])
     def autorizar(self, request, pk=None):
-        from apps.auditoria.services import crear_notificacion
+        from apps.auditoria.services import crear_notificacion, registrar_bitacora_seguro
 
         indicador = self.get_object()
 
@@ -117,6 +138,14 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             ]
         )
 
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Indicadores KPI',
+            descripcion=f'Autorizó el KPI {indicador.nombre}.',
+            request=request,
+        )
+
         if indicador.creado_por_id and indicador.creado_por_id != request.user.id:
             crear_notificacion(
                 usuario_destino=indicador.creado_por,
@@ -131,12 +160,20 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def anular(self, request, pk=None):
-        from apps.auditoria.services import crear_notificacion
+        from apps.auditoria.services import crear_notificacion, registrar_bitacora_seguro
 
         indicador = self.get_object()
 
         indicador.estado = 'anulado'
         indicador.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='eliminar',
+            modulo='Indicadores KPI',
+            descripcion=f'Anuló el KPI {indicador.nombre}.',
+            request=request,
+        )
 
         if indicador.creado_por_id and indicador.creado_por_id != request.user.id:
             crear_notificacion(

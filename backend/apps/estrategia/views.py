@@ -30,10 +30,18 @@ class EstrategiaViewSet(viewsets.ModelViewSet):
     permission_classes = [PermisoEstrategiaObjetivo]
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
 
         estado_inicial = 'activa' if es_administrador(self.request.user) else 'en_revision'
         estrategia = serializer.save(creado_por=self.request.user, estado=estado_inicial)
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Estrategias',
+            descripcion=f'Creó la estrategia {estrategia.nombre}.',
+            request=self.request,
+        )
 
         notificar_usuarios_gestion(
             tipo='estrategia_creada',
@@ -44,34 +52,74 @@ class EstrategiaViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         if not es_administrador(self.request.user):
             serializer.validated_data.pop('estado', None)
 
-        serializer.save()
+        estrategia = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Estrategias',
+            descripcion=f'Actualizó la estrategia {estrategia.nombre}.',
+            request=self.request,
+        )
 
     @action(detail=True, methods=['post'])
     def activar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         estrategia = self.get_object()
         estrategia.estado = 'activa'
         estrategia.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Estrategias',
+            descripcion=f'Activó la estrategia {estrategia.nombre}.',
+            request=request,
+        )
 
         serializer = self.get_serializer(estrategia)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def finalizar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         estrategia = self.get_object()
         estrategia.estado = 'finalizada'
         estrategia.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Estrategias',
+            descripcion=f'Finalizó la estrategia {estrategia.nombre}.',
+            request=request,
+        )
 
         serializer = self.get_serializer(estrategia)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def inactivar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         estrategia = self.get_object()
         estrategia.estado = 'inactiva'
         estrategia.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='eliminar',
+            modulo='Estrategias',
+            descripcion=f'Inactivó la estrategia {estrategia.nombre}.',
+            request=request,
+        )
 
         serializer = self.get_serializer(estrategia)
         return Response(serializer.data)
@@ -86,10 +134,18 @@ class ObjetivoViewSet(viewsets.ModelViewSet):
     permission_classes = [PermisoEstrategiaObjetivo]
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
 
         estado_inicial = 'activo' if es_administrador(self.request.user) else 'en_revision'
         objetivo = serializer.save(creado_por=self.request.user, estado=estado_inicial)
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Objetivos',
+            descripcion=f'Creó el objetivo {objetivo.nombre}.',
+            request=self.request,
+        )
 
         notificar_usuarios_gestion(
             tipo='objetivo_creado',
@@ -100,34 +156,74 @@ class ObjetivoViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         if not es_administrador(self.request.user):
             serializer.validated_data.pop('estado', None)
 
-        serializer.save()
+        objetivo = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Objetivos',
+            descripcion=f'Actualizó el objetivo {objetivo.nombre}.',
+            request=self.request,
+        )
 
     @action(detail=True, methods=['post'])
     def activar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         objetivo = self.get_object()
         objetivo.estado = 'activo'
         objetivo.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Objetivos',
+            descripcion=f'Activó el objetivo {objetivo.nombre}.',
+            request=request,
+        )
 
         serializer = self.get_serializer(objetivo)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def finalizar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         objetivo = self.get_object()
         objetivo.estado = 'finalizado'
         objetivo.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Objetivos',
+            descripcion=f'Finalizó el objetivo {objetivo.nombre}.',
+            request=request,
+        )
 
         serializer = self.get_serializer(objetivo)
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def inactivar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
         objetivo = self.get_object()
         objetivo.estado = 'inactivo'
         objetivo.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='eliminar',
+            modulo='Objetivos',
+            descripcion=f'Inactivó el objetivo {objetivo.nombre}.',
+            request=request,
+        )
 
         serializer = self.get_serializer(objetivo)
         return Response(serializer.data)
