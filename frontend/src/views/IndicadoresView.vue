@@ -3,7 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
+import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
 import IndicadorForm from '../components/indicadores/IndicadorForm.vue'
+import IndicadorDetalle from '../components/indicadores/IndicadorDetalle.vue'
 import {
   actualizarIndicador,
   anularIndicador,
@@ -11,7 +13,10 @@ import {
   crearIndicador,
   obtenerDatosFormularioIndicador,
   obtenerIndicadoresKpi,
+  obtenerRangosKpi,
 } from '../services/indicadorService'
+import { formatearNumero } from '../utils/formato'
+import { useConfirmacion } from '../composables/useConfirmacion'
 import {
   puedeAnularKpi,
   puedeAutorizarKpi,
@@ -34,10 +39,12 @@ const idResaltado = ref(null)
 let timeoutResaltado = null
 
 const indicadores = ref([])
+const estrategias = ref([])
 const objetivos = ref([])
 const frecuencias = ref([])
 const tiposCalculo = ref([])
 const fuentesDato = ref([])
+const rangosKpi = ref([])
 
 const busqueda = ref('')
 const objetivoSeleccionado = ref('')
@@ -50,9 +57,19 @@ const procesandoId = ref(null)
 const error = ref('')
 const mensaje = ref('')
 
+const {
+  solicitud: confirmacion,
+  solicitar: solicitarConfirmacion,
+  cancelar: cancelarConfirmacion,
+  confirmar: confirmarAccionPendiente,
+} = useConfirmacion()
+
 const modalAbierto = ref(false)
 const indicadorSeleccionado = ref(null)
 const guardando = ref(false)
+
+const modalDetalleAbierto = ref(false)
+const indicadorDetalle = ref(null)
 
 const puedeCrear = computed(() => puedeCrearKpi(props.usuario))
 const puedeAutorizarRol = computed(() => puedeAutorizarKpi(props.usuario))
@@ -68,16 +85,19 @@ async function cargarDatos() {
   mensaje.value = ''
 
   try {
-    const [indicadoresData, datosFormulario] = await Promise.all([
+    const [indicadoresData, datosFormulario, rangosData] = await Promise.all([
       obtenerIndicadoresKpi(),
       obtenerDatosFormularioIndicador(),
+      obtenerRangosKpi(),
     ])
 
     indicadores.value = indicadoresData
+    estrategias.value = datosFormulario.estrategias
     objetivos.value = datosFormulario.objetivos
     frecuencias.value = datosFormulario.frecuencias
     tiposCalculo.value = datosFormulario.tiposCalculo
     fuentesDato.value = datosFormulario.fuentesDato
+    rangosKpi.value = rangosData
   } catch (e) {
     error.value = 'No se pudieron cargar los indicadores KPI.'
   } finally {
@@ -226,23 +246,6 @@ function formatearFecha(fecha) {
   return `${dia}/${mes}/${anio}`
 }
 
-function formatearNumero(valor) {
-  if (valor === null || valor === undefined || valor === '') {
-    return '-'
-  }
-
-  const numero = Number(valor)
-
-  if (Number.isNaN(numero)) {
-    return valor
-  }
-
-  return numero.toLocaleString('es-GT', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  })
-}
-
 function puedeAutorizar(indicador) {
   return indicador.estado === 'borrador'
 }
@@ -277,19 +280,22 @@ async function manejarAutorizar(indicador) {
   }
 }
 
-async function manejarAnular(indicador) {
+function manejarAnular(indicador) {
   if (!puedeAnular(indicador)) {
     return
   }
 
-  const confirmar = window.confirm(
-    `¿Seguro que querés anular el KPI "${indicador.nombre}"? Esta acción no elimina el registro, solo lo marca como anulado.`
-  )
+  solicitarConfirmacion({
+    titulo: 'Anular KPI',
+    mensaje: `¿Deseás anular el KPI "${indicador.nombre}"?`,
+    textoSecundario: 'Esta acción no elimina el registro, solo lo marca como anulado.',
+    textoConfirmar: 'Anular',
+    variante: 'peligrosa',
+    accion: () => ejecutarAnular(indicador),
+  })
+}
 
-  if (!confirmar) {
-    return
-  }
-
+async function ejecutarAnular(indicador) {
   procesandoId.value = indicador.id
   error.value = ''
   mensaje.value = ''
@@ -340,6 +346,46 @@ function cerrarModal() {
   modalAbierto.value = false
   indicadorSeleccionado.value = null
   guardando.value = false
+}
+
+function obtenerEstrategiaNombreDeIndicador(indicador) {
+  const objetivo = objetivos.value.find((item) => Number(item.id) === Number(indicador?.objetivo))
+
+  if (!objetivo) {
+    return ''
+  }
+
+  const estrategia = estrategias.value.find((item) => Number(item.id) === Number(objetivo.estrategia))
+
+  return estrategia?.nombre || ''
+}
+
+const estrategiaNombreDetalle = computed(() => {
+  if (!indicadorDetalle.value) {
+    return ''
+  }
+
+  return obtenerEstrategiaNombreDeIndicador(indicadorDetalle.value)
+})
+
+const rangosDelIndicadorDetalle = computed(() => {
+  if (!indicadorDetalle.value) {
+    return []
+  }
+
+  return rangosKpi.value.filter((rango) => {
+    return Number(rango.indicador) === Number(indicadorDetalle.value.id)
+  })
+})
+
+function abrirDetalleIndicador(indicador) {
+  indicadorDetalle.value = indicador
+  modalDetalleAbierto.value = true
+}
+
+function cerrarModalDetalle() {
+  modalDetalleAbierto.value = false
+  indicadorDetalle.value = null
 }
 
 async function guardarIndicador(payload) {
@@ -495,7 +541,7 @@ onBeforeUnmount(() => {
 
         <div class="kpi-value">{{ indicadoresAutorizados }}</div>
         <div class="kpi-label">Activos</div>
-        <div class="kpi-foot">Listos para seguimiento mensual</div>
+        <div class="kpi-foot">Listos para seguimiento</div>
       </article>
 
       <article class="kpi-card">
@@ -650,11 +696,11 @@ onBeforeUnmount(() => {
             :class="{ 'highlight-row': idResaltado === Number(indicador.id) }"
           >
             <td>
-              <div class="cell-main">
+              <div class="cell-main" :title="indicador.nombre">
                 {{ indicador.nombre }}
               </div>
 
-              <div class="cell-sub">
+              <div class="cell-sub" :title="indicador.descripcion || 'Sin descripción'">
                 {{ indicador.descripcion || 'Sin descripción' }}
               </div>
 
@@ -665,7 +711,7 @@ onBeforeUnmount(() => {
             </td>
 
             <td>
-              <span class="code-chip">
+              <span class="code-chip" :title="indicador.objetivo_nombre || 'Sin objetivo'">
                 {{ indicador.objetivo_nombre || 'Sin objetivo' }}
               </span>
             </td>
@@ -712,7 +758,29 @@ onBeforeUnmount(() => {
             </td>
 
             <td>
-              <div v-if="mostrarAccionesKpi" class="actions-cell">
+              <div class="actions-cell">
+                <button
+                  class="action-icon-btn"
+                  type="button"
+                  title="Ver detalle"
+                  aria-label="Ver detalle"
+                  @click="abrirDetalleIndicador(indicador)"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+
                 <button
                   v-if="puedeAutorizarRol"
                   class="action-text-btn ok"
@@ -729,6 +797,7 @@ onBeforeUnmount(() => {
                   class="action-icon-btn"
                   type="button"
                   title="Editar"
+                  aria-label="Editar"
                   :class="{ disabled: !puedeEditar(indicador) }"
                   :disabled="procesandoId === indicador.id"
                   @click="abrirEditarIndicador(indicador)"
@@ -771,10 +840,8 @@ onBeforeUnmount(() => {
                     <line x1="15" y1="9" x2="9" y2="15" />
                   </svg>
                 </button>
-              </div>
 
-              <div v-else class="actions-cell">
-                <span class="readonly-chip">
+                <span v-if="!mostrarAccionesKpi" class="readonly-chip">
                   Solo lectura
                 </span>
               </div>
@@ -802,6 +869,7 @@ onBeforeUnmount(() => {
     >
       <IndicadorForm
         :indicador="indicadorSeleccionado"
+        :estrategias="estrategias"
         :objetivos="objetivos"
         :frecuencias="frecuencias"
         :tipos-calculo="tiposCalculo"
@@ -814,6 +882,32 @@ onBeforeUnmount(() => {
         Guardando KPI...
       </div>
     </ModalBase>
+
+    <ModalBase
+      :abierto="modalDetalleAbierto"
+      titulo="Detalle de KPI"
+      subtitulo="Información completa del indicador y sus criterios de cumplimiento."
+      @cerrar="cerrarModalDetalle"
+    >
+      <IndicadorDetalle
+        v-if="indicadorDetalle"
+        :indicador="indicadorDetalle"
+        :estrategia-nombre="estrategiaNombreDetalle"
+        :rangos="rangosDelIndicadorDetalle"
+      />
+    </ModalBase>
+
+    <ConfirmacionModal
+      :abierto="!!confirmacion"
+      :titulo="confirmacion?.titulo"
+      :mensaje="confirmacion?.mensaje"
+      :texto-secundario="confirmacion?.textoSecundario"
+      :texto-confirmar="confirmacion?.textoConfirmar"
+      :texto-cancelar="confirmacion?.textoCancelar"
+      :variante="confirmacion?.variante"
+      @confirmar="confirmarAccionPendiente"
+      @cancelar="cancelarConfirmacion"
+    />
   </AppLayout>
 </template>
 
@@ -1083,6 +1177,10 @@ tbody tr:hover {
   font-weight: 800;
   font-size: 13px;
   color: #1d3557;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-sub {
@@ -1091,6 +1189,10 @@ tbody tr:hover {
   font-weight: 500;
   margin-top: 3px;
   max-width: 460px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .cell-extra {
@@ -1131,6 +1233,9 @@ tbody tr:hover {
   font-size: 11.5px;
   font-weight: 800;
   max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .source-chip {

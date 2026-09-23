@@ -140,7 +140,7 @@ function textoAccion(accion, registro = null) {
     actualizar: 'Actualizar',
     consultar: 'Consultar',
     importar_csv: 'Importar CSV',
-    consulta_dw: 'Consulta Data Warehouse',
+    consulta_dw: 'Consulta al almacén de datos',
     inicio_sesion: 'Inicio de sesión',
     cierre_sesion: 'Cierre de sesión',
     error: 'Error',
@@ -369,7 +369,7 @@ onMounted(() => {
               </td>
 
               <td>
-                <div class="cell-sub descripcion-cell">{{ item.descripcion || 'Sin descripción' }}</div>
+                <div class="cell-sub descripcion-cell" :title="item.descripcion || 'Sin descripción'">{{ item.descripcion || 'Sin descripción' }}</div>
               </td>
 
               <td>{{ item.ip_usuario || 'No registrada' }}</td>
@@ -627,6 +627,10 @@ td {
 
 .descripcion-cell {
   max-width: 420px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .role-chip {

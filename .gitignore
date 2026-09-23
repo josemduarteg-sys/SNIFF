@@ -41,3 +41,14 @@ db.sqlite3
 media/
 staticfiles/
 
+# Archivos locales de Claude
+.claude/
+
+# Archivos generados por Windows
+desktop.ini
+
+# Diagnóstico interno de desarrollo
+DIAGNOSTICO_COMPLETO_SNIFF.md
+
+# Respaldo local del backend
+backend.rar

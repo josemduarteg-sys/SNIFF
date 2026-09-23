@@ -20,6 +20,11 @@ export async function obtenerObjetivos() {
   return normalizarRespuesta(response)
 }
 
+export async function obtenerEstrategias() {
+  const response = await api.get('estrategias/')
+  return normalizarRespuesta(response)
+}
+
 export async function obtenerFrecuencias() {
   const response = await api.get('frecuencias/')
   return normalizarRespuesta(response)
@@ -37,11 +42,13 @@ export async function obtenerFuentesDato() {
 
 export async function obtenerDatosFormularioIndicador() {
   const [
+    estrategias,
     objetivos,
     frecuencias,
     tiposCalculo,
     fuentesDato,
   ] = await Promise.all([
+    obtenerEstrategias(),
     obtenerObjetivos(),
     obtenerFrecuencias(),
     obtenerTiposCalculo(),
@@ -49,11 +56,17 @@ export async function obtenerDatosFormularioIndicador() {
   ])
 
   return {
+    estrategias,
     objetivos,
     frecuencias,
     tiposCalculo,
     fuentesDato,
   }
+}
+
+export async function obtenerRangosKpi() {
+  const response = await api.get('rangos-kpi/')
+  return normalizarRespuesta(response)
 }
 
 export async function autorizarIndicador(id) {

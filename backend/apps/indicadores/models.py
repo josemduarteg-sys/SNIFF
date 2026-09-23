@@ -248,7 +248,13 @@ class RangoKPI(models.Model):
         related_name='rangos'
     )
     valor_minimo = models.DecimalField(max_digits=14, decimal_places=4)
-    valor_maximo = models.DecimalField(max_digits=14, decimal_places=4)
+    valor_maximo = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        blank=True,
+        null=True,
+        help_text='Límite superior del rango. Vacío/NULL significa "sin límite superior".'
+    )
     estado = models.BooleanField(default=True)
 
     class Meta:
@@ -258,7 +264,7 @@ class RangoKPI(models.Model):
         ordering = ['indicador', 'valor_minimo']
 
     def clean(self):
-        if self.valor_maximo < self.valor_minimo:
+        if self.valor_maximo is not None and self.valor_maximo < self.valor_minimo:
             raise ValidationError(
                 'El valor máximo no puede ser menor que el valor mínimo.'
             )

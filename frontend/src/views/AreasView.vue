@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
+import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
 import AreaForm from '../components/areas/AreaForm.vue'
 import {
   obtenerAreas,
@@ -11,6 +12,7 @@ import {
   inactivarArea,
 } from '../services/areaService'
 import { puedeGestionarAreas } from '../utils/permisos'
+import { useConfirmacion } from '../composables/useConfirmacion'
 
 const props = defineProps({
   usuario: {
@@ -28,6 +30,13 @@ const areas = ref([])
 const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
+
+const {
+  solicitud: confirmacion,
+  solicitar: solicitarConfirmacion,
+  cancelar: cancelarConfirmacion,
+  confirmar: confirmarAccionPendiente,
+} = useConfirmacion()
 
 const modalAreaAbierto = ref(false)
 const areaSeleccionada = ref(null)
@@ -131,23 +140,26 @@ async function guardarArea(payload) {
   }
 }
 
-async function manejarInactivarArea(area) {
-  const confirmar = window.confirm(
-    `¿Seguro que querés inactivar el área "${area.nombre}"?`
-  )
+function manejarInactivarArea(area) {
+  solicitarConfirmacion({
+    titulo: 'Inactivar área',
+    mensaje: `¿Deseás inactivar el área "${area.nombre}"?`,
+    textoSecundario: 'El área dejará de estar disponible para nuevas estrategias.',
+    textoConfirmar: 'Inactivar',
+    variante: 'peligrosa',
+    accion: async () => {
+      error.value = ''
+      mensaje.value = ''
 
-  if (!confirmar) return
-
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await inactivarArea(area.id)
-    mensaje.value = 'Área inactivada correctamente.'
-    await cargarAreas()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo inactivar el área.')
-  }
+      try {
+        await inactivarArea(area.id)
+        mensaje.value = 'Área inactivada correctamente.'
+        await cargarAreas()
+      } catch (e) {
+        error.value = obtenerMensajeError(e, 'No se pudo inactivar el área.')
+      }
+    },
+  })
 }
 
 async function manejarReactivarArea(area) {
@@ -282,11 +294,16 @@ onMounted(() => {
               <td>
                 <div class="actions-cell">
                   <button
-                    class="action-btn"
+                    class="action-icon-btn"
                     type="button"
+                    title="Editar"
+                    aria-label="Editar"
                     @click="abrirEditarArea(area)"
                   >
-                    Editar
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
+                    </svg>
                   </button>
 
                   <button
@@ -337,6 +354,18 @@ onMounted(() => {
           Guardando área...
         </div>
       </ModalBase>
+
+      <ConfirmacionModal
+        :abierto="!!confirmacion"
+        :titulo="confirmacion?.titulo"
+        :mensaje="confirmacion?.mensaje"
+        :texto-secundario="confirmacion?.textoSecundario"
+        :texto-confirmar="confirmacion?.textoConfirmar"
+        :texto-cancelar="confirmacion?.textoCancelar"
+        :variante="confirmacion?.variante"
+        @confirmar="confirmarAccionPendiente"
+        @cancelar="cancelarConfirmacion"
+      />
     </template>
   </AppLayout>
 </template>
@@ -501,6 +530,30 @@ onMounted(() => {
 .action-btn.danger:hover {
   background: rgba(231, 111, 81, 0.10);
   border-color: rgba(231, 111, 81, 0.25);
+}
+
+.action-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  color: #5e6e82;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.action-icon-btn svg {
+  stroke: currentColor;
+}
+
+.action-icon-btn:hover {
+  background: #eaf5f5;
+  color: #457b9d;
+  border-color: #a8dadc;
 }
 
 .saving-message {

@@ -3,7 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
+import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
 import EstrategiaForm from '../components/estrategias/EstrategiaForm.vue'
+import EstrategiaDetalle from '../components/estrategias/EstrategiaDetalle.vue'
 import {
   activarEstrategia,
   actualizarEstrategia,
@@ -14,6 +16,7 @@ import {
   obtenerEstrategias,
 } from '../services/estrategiaService'
 import { esAdministrador, puedeGestionarEstrategias } from '../utils/permisos'
+import { useConfirmacion } from '../composables/useConfirmacion'
 
 const props = defineProps({
   usuario: {
@@ -38,10 +41,20 @@ const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
 
+const {
+  solicitud: confirmacion,
+  solicitar: solicitarConfirmacion,
+  cancelar: cancelarConfirmacion,
+  confirmar: confirmarAccionPendiente,
+} = useConfirmacion()
+
 const modalEstrategiaAbierto = ref(false)
 const estrategiaSeleccionada = ref(null)
 const guardandoEstrategia = ref(false)
 const errorModalEstrategia = ref('')
+
+const modalDetalleAbierto = ref(false)
+const estrategiaDetalle = ref(null)
 
 const estrategiasActivas = computed(() => {
   return estrategias.value.filter((item) => item.estado === 'activa' || item.estado === true).length
@@ -148,6 +161,16 @@ function cerrarModalEstrategia() {
   errorModalEstrategia.value = ''
 }
 
+function abrirDetalleEstrategia(estrategia) {
+  estrategiaDetalle.value = estrategia
+  modalDetalleAbierto.value = true
+}
+
+function cerrarModalDetalle() {
+  modalDetalleAbierto.value = false
+  estrategiaDetalle.value = null
+}
+
 function obtenerMensajeError(e, mensajeDefault) {
   const data = e.response?.data
 
@@ -208,42 +231,48 @@ async function manejarActivarEstrategia(estrategia) {
   }
 }
 
-async function manejarFinalizarEstrategia(estrategia) {
-  const confirmar = window.confirm(
-    `¿Seguro que querés finalizar la estrategia "${estrategia.nombre}"?`
-  )
+function manejarFinalizarEstrategia(estrategia) {
+  solicitarConfirmacion({
+    titulo: 'Finalizar estrategia',
+    mensaje: `¿Deseás finalizar la estrategia "${estrategia.nombre}"?`,
+    textoSecundario: 'Una vez finalizada, ya no se podrá seguir editando su seguimiento activo.',
+    textoConfirmar: 'Finalizar',
+    variante: 'advertencia',
+    accion: async () => {
+      error.value = ''
+      mensaje.value = ''
 
-  if (!confirmar) return
-
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await finalizarEstrategia(estrategia.id)
-    mensaje.value = 'Estrategia finalizada correctamente.'
-    await cargarEstrategias()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo finalizar la estrategia.')
-  }
+      try {
+        await finalizarEstrategia(estrategia.id)
+        mensaje.value = 'Estrategia finalizada correctamente.'
+        await cargarEstrategias()
+      } catch (e) {
+        error.value = obtenerMensajeError(e, 'No se pudo finalizar la estrategia.')
+      }
+    },
+  })
 }
 
-async function manejarInactivarEstrategia(estrategia) {
-  const confirmar = window.confirm(
-    `¿Seguro que querés inactivar la estrategia "${estrategia.nombre}"?`
-  )
+function manejarInactivarEstrategia(estrategia) {
+  solicitarConfirmacion({
+    titulo: 'Inactivar estrategia',
+    mensaje: `¿Deseás inactivar la estrategia "${estrategia.nombre}"?`,
+    textoSecundario: 'La estrategia dejará de estar disponible para seguimiento activo.',
+    textoConfirmar: 'Inactivar',
+    variante: 'peligrosa',
+    accion: async () => {
+      error.value = ''
+      mensaje.value = ''
 
-  if (!confirmar) return
-
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await inactivarEstrategia(estrategia.id)
-    mensaje.value = 'Estrategia inactivada correctamente.'
-    await cargarEstrategias()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo inactivar la estrategia.')
-  }
+      try {
+        await inactivarEstrategia(estrategia.id)
+        mensaje.value = 'Estrategia inactivada correctamente.'
+        await cargarEstrategias()
+      } catch (e) {
+        error.value = obtenerMensajeError(e, 'No se pudo inactivar la estrategia.')
+      }
+    },
+  })
 }
 
 function cerrarSesion() {
@@ -322,7 +351,7 @@ onBeforeUnmount(() => {
             <th>Fecha inicio</th>
             <th>Fecha fin</th>
             <th>Estado</th>
-            <th v-if="puedeGestionar" style="text-align: right;">Acciones</th>
+            <th style="text-align: right;">Acciones</th>
           </tr>
         </thead>
 
@@ -334,8 +363,8 @@ onBeforeUnmount(() => {
             :class="{ 'highlight-row': idResaltado === Number(estrategia.id) }"
           >
             <td>
-              <div class="cell-main">{{ estrategia.nombre }}</div>
-              <div class="cell-sub">{{ estrategia.descripcion || 'Sin descripción' }}</div>
+              <div class="cell-main" :title="estrategia.nombre">{{ estrategia.nombre }}</div>
+              <div class="cell-sub" :title="estrategia.descripcion || 'Sin descripción'">{{ estrategia.descripcion || 'Sin descripción' }}</div>
             </td>
 
             <td>{{ estrategia.area_nombre || 'Sin área' }}</td>
@@ -348,18 +377,36 @@ onBeforeUnmount(() => {
               </span>
             </td>
 
-            <td v-if="puedeGestionar">
+            <td>
               <div class="actions-cell">
                 <button
-                  v-if="esAdmin || estrategia.estado === 'en_revision'"
-                  class="action-btn"
+                  class="action-icon-btn"
                   type="button"
-                  @click="abrirEditarEstrategia(estrategia)"
+                  title="Ver detalle"
+                  aria-label="Ver detalle"
+                  @click="abrirDetalleEstrategia(estrategia)"
                 >
-                  Editar
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
                 </button>
 
-                <template v-if="esAdmin">
+                <button
+                  v-if="puedeGestionar && (esAdmin || estrategia.estado === 'en_revision')"
+                  class="action-icon-btn"
+                  type="button"
+                  title="Editar"
+                  aria-label="Editar"
+                  @click="abrirEditarEstrategia(estrategia)"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
+                  </svg>
+                </button>
+
+                <template v-if="puedeGestionar && esAdmin">
                   <button
                     v-if="estrategia.estado !== 'activa'"
                     class="action-btn"
@@ -419,6 +466,27 @@ onBeforeUnmount(() => {
         Guardando estrategia...
       </div>
     </ModalBase>
+
+    <ModalBase
+      :abierto="modalDetalleAbierto"
+      titulo="Detalle de estrategia"
+      subtitulo="Información completa de la estrategia registrada."
+      @cerrar="cerrarModalDetalle"
+    >
+      <EstrategiaDetalle v-if="estrategiaDetalle" :estrategia="estrategiaDetalle" />
+    </ModalBase>
+
+    <ConfirmacionModal
+      :abierto="!!confirmacion"
+      :titulo="confirmacion?.titulo"
+      :mensaje="confirmacion?.mensaje"
+      :texto-secundario="confirmacion?.textoSecundario"
+      :texto-confirmar="confirmacion?.textoConfirmar"
+      :texto-cancelar="confirmacion?.textoCancelar"
+      :variante="confirmacion?.variante"
+      @confirmar="confirmarAccionPendiente"
+      @cancelar="cancelarConfirmacion"
+    />
   </AppLayout>
 </template>
 
@@ -565,6 +633,30 @@ onBeforeUnmount(() => {
   border-color: rgba(231, 111, 81, 0.25);
 }
 
+.action-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  color: #5e6e82;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.action-icon-btn svg {
+  stroke: currentColor;
+}
+
+.action-icon-btn:hover {
+  background: #eaf5f5;
+  color: #457b9d;
+  border-color: #a8dadc;
+}
+
 .saving-message {
   margin-top: 12px;
   padding: 11px 13px;
@@ -604,6 +696,10 @@ td {
   color: #1d3557;
   font-size: 13px;
   font-weight: 800;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-sub {
@@ -612,6 +708,10 @@ td {
   font-weight: 500;
   margin-top: 2px;
   max-width: 520px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .badge {

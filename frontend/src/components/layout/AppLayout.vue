@@ -242,13 +242,13 @@ onBeforeUnmount(() => {
           <span class="current">{{ breadcrumbActual }}</span>
         </div>
 
-        <div class="topbar-search">
+        <div class="topbar-search topbar-search--deshabilitado" title="Búsqueda global no disponible por el momento">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
 
-          <input type="text" placeholder="Buscar objetivos, indicadores..." />
+          <input type="text" placeholder="Búsqueda global no disponible por el momento" disabled />
         </div>
 
         <div class="topbar-actions">
@@ -493,6 +493,15 @@ onBeforeUnmount(() => {
 
 .topbar-search input::placeholder {
   color: var(--text-muted);
+}
+
+.topbar-search--deshabilitado {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.topbar-search--deshabilitado input {
+  cursor: not-allowed;
 }
 
 .topbar-actions {

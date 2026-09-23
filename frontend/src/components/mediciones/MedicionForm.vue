@@ -5,6 +5,7 @@ import {
   crearMedicion,
   obtenerSiguientePeriodo,
 } from '../../services/medicionService'
+import { formatearNumero } from '../../utils/formato'
 
 const props = defineProps({
   indicadores: {
@@ -67,14 +68,14 @@ const ayudaResultado = computed(() => {
   const unidad = unidadMedida.value
 
   if (unidad === '%') {
-    return 'Ingresá el porcentaje real obtenido en el mes. Ejemplo: 85 para representar 85%.'
+    return 'Ingresá el porcentaje real obtenido en el periodo. Ejemplo: 85 para representar 85%.'
   }
 
   if (unidad.toLowerCase().includes('q')) {
-    return 'Ingresá el monto real obtenido en el mes. Ejemplo: 85000.'
+    return 'Ingresá el monto real obtenido en el periodo. Ejemplo: 85000.'
   }
 
-  return `Ingresá el valor real obtenido en el mes usando la unidad configurada: ${unidad}.`
+  return `Ingresá el valor real obtenido en el periodo usando la unidad configurada: ${unidad}.`
 })
 
 watch(
@@ -151,19 +152,6 @@ function obtenerMesDesdeMedicion(medicion) {
   return fecha.slice(0, 7)
 }
 
-function formatearNumero(valor) {
-  if (valor === null || valor === undefined || valor === '') return '-'
-
-  const numero = Number(valor)
-
-  if (Number.isNaN(numero)) return valor
-
-  return numero.toLocaleString('es-GT', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  })
-}
-
 function formatearFecha(fecha) {
   if (!fecha) return 'No definida'
 
@@ -208,6 +196,10 @@ function validarFormulario() {
 
   if (Number.isNaN(resultado)) return 'El valor obtenido debe ser un número válido.'
   if (resultado < 0) return 'El valor obtenido no puede ser negativo.'
+
+  if (unidadMedida.value === '%' && resultado > 100) {
+    return 'Cuando la unidad de medida es porcentaje, el resultado no puede ser mayor a 100.'
+  }
 
   return ''
 }
@@ -283,7 +275,7 @@ async function guardar() {
     <section v-if="indicadorSeleccionado" class="kpi-context full">
       <div class="context-item">
         <span>Meta configurada</span>
-        <strong>{{ formatearNumero(metaVigente) }} {{ unidadMedida }}</strong>
+        <strong>{{ formatearNumero(metaVigente, { unidad: unidadMedida }) }}</strong>
       </div>
 
       <div class="context-item">
@@ -307,13 +299,13 @@ async function guardar() {
     </section>
 
     <div class="form-group">
-      <label>Mes de medición</label>
+      <label>Periodo a medir</label>
       <input
         v-model="form.mes_medicion"
         type="month"
         disabled
       />
-      <small>La medición se registra por corte mensual.</small>
+      <small>El periodo se determina automáticamente según la frecuencia configurada en el KPI.</small>
 
       <p v-if="estado.cargandoPeriodo" class="field-hint">
         Calculando siguiente periodo...
@@ -329,12 +321,13 @@ async function guardar() {
     </div>
 
     <div class="form-group">
-      <label>Valor obtenido en el mes</label>
+      <label>Valor obtenido en el periodo</label>
       <div class="input-with-unit">
         <input
           v-model="form.valor_resultado"
           type="number"
           min="0"
+          :max="unidadMedida === '%' ? 100 : undefined"
           step="0.01"
           placeholder="Ejemplo: 85"
         />
@@ -348,7 +341,7 @@ async function guardar() {
       <textarea
         v-model="form.observacion"
         rows="4"
-        placeholder="Explicá brevemente el resultado obtenido, causas o contexto del mes evaluado."
+        placeholder="Explicá brevemente el resultado obtenido, causas o contexto del periodo evaluado."
       ></textarea>
     </div>
 

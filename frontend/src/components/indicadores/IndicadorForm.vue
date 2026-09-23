@@ -6,6 +6,10 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  estrategias: {
+    type: Array,
+    default: () => [],
+  },
   objetivos: {
     type: Array,
     default: () => [],
@@ -38,6 +42,7 @@ const UNIDADES_MEDIDA = [
 ]
 
 const estado = reactive({
+  estrategia: '',
   objetivo: '',
   frecuencia: '',
   tipo_calculo: '',
@@ -55,6 +60,16 @@ const estado = reactive({
 const esEdicion = computed(() => Boolean(props.indicador?.id))
 
 const esPorcentaje = computed(() => estado.unidad_medida === '%')
+
+const objetivosFiltrados = computed(() => {
+  if (!estado.estrategia) {
+    return []
+  }
+
+  return props.objetivos.filter(
+    (objetivo) => Number(objetivo.estrategia) === Number(estado.estrategia)
+  )
+})
 
 const notaFuente = computed(() => {
   const fuente = props.fuentesDato.find(
@@ -76,11 +91,21 @@ const notaFuente = computed(() => {
   }
 
   if (nombre.includes('warehouse') || nombre.includes('data')) {
-    return 'Esta fuente identifica un origen de datos institucional. La conexión automática con Data Warehouse se configurará en una etapa posterior.'
+    return 'Esta fuente identifica un origen de datos institucional. La conexión automática con el almacén de datos se configurará en una etapa posterior.'
   }
 
   return 'Selecciona la fuente de datos que respaldará el seguimiento del KPI.'
 })
+
+function etiquetaFuente(fuente) {
+  const nombre = fuente?.nombre || ''
+
+  if (nombre.toLowerCase().includes('warehouse')) {
+    return 'Almacén de datos'
+  }
+
+  return nombre
+}
 
 const puedeEditar = computed(() => {
   if (!props.indicador) {
@@ -102,7 +127,25 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => estado.estrategia,
+  () => {
+    const objetivoActual = props.objetivos.find(
+      (objetivo) => Number(objetivo.id) === Number(estado.objetivo)
+    )
+
+    if (objetivoActual && Number(objetivoActual.estrategia) !== Number(estado.estrategia)) {
+      estado.objetivo = ''
+    }
+  }
+)
+
 function cargarFormulario() {
+  const objetivoActual = props.indicador?.objetivo
+    ? props.objetivos.find((objetivo) => Number(objetivo.id) === Number(props.indicador.objetivo))
+    : null
+
+  estado.estrategia = objetivoActual?.estrategia || ''
   estado.objetivo = props.indicador?.objetivo || ''
   estado.frecuencia = props.indicador?.frecuencia || ''
   estado.tipo_calculo = props.indicador?.tipo_calculo || ''
@@ -238,13 +281,31 @@ function cancelar() {
 
     <div class="form-grid">
       <label class="field field-full">
-        <span>Objetivo asociado</span>
+        <span>Estrategia</span>
 
-        <select v-model="estado.objetivo" :disabled="!puedeEditar">
-          <option value="">Seleccionar objetivo</option>
+        <select v-model="estado.estrategia" :disabled="!puedeEditar">
+          <option value="">Seleccionar estrategia</option>
 
           <option
-            v-for="objetivo in objetivos"
+            v-for="estrategia in estrategias"
+            :key="estrategia.id"
+            :value="estrategia.id"
+          >
+            {{ estrategia.nombre }}
+          </option>
+        </select>
+      </label>
+
+      <label class="field field-full">
+        <span>Objetivo asociado</span>
+
+        <select v-model="estado.objetivo" :disabled="!puedeEditar || !estado.estrategia">
+          <option value="">
+            {{ estado.estrategia ? 'Seleccionar objetivo' : 'Primero seleccioná una estrategia' }}
+          </option>
+
+          <option
+            v-for="objetivo in objetivosFiltrados"
             :key="objetivo.id"
             :value="objetivo.id"
           >
@@ -379,7 +440,7 @@ function cancelar() {
             :key="fuente.id"
             :value="fuente.id"
           >
-            {{ fuente.nombre }}
+            {{ etiquetaFuente(fuente) }}
           </option>
         </select>
 

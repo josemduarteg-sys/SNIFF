@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.response import Response
@@ -37,7 +38,11 @@ from .serializers import (
     MedicionSerializer,
     AlertaSerializer,
 )
-from .services import formatear_periodo, obtener_siguiente_periodo_esperado
+from .services import (
+    crear_rangos_provisionales,
+    formatear_periodo,
+    obtener_siguiente_periodo_esperado,
+)
 
 
 class FrecuenciaViewSet(viewsets.ModelViewSet):
@@ -71,8 +76,22 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+        from rest_framework.exceptions import ValidationError
 
-        indicador = serializer.save(creado_por=self.request.user, estado='borrador')
+        # Transaccional: el KPI y sus tres RangoKPI provisionales se crean
+        # juntos o no se crea ninguno de los dos (nunca queda una
+        # configuración incompleta).
+        try:
+            with transaction.atomic():
+                indicador = serializer.save(creado_por=self.request.user, estado='borrador')
+                crear_rangos_provisionales(indicador)
+        except ValueError as error:
+            raise ValidationError({
+                'detail': (
+                    'No se pudo crear el KPI con sus criterios de cumplimiento '
+                    f'iniciales: {error} No se guardó ningún cambio.'
+                )
+            })
 
         registrar_bitacora_seguro(
             usuario=self.request.user,

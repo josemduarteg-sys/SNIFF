@@ -1,5 +1,4 @@
 from datetime import date
-from decimal import Decimal
 from rest_framework import serializers
 
 from .models import (
@@ -253,12 +252,17 @@ class PeriodoMedicionSerializer(serializers.ModelSerializer):
 class MedicionSerializer(serializers.ModelSerializer):
     mes_medicion = serializers.CharField(write_only=True, required=False, allow_blank=True)
     indicador_nombre = serializers.CharField(source='indicador.nombre', read_only=True)
+    unidad_medida = serializers.CharField(source='indicador.unidad_medida', read_only=True)
     periodo_nombre = serializers.SerializerMethodField()
     valor_meta = serializers.SerializerMethodField()
     observaciones = serializers.CharField(source='observacion', read_only=True)
     estado_cumplimiento = serializers.PrimaryKeyRelatedField(read_only=True)
     estado_cumplimiento_nombre = serializers.CharField(
         source='estado_cumplimiento.nombre',
+        read_only=True
+    )
+    estado_cumplimiento_color = serializers.CharField(
+        source='estado_cumplimiento.color',
         read_only=True
     )
     registrado_por_username = serializers.CharField(
@@ -273,10 +277,12 @@ class MedicionSerializer(serializers.ModelSerializer):
             'id',
             'indicador',
             'indicador_nombre',
+            'unidad_medida',
             'meta',
             'valor_meta',
             'estado_cumplimiento',
             'estado_cumplimiento_nombre',
+            'estado_cumplimiento_color',
             'periodo',
             'periodo_nombre',
             'mes_medicion',
@@ -368,7 +374,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             defaults={
                 'anio': anio,
                 'mes': mes,
-                'descripcion': f'Medición mensual {mes:02d}/{anio}',
+                'descripcion': f'Periodo {mes:02d}/{anio}',
             }
         )
 
@@ -503,6 +509,25 @@ class MedicionSerializer(serializers.ModelSerializer):
                 'indicador': 'El KPI seleccionado no tiene vigencia configurada.'
             })
 
+        valor_resultado = attrs.get('valor_resultado')
+
+        if valor_resultado is None and self.instance is not None and 'valor_resultado' not in attrs:
+            valor_resultado = self.instance.valor_resultado
+
+        if valor_resultado is not None:
+            if valor_resultado < 0:
+                raise serializers.ValidationError({
+                    'valor_resultado': 'El valor obtenido no puede ser negativo.'
+                })
+
+            if indicador.unidad_medida == '%' and valor_resultado > 100:
+                raise serializers.ValidationError({
+                    'valor_resultado': (
+                        'Cuando la unidad de medida es porcentaje, el resultado '
+                        'no puede ser mayor a 100.'
+                    )
+                })
+
         attrs = self.preparar_datos_mensuales(attrs)
 
         indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
@@ -515,32 +540,12 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         return attrs
 
-    def asignar_estado_cumplimiento(self, medicion):
-        porcentaje = medicion.calcular_cumplimiento()
-
-        if porcentaje is None:
-            return medicion
-
-        porcentaje = Decimal(str(porcentaje))
-
-        if porcentaje >= Decimal('90'):
-            estado = EstadoCumplimiento.objects.filter(nombre__icontains='favorable').first()
-        elif porcentaje >= Decimal('70'):
-            estado = EstadoCumplimiento.objects.filter(nombre__icontains='riesgo').first()
-        else:
-            estado = EstadoCumplimiento.objects.filter(nombre__icontains='incumplido').first()
-
-        if estado:
-            medicion.estado_cumplimiento = estado
-            medicion.save(update_fields=['estado_cumplimiento'])
-
-        return medicion
-
     def create(self, validated_data):
         from apps.auditoria.services import registrar_bitacora
         from .services import (
             generar_alerta_para_medicion,
             obtener_estado_para_medicion,
+            resolver_alertas_periodo_vencido,
         )
 
         indicador = validated_data.get('indicador')
@@ -561,7 +566,6 @@ class MedicionSerializer(serializers.ModelSerializer):
         validated_data['estado_cumplimiento'] = estado
 
         medicion = super().create(validated_data)
-        alerta = generar_alerta_para_medicion(medicion)
 
         request = self.context.get('request')
         usuario = (
@@ -570,12 +574,15 @@ class MedicionSerializer(serializers.ModelSerializer):
             else medicion.registrado_por
         )
 
+        alerta = generar_alerta_para_medicion(medicion)
+        resolver_alertas_periodo_vencido(medicion, usuario=usuario)
+
         registrar_bitacora(
             usuario=usuario,
             accion='crear',
             modulo='mediciones',
             descripcion=(
-                f'Se registró una medición mensual para el indicador '
+                f'Se registró una medición para el indicador '
                 f'"{medicion.indicador.nombre}" con resultado '
                 f'{medicion.valor_resultado}.'
             ),
@@ -594,11 +601,6 @@ class MedicionSerializer(serializers.ModelSerializer):
                 request=request,
             )
 
-        medicion.calcular_cumplimiento()
-        medicion.save()
-
-        self.asignar_estado_cumplimiento(medicion)
-
         return medicion
 
     def update(self, instance, validated_data):
@@ -606,6 +608,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         from .services import (
             generar_alerta_para_medicion,
             obtener_estado_para_medicion,
+            resolver_alertas_periodo_vencido,
         )
 
         indicador = validated_data.get('indicador', instance.indicador)
@@ -629,17 +632,19 @@ class MedicionSerializer(serializers.ModelSerializer):
         validated_data['estado_cumplimiento'] = estado
 
         medicion = super().update(instance, validated_data)
-        alerta = generar_alerta_para_medicion(medicion)
 
         request = self.context.get('request')
         usuario = request.user if request and request.user.is_authenticated else medicion.registrado_por
+
+        alerta = generar_alerta_para_medicion(medicion)
+        resolver_alertas_periodo_vencido(medicion, usuario=usuario)
 
         registrar_bitacora(
             usuario=usuario,
             accion='actualizar',
             modulo='mediciones',
             descripcion=(
-                f'Se actualizó una medición mensual para el indicador '
+                f'Se actualizó una medición para el indicador '
                 f'"{medicion.indicador.nombre}" con resultado '
                 f'{medicion.valor_resultado}.'
             ),
@@ -657,11 +662,6 @@ class MedicionSerializer(serializers.ModelSerializer):
                 ),
                 request=request,
             )
-
-        medicion.calcular_cumplimiento()
-        medicion.save()
-
-        self.asignar_estado_cumplimiento(medicion)
 
         return medicion
 

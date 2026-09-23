@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
+import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
 import UserModal from '../components/configuracion/UserModal.vue'
 import {
   actualizarUsuario,
@@ -18,6 +19,7 @@ import {
   rechazarSolicitudRestablecimiento,
 } from '../services/solicitudRestablecimientoService'
 import { puedeGestionarUsuarios } from '../utils/permisos'
+import { useConfirmacion } from '../composables/useConfirmacion'
 
 const props = defineProps({
   usuario: {
@@ -41,6 +43,13 @@ const roles = ref([])
 const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
+
+const {
+  solicitud: confirmacion,
+  solicitar: solicitarConfirmacion,
+  cancelar: cancelarConfirmacion,
+  confirmar: confirmarAccionPendiente,
+} = useConfirmacion()
 
 const busquedaUsuarios = ref('')
 
@@ -267,13 +276,17 @@ function claseEstadoSolicitud(estado) {
   }
 }
 
-async function manejarAprobarSolicitud(solicitud) {
-  const confirmar = window.confirm(
-    `¿Confirmás aprobar la solicitud de "${solicitud.usuario_username}"?`
-  )
+function manejarAprobarSolicitud(solicitud) {
+  solicitarConfirmacion({
+    titulo: 'Aprobar solicitud',
+    mensaje: `¿Confirmás aprobar la solicitud de "${solicitud.usuario_username}"?`,
+    textoConfirmar: 'Aprobar',
+    variante: 'normal',
+    accion: () => ejecutarAprobarSolicitud(solicitud),
+  })
+}
 
-  if (!confirmar) return
-
+async function ejecutarAprobarSolicitud(solicitud) {
   const observacion = window.prompt('Observación administrativa opcional:', '')
 
   error.value = ''
@@ -288,13 +301,17 @@ async function manejarAprobarSolicitud(solicitud) {
   }
 }
 
-async function manejarRechazarSolicitud(solicitud) {
-  const confirmar = window.confirm(
-    `¿Confirmás rechazar la solicitud de "${solicitud.usuario_username}"?`
-  )
+function manejarRechazarSolicitud(solicitud) {
+  solicitarConfirmacion({
+    titulo: 'Rechazar solicitud',
+    mensaje: `¿Confirmás rechazar la solicitud de "${solicitud.usuario_username}"?`,
+    textoConfirmar: 'Rechazar',
+    variante: 'advertencia',
+    accion: () => ejecutarRechazarSolicitud(solicitud),
+  })
+}
 
-  if (!confirmar) return
-
+async function ejecutarRechazarSolicitud(solicitud) {
   const observacion = window.prompt('Motivo del rechazo:', '')
 
   error.value = ''
@@ -309,19 +326,24 @@ async function manejarRechazarSolicitud(solicitud) {
   }
 }
 
-async function manejarAsignarPasswordTemporal(solicitud) {
+function manejarAsignarPasswordTemporal(solicitud) {
   const passwordTemporal = window.prompt('Ingrese la contraseña temporal:', '')
 
   if (!passwordTemporal || !passwordTemporal.trim()) {
     return
   }
 
-  const confirmar = window.confirm(
-    '¿Confirmás asignar esta contraseña temporal? El usuario deberá cambiarla al iniciar sesión.'
-  )
+  solicitarConfirmacion({
+    titulo: 'Asignar contraseña temporal',
+    mensaje: '¿Confirmás asignar esta contraseña temporal?',
+    textoSecundario: 'El usuario deberá cambiarla al iniciar sesión.',
+    textoConfirmar: 'Asignar',
+    variante: 'advertencia',
+    accion: () => ejecutarAsignarPasswordTemporal(solicitud, passwordTemporal),
+  })
+}
 
-  if (!confirmar) return
-
+async function ejecutarAsignarPasswordTemporal(solicitud, passwordTemporal) {
   error.value = ''
   mensaje.value = ''
 
@@ -408,18 +430,23 @@ function esUsuarioActual(item) {
   return Number(item.id) === Number(props.usuario?.id)
 }
 
-async function manejarInactivarUsuario(usuario) {
+function manejarInactivarUsuario(usuario) {
   if (Number(usuario.id) === Number(props.usuario?.id)) {
     mensaje.value = 'No podés inactivar tu propia cuenta.'
     return
   }
 
-  const confirmar = window.confirm(
-    `¿Seguro que querés inactivar al usuario "${usuario.username}"?`
-  )
+  solicitarConfirmacion({
+    titulo: 'Inactivar usuario',
+    mensaje: `¿Deseás inactivar al usuario "${usuario.username}"?`,
+    textoSecundario: 'El usuario dejará de poder iniciar sesión en el sistema.',
+    textoConfirmar: 'Inactivar',
+    variante: 'peligrosa',
+    accion: () => ejecutarInactivarUsuario(usuario),
+  })
+}
 
-  if (!confirmar) return
-
+async function ejecutarInactivarUsuario(usuario) {
   error.value = ''
   mensaje.value = ''
 
@@ -629,11 +656,16 @@ onBeforeUnmount(() => {
               <td>
                 <div class="actions-cell">
                   <button
-                    class="action-btn"
+                    class="action-icon-btn"
                     type="button"
+                    title="Editar"
+                    aria-label="Editar"
                     @click="abrirEditarUsuario(item)"
                   >
-                    Editar
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
+                    </svg>
                   </button>
 
                   <div v-if="esUsuarioActual(item)" class="current-user-info">
@@ -849,6 +881,18 @@ onBeforeUnmount(() => {
           Guardando usuario...
         </div>
       </ModalBase>
+
+      <ConfirmacionModal
+        :abierto="!!confirmacion"
+        :titulo="confirmacion?.titulo"
+        :mensaje="confirmacion?.mensaje"
+        :texto-secundario="confirmacion?.textoSecundario"
+        :texto-confirmar="confirmacion?.textoConfirmar"
+        :texto-cancelar="confirmacion?.textoCancelar"
+        :variante="confirmacion?.variante"
+        @confirmar="confirmarAccionPendiente"
+        @cancelar="cancelarConfirmacion"
+      />
     </template>
   </AppLayout>
 </template>
@@ -1018,6 +1062,30 @@ onBeforeUnmount(() => {
 .action-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.action-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid #e4eaef;
+  background: #ffffff;
+  color: #5e6e82;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.action-icon-btn svg {
+  stroke: currentColor;
+}
+
+.action-icon-btn:hover {
+  background: #eaf5f5;
+  color: #457b9d;
+  border-color: #a8dadc;
 }
 
 .current-user-info {

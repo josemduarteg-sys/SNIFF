@@ -1,5 +1,7 @@
 <script setup>
 import { computed } from 'vue'
+import { formatearNumero, formatearDiferencia } from '../../utils/formato'
+import { claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
 
 const props = defineProps({
   medicion: {
@@ -13,36 +15,13 @@ const porcentaje = computed(() => {
   return Number.isNaN(valor) ? 0 : valor
 })
 
-function estadoClase(nombreEstado) {
-  const estado = nombreEstado?.toLowerCase() || ''
+const claseCumplimiento = computed(() => claseColorCumplimiento(props.medicion.estado_cumplimiento_color))
 
-  if (estado.includes('favorable')) return 'ok'
-  if (estado.includes('riesgo')) return 'warning'
-  if (estado.includes('incumplido')) return 'danger'
-  if (estado.includes('pendiente')) return 'neutral'
-
-  return 'neutral'
-}
-
-function porcentajeClase(valor) {
-  const numero = Number(valor)
-
-  if (numero >= 90) return 'ok'
-  if (numero >= 70) return 'warning'
-  return 'danger'
-}
-
-function formatearNumero(valor) {
-  if (valor === null || valor === undefined || valor === '') return '-'
-
-  const numero = Number(valor)
-  if (Number.isNaN(numero)) return valor
-
-  return numero.toLocaleString('es-GT', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
+const diferencia = computed(() => {
+  return formatearDiferencia(props.medicion.valor_resultado, props.medicion.valor_meta, {
+    unidad: props.medicion.unidad_medida,
   })
-}
+})
 
 function formatearFecha(fecha) {
   if (!fecha) return 'No definida'
@@ -53,20 +32,6 @@ function formatearFecha(fecha) {
   if (!anio || !mes || !dia) return fecha
 
   return `${dia}/${mes}/${anio}`
-}
-
-function textoEstadoCumplimiento(estado) {
-  if (!estado) {
-    return 'Pendiente de revisión'
-  }
-
-  const texto = estado.toLowerCase()
-
-  if (texto.includes('pendiente')) {
-    return 'Pendiente de revisión'
-  }
-
-  return estado
 }
 </script>
 
@@ -79,7 +44,7 @@ function textoEstadoCumplimiento(estado) {
         <p>{{ medicion.observacion || medicion.observaciones || 'Sin observaciones registradas.' }}</p>
       </div>
 
-      <span class="badge" :class="estadoClase(medicion.estado_cumplimiento_nombre)">
+      <span class="badge" :class="claseCumplimiento">
         <span class="badge-dot"></span>
         {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
       </span>
@@ -87,16 +52,18 @@ function textoEstadoCumplimiento(estado) {
 
     <div class="progress-block">
       <div class="progress-head">
-        <span>Cumplimiento calculado</span>
-        <strong :class="porcentajeClase(porcentaje)">
-          {{ formatearNumero(porcentaje) }}%
+        <span title="Se calcula comparando el resultado obtenido con la meta establecida.">
+          Cumplimiento de la meta
+        </span>
+        <strong :class="claseCumplimiento">
+          {{ formatearNumero(porcentaje, { unidad: '%' }) }}
         </strong>
       </div>
 
       <div class="progress-track">
         <div
           class="progress-fill"
-          :class="porcentajeClase(porcentaje)"
+          :class="claseCumplimiento"
           :style="{ width: `${Math.min(porcentaje, 100)}%` }"
         ></div>
       </div>
@@ -109,23 +76,28 @@ function textoEstadoCumplimiento(estado) {
       </div>
 
       <div class="detail-item">
-        <span>Mes evaluado</span>
+        <span>Periodo evaluado</span>
         <strong>{{ medicion.periodo_nombre || medicion.mes_medicion || 'No definido' }}</strong>
       </div>
 
       <div class="detail-item">
         <span>Meta del KPI</span>
-        <strong>{{ formatearNumero(medicion.valor_meta) }}</strong>
+        <strong>{{ formatearNumero(medicion.valor_meta, { unidad: medicion.unidad_medida }) }}</strong>
       </div>
 
       <div class="detail-item">
-        <span>Resultado mensual</span>
-        <strong>{{ formatearNumero(medicion.valor_resultado) }}</strong>
+        <span>Resultado</span>
+        <strong>{{ formatearNumero(medicion.valor_resultado, { unidad: medicion.unidad_medida }) }}</strong>
       </div>
 
       <div class="detail-item">
-        <span>Cumplimiento</span>
-        <strong>{{ formatearNumero(medicion.porcentaje_cumplimiento) }}%</strong>
+        <span>Diferencia respecto a la meta</span>
+        <strong>{{ diferencia }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span title="Se calcula comparando el resultado obtenido con la meta establecida.">Cumplimiento de la meta</span>
+        <strong>{{ formatearNumero(medicion.porcentaje_cumplimiento, { unidad: '%' }) }}</strong>
       </div>
 
       <div class="detail-item">

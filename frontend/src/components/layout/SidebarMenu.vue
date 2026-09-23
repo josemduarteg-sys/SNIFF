@@ -53,7 +53,7 @@ const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
           <rect x="14" y="12" width="7" height="9" rx="1.5" />
           <rect x="3" y="16" width="7" height="5" rx="1.5" />
         </svg>
-        <span>Dashboard</span>
+        <span>Panel de control</span>
       </RouterLink>
 
       <div class="nav-label top-space">Planeación</div>

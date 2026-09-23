@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import MedicionForm from '../components/mediciones/MedicionForm.vue'
@@ -12,6 +13,9 @@ import {
   puedeEditarMedicion,
   puedeRegistrarMedicion,
 } from '../utils/permisos'
+import { formatearNumero } from '../utils/formato'
+import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
+import { useResaltado } from '../composables/useResaltado'
 
 const props = defineProps({
   usuario: {
@@ -20,6 +24,9 @@ const props = defineProps({
     default: null,
   },
 })
+
+const route = useRoute()
+const { idResaltado, aplicarResaltadoDesdeRuta } = useResaltado(route)
 
 const emit = defineEmits(['logout'])
 
@@ -89,7 +96,7 @@ const promedioCumplimiento = computed(() => {
   if (!porcentajes.length) return 0
 
   const total = porcentajes.reduce((acumulado, valor) => acumulado + valor, 0)
-  return Math.round(total / porcentajes.length)
+  return total / porcentajes.length
 })
 
 const medicionesFavorables = computed(() => {
@@ -163,52 +170,6 @@ async function manejarGuardado() {
     : 'Medición registrada correctamente.'
 }
 
-function textoEstadoCumplimiento(estado) {
-  if (!estado) {
-    return 'Pendiente de revisión'
-  }
-
-  const texto = estado.toLowerCase()
-
-  if (texto.includes('pendiente')) {
-    return 'Pendiente de revisión'
-  }
-
-  return estado
-}
-
-function estadoClase(nombreEstado) {
-  const estado = nombreEstado?.toLowerCase() || ''
-
-  if (estado.includes('favorable')) return 'ok'
-  if (estado.includes('riesgo')) return 'warning'
-  if (estado.includes('incumplido')) return 'danger'
-  if (estado.includes('pendiente')) return 'neutral'
-
-  return 'neutral'
-}
-
-function porcentajeClase(porcentaje) {
-  const valor = Number(porcentaje)
-
-  if (valor >= 90) return 'ok'
-  if (valor >= 70) return 'warning'
-  return 'danger'
-}
-
-function formatearNumero(valor) {
-  if (valor === null || valor === undefined || valor === '') return '-'
-
-  const numero = Number(valor)
-
-  if (Number.isNaN(numero)) return valor
-
-  return numero.toLocaleString('es-GT', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  })
-}
-
 function formatearFecha(fecha) {
   if (!fecha) return 'No definida'
 
@@ -224,16 +185,17 @@ function cerrarSesion() {
   emit('logout')
 }
 
-onMounted(() => {
-  cargarDatos()
+onMounted(async () => {
+  await cargarDatos()
+  await aplicarResaltadoDesdeRuta()
 })
 </script>
 
 <template>
   <AppLayout
     :usuario="props.usuario"
-    titulo="Seguimiento mensual de KPI"
-    subtitulo="Registra y consulta los resultados mensuales de los KPI autorizados."
+    titulo="Seguimiento de KPI"
+    subtitulo="Registra y consulta los resultados por periodo de los KPI autorizados."
     breadcrumb-actual="Mediciones"
     @logout="cerrarSesion"
   >
@@ -253,7 +215,7 @@ onMounted(() => {
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
 
-        Nueva medición mensual
+        Nueva medición
       </button>
     </template>
 
@@ -271,7 +233,7 @@ onMounted(() => {
         </div>
 
         <div class="kpi-value">{{ totalMediciones }}</div>
-        <div class="kpi-label">Mediciones mensuales</div>
+        <div class="kpi-label">Mediciones registradas</div>
         <div class="kpi-foot">Total almacenado en el sistema</div>
       </article>
 
@@ -286,7 +248,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="kpi-value">{{ promedioCumplimiento }}%</div>
+        <div class="kpi-value">{{ formatearNumero(promedioCumplimiento, { unidad: '%' }) }}</div>
         <div class="kpi-label">Cumplimiento promedio</div>
         <div class="kpi-foot">Promedio de mediciones registradas</div>
       </article>
@@ -383,10 +345,10 @@ onMounted(() => {
         <thead>
           <tr>
             <th>KPI</th>
-            <th>Mes evaluado</th>
+            <th>Periodo evaluado</th>
             <th>Meta</th>
-            <th>Resultado mensual</th>
-            <th>Cumplimiento</th>
+            <th>Resultado</th>
+            <th title="Se calcula comparando el resultado obtenido con la meta establecida.">Cumplimiento de la meta</th>
             <th>Estado</th>
             <th>Registrado por</th>
             <th style="text-align: right;">Acciones</th>
@@ -394,24 +356,29 @@ onMounted(() => {
         </thead>
 
         <tbody>
-          <tr v-for="medicion in medicionesFiltradas" :key="medicion.id">
+          <tr
+            v-for="medicion in medicionesFiltradas"
+            :key="medicion.id"
+            :id="`fila-${medicion.id}`"
+            :class="{ 'highlight-row': idResaltado === Number(medicion.id) }"
+          >
             <td>
-              <div class="cell-main">{{ medicion.indicador_nombre || 'Sin KPI' }}</div>
-              <div class="cell-sub">{{ medicion.observacion || medicion.observaciones || 'Sin observaciones' }}</div>
+              <div class="cell-main" :title="medicion.indicador_nombre || 'Sin KPI'">{{ medicion.indicador_nombre || 'Sin KPI' }}</div>
+              <div class="cell-sub" :title="medicion.observacion || medicion.observaciones || 'Sin observaciones'">{{ medicion.observacion || medicion.observaciones || 'Sin observaciones' }}</div>
             </td>
 
             <td>
               <div class="cell-main">
-                {{ medicion.periodo_nombre || medicion.mes_medicion || 'Mes no definido' }}
+                {{ medicion.periodo_nombre || medicion.mes_medicion || 'Periodo no definido' }}
               </div>
               <div class="cell-sub">
-                Seguimiento mensual
+                Periodo de seguimiento
               </div>
             </td>
 
             <td>
               <div class="meta-value">
-                {{ formatearNumero(medicion.valor_meta) }}
+                {{ formatearNumero(medicion.valor_meta, { unidad: medicion.unidad_medida }) }}
               </div>
               <div class="cell-sub">
                 Meta del KPI
@@ -420,25 +387,28 @@ onMounted(() => {
 
             <td>
               <div class="meta-value">
-                {{ formatearNumero(medicion.valor_resultado) }}
+                {{ formatearNumero(medicion.valor_resultado, { unidad: medicion.unidad_medida }) }}
               </div>
               <div class="cell-sub">
-                Resultado mensual
+                Resultado del periodo
               </div>
             </td>
 
             <td>
               <div class="progress-cell">
                 <div class="progress-info">
-                  <span :class="['progress-number', porcentajeClase(medicion.porcentaje_cumplimiento)]">
-                    {{ formatearNumero(medicion.porcentaje_cumplimiento) }}%
+                  <span
+                    class="progress-number"
+                    :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)"
+                  >
+                    {{ formatearNumero(medicion.porcentaje_cumplimiento, { unidad: '%' }) }}
                   </span>
                 </div>
 
                 <div class="progress-track">
                   <div
                     class="progress-fill"
-                    :class="porcentajeClase(medicion.porcentaje_cumplimiento)"
+                    :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)"
                     :style="{ width: `${Math.min(Number(medicion.porcentaje_cumplimiento) || 0, 100)}%` }"
                   ></div>
                 </div>
@@ -450,7 +420,7 @@ onMounted(() => {
             </td>
 
             <td>
-              <span class="badge" :class="estadoClase(medicion.estado_cumplimiento_nombre)">
+              <span class="badge" :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)">
                 <span class="badge-dot"></span>
                 {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
               </span>
@@ -467,14 +437,14 @@ onMounted(() => {
 
             <td>
               <div class="actions-cell">
-                <button class="action-icon-btn" type="button" title="Ver detalle" @click="abrirModalDetalle(medicion)">
+                <button class="action-icon-btn" type="button" title="Ver detalle" aria-label="Ver detalle" @click="abrirModalDetalle(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z" />
                     <circle cx="12" cy="12" r="3" />
                   </svg>
                 </button>
 
-                <button v-if="puedeEditar" class="action-icon-btn" type="button" title="Editar" @click="abrirModalEditar(medicion)">
+                <button v-if="puedeEditar" class="action-icon-btn" type="button" title="Editar" aria-label="Editar" @click="abrirModalEditar(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                     <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
@@ -515,7 +485,7 @@ onMounted(() => {
 
     <ModalBase
       :abierto="mostrarModalDetalle"
-      titulo="Detalle de medición mensual"
+      titulo="Detalle de medición"
       subtitulo="Información completa de la medición registrada y su cálculo de cumplimiento."
       ancho="760px"
       @cerrar="cerrarModalDetalle"
@@ -742,8 +712,8 @@ tbody tr:last-child td { border-bottom: none; }
 tbody tr { transition: background 0.12s ease; }
 tbody tr:hover { background: #fafcfd; }
 
-.cell-main { font-weight: 800; font-size: 13px; color: #1d3557; }
-.cell-sub { font-size: 11.5px; color: #9aa8b8; font-weight: 500; margin-top: 3px; max-width: 460px; }
+.cell-main { font-weight: 800; font-size: 13px; color: #1d3557; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-sub { font-size: 11.5px; color: #9aa8b8; font-weight: 500; margin-top: 3px; max-width: 460px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 .code-chip {
   display: inline-flex;
@@ -862,5 +832,26 @@ tbody tr:hover { background: #fafcfd; }
   .toolbar-filter,
   .toolbar-count { width: 100%; max-width: none; }
   .table-footer { flex-direction: column; align-items: flex-start; gap: 12px; }
+}
+
+.highlight-row {
+  animation: highlightPulse 3.5s ease;
+}
+
+@keyframes highlightPulse {
+  0% {
+    background: rgba(244, 162, 97, 0.24);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  45% {
+    background: rgba(244, 162, 97, 0.18);
+    box-shadow: inset 4px 0 0 #f4a261;
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: inset 0 0 0 transparent;
+  }
 }
 </style>
