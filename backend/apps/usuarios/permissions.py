@@ -67,28 +67,26 @@ class PermisoPlaneacion(BasePermission):
 
 
 class PermisoEstrategiaObjetivo(PermisoPlaneacion):
-    """Estrategia/Objetivo: además de PermisoPlaneacion, las acciones de cambio de
-    estado (activar/finalizar/inactivar) son solo para administrador, y
-    supervisor/operativo solo puede editar mientras el registro está en revisión."""
+    """Plan estratégico / Objetivo general: además de PermisoPlaneacion, las
+    transiciones de estado (poner en uso / cerrar) son exclusivas de
+    administrador.
 
-    ACCIONES_SOLO_ADMIN = ('activar', 'finalizar', 'inactivar')
+    No hay una restricción de objeto adicional más allá de PermisoPlaneacion:
+    los bloqueos por estado (título/periodo congelados En uso, todo
+    congelado Cerrado) ya los aplica el serializer para cualquier rol,
+    incluido administrador — ver apps/estrategia/serializers.py. El modelo
+    anterior de "editable solo mientras 'en_revision'" no tiene equivalente
+    en el nuevo flujo Borrador/En uso/Cerrado (la descripción, por ejemplo,
+    debe seguir siendo editable por cualquier rol con permiso de planeación
+    mientras el plan esté En uso)."""
+
+    ACCIONES_SOLO_ADMIN = ('poner_en_uso', 'cerrar')
 
     def has_permission(self, request, view):
         if getattr(view, 'action', None) in self.ACCIONES_SOLO_ADMIN:
             return es_administrador(request.user)
 
         return super().has_permission(request, view)
-
-    def has_object_permission(self, request, view, obj):
-        if request.method in SAFE_METHODS:
-            return True
-
-        if es_administrador(request.user):
-            return True
-
-        # Si llegamos acá, has_permission ya garantizó que es operativo/supervisor
-        # y que el método no es DELETE.
-        return getattr(obj, 'estado', None) == 'en_revision'
 
 
 class PermisoIndicadorKPI(BasePermission):

@@ -53,7 +53,11 @@ class FuenteDatoSerializer(serializers.ModelSerializer):
 
 
 class IndicadorKPISerializer(serializers.ModelSerializer):
-    objetivo_nombre = serializers.CharField(source='objetivo.nombre', read_only=True)
+    # source actualizado tras el rename Objetivo->ObjetivoGeneral (Bloque 1
+    # del rediseño): ObjetivoGeneral ya no tiene `nombre`, tiene
+    # `texto_objetivo`. Se mantiene el nombre de campo `objetivo_nombre`
+    # para no romper el frontend que ya lo consume.
+    objetivo_nombre = serializers.CharField(source='objetivo.texto_objetivo', read_only=True)
     frecuencia_nombre = serializers.CharField(source='frecuencia.nombre', read_only=True)
     tipo_calculo_nombre = serializers.CharField(source='tipo_calculo.nombre', read_only=True)
     fuente_dato_nombre = serializers.CharField(source='fuente_dato.nombre', read_only=True)

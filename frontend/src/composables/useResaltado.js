@@ -3,8 +3,8 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 /**
  * Resaltado temporal por query param (?resaltar=ID): hace scroll hasta
  * la fila `#{prefijoFila}-{id}` y le aplica la clase `.highlight-row`
- * por unos segundos. Mismo patrón ya usado en Estrategias/Objetivos/
- * Indicadores, extraído acá para no seguir copiándolo.
+ * por unos segundos. Mismo patrón ya usado en Planes estratégicos/
+ * Objetivos generales/Indicadores, extraído acá para no seguir copiándolo.
  */
 export function useResaltado(route, paramNombre = 'resaltar', prefijoFila = 'fila') {
   const idResaltado = ref(null)

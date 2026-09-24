@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 
-from apps.estrategia.models import Objetivo
+from apps.estrategia.models import ObjetivoGeneral
 
 class Frecuencia(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
@@ -58,8 +58,14 @@ class IndicadorKPI(models.Model):
         ('anulado', 'Anulado'),
     ]
 
+    # NOTA (Bloque 1 del rediseño): esta FK sigue llamándose `objetivo` y
+    # sigue apuntando al modelo que agrupa objetivos macro (ahora
+    # ObjetivoGeneral, antes Objetivo) únicamente para que el proyecto siga
+    # compilando tras el rename de apps.estrategia. El Bloque 3 del
+    # rediseño la reapuntará a ObjetivoEspecifico — no se adelanta ese
+    # cambio funcional acá.
     objetivo = models.ForeignKey(
-        Objetivo,
+        ObjetivoGeneral,
         on_delete=models.PROTECT,
         related_name='indicadores'
     )

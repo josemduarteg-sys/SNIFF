@@ -1,6 +1,6 @@
 <script setup>
 defineProps({
-  estrategia: {
+  plan: {
     type: Object,
     required: true,
   },
@@ -18,14 +18,10 @@ function formatearFecha(fecha) {
 }
 
 function textoEstado(estado) {
-  if (estado === true) return 'Activa'
-  if (estado === false) return 'Inactiva'
-
   const estados = {
-    activa: 'Activa',
-    en_revision: 'En revisión',
-    finalizada: 'Finalizada',
-    inactiva: 'Inactiva',
+    borrador: 'Borrador',
+    en_uso: 'En uso',
+    cerrado: 'Cerrado',
   }
 
   return estados[estado] || estado || 'Sin estado'
@@ -36,47 +32,43 @@ function textoEstado(estado) {
   <section class="detail-wrapper">
     <div class="detail-summary">
       <div>
-        <span class="eyebrow">Estrategia</span>
-        <h3>{{ estrategia.nombre }}</h3>
-        <p>{{ estrategia.descripcion || 'Sin descripción registrada.' }}</p>
+        <span class="eyebrow">Plan estratégico</span>
+        <h3>{{ plan.titulo }}</h3>
       </div>
     </div>
 
     <div class="detail-grid">
       <div class="detail-item">
-        <span>Área</span>
-        <strong>{{ estrategia.area_nombre || 'Sin área' }}</strong>
-      </div>
-
-      <div class="detail-item">
         <span>Estado</span>
-        <strong>{{ textoEstado(estrategia.estado) }}</strong>
+        <strong>{{ textoEstado(plan.estado) }}</strong>
       </div>
 
       <div class="detail-item">
         <span>Fecha de inicio</span>
-        <strong>{{ formatearFecha(estrategia.fecha_inicio) }}</strong>
+        <strong>{{ formatearFecha(plan.fecha_inicio) }}</strong>
       </div>
 
       <div class="detail-item">
         <span>Fecha de finalización</span>
-        <strong>{{ formatearFecha(estrategia.fecha_fin) }}</strong>
+        <strong>{{ formatearFecha(plan.fecha_fin) }}</strong>
       </div>
 
       <div class="detail-item">
         <span>Creado por</span>
-        <strong>{{ estrategia.creado_por_username || 'Sistema' }}</strong>
+        <strong>{{ plan.creado_por_username || 'Sistema' }}</strong>
       </div>
 
       <div class="detail-item">
         <span>Fecha de creación</span>
-        <strong>{{ formatearFecha(estrategia.fecha_creacion) }}</strong>
+        <strong>{{ formatearFecha(plan.fecha_creacion) }}</strong>
       </div>
     </div>
 
+    <!-- La descripción se muestra UNA sola vez acá (antes aparecía
+         duplicada: una vez en el resumen y otra vez en este mismo bloque). -->
     <div class="observation-box">
       <span>Descripción</span>
-      <p>{{ estrategia.descripcion || 'Sin descripción registrada.' }}</p>
+      <p>{{ plan.descripcion || 'Sin descripción registrada.' }}</p>
     </div>
   </section>
 </template>
@@ -108,14 +100,6 @@ h3 {
   color: #1d3557;
   font-size: 18px;
   font-weight: 800;
-}
-
-p {
-  margin: 6px 0 0;
-  color: #9aa8b8;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.45;
 }
 
 .detail-grid {

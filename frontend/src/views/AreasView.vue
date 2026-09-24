@@ -144,7 +144,7 @@ function manejarInactivarArea(area) {
   solicitarConfirmacion({
     titulo: 'Inactivar área',
     mensaje: `¿Deseás inactivar el área "${area.nombre}"?`,
-    textoSecundario: 'El área dejará de estar disponible para nuevas estrategias.',
+    textoSecundario: 'El área dejará de estar disponible para su uso.',
     textoConfirmar: 'Inactivar',
     variante: 'peligrosa',
     accion: async () => {
@@ -233,7 +233,7 @@ onMounted(() => {
         <article class="summary-card">
           <span>Activas</span>
           <strong>{{ areasActivas }}</strong>
-          <p>Disponibles para nuevas estrategias</p>
+          <p>Áreas disponibles para su uso</p>
         </article>
 
         <article class="summary-card">
@@ -336,7 +336,7 @@ onMounted(() => {
         :subtitulo="
           areaSeleccionada
             ? 'Actualiza los datos generales del área.'
-            : 'Registra un área de la cooperativa para organizar estrategias y objetivos.'
+            : 'Registra un área de la cooperativa.'
         "
         @cerrar="cerrarModalArea"
       >

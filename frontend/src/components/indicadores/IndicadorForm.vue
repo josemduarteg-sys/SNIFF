@@ -67,7 +67,7 @@ const objetivosFiltrados = computed(() => {
   }
 
   return props.objetivos.filter(
-    (objetivo) => Number(objetivo.estrategia) === Number(estado.estrategia)
+    (objetivo) => Number(objetivo.plan_estrategico) === Number(estado.estrategia)
   )
 })
 
@@ -134,7 +134,7 @@ watch(
       (objetivo) => Number(objetivo.id) === Number(estado.objetivo)
     )
 
-    if (objetivoActual && Number(objetivoActual.estrategia) !== Number(estado.estrategia)) {
+    if (objetivoActual && Number(objetivoActual.plan_estrategico) !== Number(estado.estrategia)) {
       estado.objetivo = ''
     }
   }
@@ -145,7 +145,7 @@ function cargarFormulario() {
     ? props.objetivos.find((objetivo) => Number(objetivo.id) === Number(props.indicador.objetivo))
     : null
 
-  estado.estrategia = objetivoActual?.estrategia || ''
+  estado.estrategia = objetivoActual?.plan_estrategico || ''
   estado.objetivo = props.indicador?.objetivo || ''
   estado.frecuencia = props.indicador?.frecuencia || ''
   estado.tipo_calculo = props.indicador?.tipo_calculo || ''
@@ -281,27 +281,27 @@ function cancelar() {
 
     <div class="form-grid">
       <label class="field field-full">
-        <span>Estrategia</span>
+        <span>Plan estratégico</span>
 
         <select v-model="estado.estrategia" :disabled="!puedeEditar">
-          <option value="">Seleccionar estrategia</option>
+          <option value="">Seleccionar plan estratégico</option>
 
           <option
             v-for="estrategia in estrategias"
             :key="estrategia.id"
             :value="estrategia.id"
           >
-            {{ estrategia.nombre }}
+            {{ estrategia.titulo }}
           </option>
         </select>
       </label>
 
       <label class="field field-full">
-        <span>Objetivo asociado</span>
+        <span>Objetivo general asociado</span>
 
         <select v-model="estado.objetivo" :disabled="!puedeEditar || !estado.estrategia">
           <option value="">
-            {{ estado.estrategia ? 'Seleccionar objetivo' : 'Primero seleccioná una estrategia' }}
+            {{ estado.estrategia ? 'Seleccionar objetivo general' : 'Primero seleccioná un plan estratégico' }}
           </option>
 
           <option
@@ -309,7 +309,7 @@ function cancelar() {
             :key="objetivo.id"
             :value="objetivo.id"
           >
-            {{ objetivo.nombre }}
+            {{ objetivo.texto_objetivo }}
           </option>
         </select>
       </label>

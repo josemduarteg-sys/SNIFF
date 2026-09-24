@@ -165,9 +165,15 @@ const indicadoresMenorCumplimiento = computed(() => {
     .slice(0, 5)
 })
 
+// NOTA (Bloque 1 del rediseño, solo compatibilidad): "estrategia.estado"
+// ahora es el estado del PlanEstrategico (borrador/en_uso/cerrado), no el
+// viejo activa/en_revision/finalizada/inactiva. El equivalente funcional
+// de "estrategia activa" que esta tarjeta contaba es un plan En uso — se
+// actualiza el valor comparado, sin tocar el resto de la lógica/diseño del
+// Dashboard (eso es Bloque 6).
 // Misma regla que ya usa la tarjeta "Estrategias activas" del Panel.
 function esEstrategiaActiva(estrategia) {
-  return estrategia.estado === 'activa' || estrategia.estado === true
+  return estrategia.estado === 'en_uso' || estrategia.estado === true
 }
 
 const cumplimientoPorEstrategia = computed(() => {
@@ -177,7 +183,7 @@ const cumplimientoPorEstrategia = computed(() => {
     .filter(esEstrategiaActiva)
     .map((estrategia) => {
       const idsObjetivos = objetivos.value
-        .filter((objetivo) => Number(objetivo.estrategia) === Number(estrategia.id))
+        .filter((objetivo) => Number(objetivo.plan_estrategico) === Number(estrategia.id))
         .map((objetivo) => objetivo.id)
 
       const porcentajes = indicadores.value
@@ -193,7 +199,7 @@ const cumplimientoPorEstrategia = computed(() => {
         // incumplimiento) ni clasificada en Favorable/En riesgo/Incumplido.
         return {
           id: estrategia.id,
-          nombre: estrategia.nombre,
+          nombre: estrategia.titulo,
           tieneMediciones: false,
           porcentaje: null,
         }
@@ -203,7 +209,7 @@ const cumplimientoPorEstrategia = computed(() => {
 
       return {
         id: estrategia.id,
-        nombre: estrategia.nombre,
+        nombre: estrategia.titulo,
         tieneMediciones: true,
         porcentaje: promedio,
       }
@@ -400,8 +406,8 @@ async function cargarDatosDashboard() {
       medicionesResponse,
       alertasResponse,
     ] = await Promise.all([
-      api.get('estrategias/'),
-      api.get('objetivos/'),
+      api.get('planes-estrategicos/'),
+      api.get('objetivos-generales/'),
       api.get('indicadores-kpi/'),
       api.get('mediciones/'),
       api.get('alertas/'),
@@ -425,7 +431,7 @@ function cerrarSesion() {
 
 function irAEstrategia(id) {
   if (!id) return
-  router.push({ path: '/estrategias', query: { resaltar: id } })
+  router.push({ path: '/planes-estrategicos', query: { resaltar: id } })
 }
 
 function irAIndicador(id) {

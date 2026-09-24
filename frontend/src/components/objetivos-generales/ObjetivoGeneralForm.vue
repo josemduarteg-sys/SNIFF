@@ -1,12 +1,13 @@
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { obtenerPlanesEstrategicosParaObjetivo } from '../../services/objetivoGeneralService'
 
 const props = defineProps({
-  estrategia: {
+  objetivo: {
     type: Object,
     default: null,
   },
-  areas: {
+  planes: {
     type: Array,
     default: () => [],
   },
@@ -15,69 +16,89 @@ const props = defineProps({
 const emit = defineEmits(['guardar', 'cancelar'])
 
 const estado = reactive({
-  area: '',
-  nombre: '',
-  descripcion: '',
-  fecha_inicio: '',
-  fecha_fin: '',
+  plan_estrategico: '',
+  texto_objetivo: '',
   error: '',
 })
 
-const esEdicion = computed(() => Boolean(props.estrategia?.id))
+const planFaltante = ref(null)
+
+const esEdicion = computed(() => Boolean(props.objetivo?.id))
 
 const tituloBoton = computed(() => {
-  return esEdicion.value ? 'Actualizar estrategia' : 'Crear estrategia'
+  return esEdicion.value ? 'Actualizar objetivo general' : 'Crear objetivo general'
 })
 
-const areasDisponibles = computed(() => {
-  const areaActualId = props.estrategia?.area
-  const yaIncluida = props.areas.some((area) => Number(area.id) === Number(areaActualId))
+const planesDisponibles = computed(() => {
+  const planActualId = props.objetivo?.plan_estrategico
 
-  if (esEdicion.value && areaActualId && !yaIncluida) {
+  const yaIncluido = props.planes.some(
+    (plan) => Number(plan.id) === Number(planActualId)
+  )
+
+  if (esEdicion.value && planActualId && !yaIncluido) {
+    const tituloBase =
+      planFaltante.value?.titulo || props.objetivo?.plan_estrategico_titulo || 'Plan estratégico'
+
     return [
-      ...props.areas,
-      {
-        id: areaActualId,
-        nombre: `${props.estrategia?.area_nombre || 'Área'} (inactiva)`,
-      },
+      ...props.planes,
+      { id: planActualId, titulo: `${tituloBase} (no disponible para nuevos objetivos)` },
     ]
   }
 
-  return props.areas
+  return props.planes
 })
 
 watch(
-  () => props.estrategia,
+  () => props.objetivo,
   () => {
     cargarFormulario()
+    cargarPlanFaltante()
   },
   { immediate: true }
 )
 
+async function cargarPlanFaltante() {
+  planFaltante.value = null
+
+  const planActualId = props.objetivo?.plan_estrategico
+
+  if (!planActualId) {
+    return
+  }
+
+  const yaIncluido = props.planes.some(
+    (plan) => Number(plan.id) === Number(planActualId)
+  )
+
+  if (yaIncluido) {
+    return
+  }
+
+  try {
+    const todos = await obtenerPlanesEstrategicosParaObjetivo()
+    planFaltante.value = todos.find((plan) => Number(plan.id) === Number(planActualId)) || null
+  } catch {
+    planFaltante.value = null
+  }
+}
+
 function cargarFormulario() {
-  estado.area = props.estrategia?.area || ''
-  estado.nombre = props.estrategia?.nombre || ''
-  estado.descripcion = props.estrategia?.descripcion || ''
-  estado.fecha_inicio = props.estrategia?.fecha_inicio || ''
-  estado.fecha_fin = props.estrategia?.fecha_fin || ''
+  estado.plan_estrategico = props.objetivo?.plan_estrategico || ''
+  estado.texto_objetivo = props.objetivo?.texto_objetivo || ''
   estado.error = ''
 }
 
 function validarFormulario() {
   estado.error = ''
 
-  if (!estado.area) {
-    estado.error = 'Seleccioná el área relacionada con la estrategia.'
+  if (!estado.plan_estrategico) {
+    estado.error = 'Seleccioná el plan estratégico relacionado con el objetivo.'
     return false
   }
 
-  if (!estado.nombre.trim()) {
-    estado.error = 'Ingresá el nombre de la estrategia.'
-    return false
-  }
-
-  if (estado.fecha_inicio && estado.fecha_fin && estado.fecha_fin < estado.fecha_inicio) {
-    estado.error = 'La fecha fin no puede ser menor que la fecha inicio.'
+  if (!estado.texto_objetivo.trim()) {
+    estado.error = 'Ingresá el texto del objetivo general.'
     return false
   }
 
@@ -90,11 +111,8 @@ function guardar() {
   }
 
   emit('guardar', {
-    area: estado.area,
-    nombre: estado.nombre.trim(),
-    descripcion: estado.descripcion.trim(),
-    fecha_inicio: estado.fecha_inicio || null,
-    fecha_fin: estado.fecha_fin || null,
+    plan_estrategico: estado.plan_estrategico,
+    texto_objetivo: estado.texto_objetivo.trim(),
   })
 }
 
@@ -104,71 +122,41 @@ function cancelar() {
 </script>
 
 <template>
-  <form class="estrategia-form" @submit.prevent="guardar">
+  <form class="objetivo-form" @submit.prevent="guardar">
     <div v-if="estado.error" class="alert error">
       {{ estado.error }}
     </div>
 
     <div class="form-grid">
       <label class="field field-full">
-        <span>Área</span>
+        <span>Plan estratégico</span>
 
-        <select v-model="estado.area">
-          <option value="">Seleccionar área</option>
+        <select v-model="estado.plan_estrategico">
+          <option value="">Seleccionar plan estratégico</option>
 
           <option
-            v-for="area in areasDisponibles"
-            :key="area.id"
-            :value="area.id"
+            v-for="plan in planesDisponibles"
+            :key="plan.id"
+            :value="plan.id"
           >
-            {{ area.nombre }}
+            {{ plan.titulo }}
           </option>
         </select>
       </label>
 
       <label class="field field-full">
-        <span>Nombre de la estrategia</span>
-
-        <input
-          v-model="estado.nombre"
-          type="text"
-          placeholder="Ejemplo: Fortalecimiento de recuperación de cartera"
-        />
-      </label>
-
-      <label class="field field-full">
-        <span>Descripción</span>
+        <span>Texto del objetivo general</span>
 
         <textarea
-          v-model="estado.descripcion"
+          v-model="estado.texto_objetivo"
           rows="4"
-          placeholder="Describe el enfoque general de la estrategia."
+          placeholder="Ejemplo: Incrementar en 10.00 % la participación de asociados durante la vigencia del Plan estratégico."
         ></textarea>
       </label>
-
-      <label class="field">
-        <span>Fecha inicio</span>
-
-        <input
-          v-model="estado.fecha_inicio"
-          type="date"
-        />
-      </label>
-
-      <label class="field">
-        <span>Fecha fin</span>
-
-        <input
-          v-model="estado.fecha_fin"
-          type="date"
-        />
-      </label>
-
     </div>
 
     <div class="help-box">
-      Completa los datos generales de la estrategia. El sistema gestionará su estado
-      durante el proceso de revisión.
+      Solo se muestran planes estratégicos En uso: el objetivo general debe cumplirse durante toda su vigencia.
     </div>
 
     <div class="form-actions">
@@ -184,14 +172,14 @@ function cancelar() {
 </template>
 
 <style scoped>
-.estrategia-form {
+.objetivo-form {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.estrategia-form,
-.estrategia-form * {
+.objetivo-form,
+.objetivo-form * {
   box-sizing: border-box;
 }
 

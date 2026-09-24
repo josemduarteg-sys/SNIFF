@@ -1,22 +1,21 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
-import EstrategiaForm from '../components/estrategias/EstrategiaForm.vue'
-import EstrategiaDetalle from '../components/estrategias/EstrategiaDetalle.vue'
+import PlanEstrategicoForm from '../components/planes-estrategicos/PlanEstrategicoForm.vue'
+import PlanEstrategicoDetalle from '../components/planes-estrategicos/PlanEstrategicoDetalle.vue'
 import {
-  activarEstrategia,
-  actualizarEstrategia,
-  crearEstrategia,
-  finalizarEstrategia,
-  inactivarEstrategia,
-  obtenerDatosFormularioEstrategia,
-  obtenerEstrategias,
-} from '../services/estrategiaService'
-import { esAdministrador, puedeGestionarEstrategias } from '../utils/permisos'
+  actualizarPlanEstrategico,
+  cerrarPlanEstrategico,
+  crearPlanEstrategico,
+  obtenerPlanesEstrategicos,
+  ponerEnUsoPlanEstrategico,
+} from '../services/planEstrategicoService'
+import { esAdministrador, puedeGestionarPlanesEstrategicos } from '../utils/permisos'
 import { useConfirmacion } from '../composables/useConfirmacion'
+import { useResaltado } from '../composables/useResaltado'
 
 const props = defineProps({
   usuario: {
@@ -26,17 +25,15 @@ const props = defineProps({
   },
 })
 
-const puedeGestionar = computed(() => puedeGestionarEstrategias(props.usuario))
+const puedeGestionar = computed(() => puedeGestionarPlanesEstrategicos(props.usuario))
 const esAdmin = computed(() => esAdministrador(props.usuario))
 
 const emit = defineEmits(['logout'])
 
 const route = useRoute()
-const idResaltado = ref(null)
-let timeoutResaltado = null
+const { idResaltado, aplicarResaltadoDesdeRuta } = useResaltado(route)
 
-const estrategias = ref([])
-const areas = ref([])
+const planes = ref([])
 const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
@@ -48,127 +45,86 @@ const {
   confirmar: confirmarAccionPendiente,
 } = useConfirmacion()
 
-const modalEstrategiaAbierto = ref(false)
-const estrategiaSeleccionada = ref(null)
-const guardandoEstrategia = ref(false)
-const errorModalEstrategia = ref('')
+const modalPlanAbierto = ref(false)
+const planSeleccionado = ref(null)
+const guardandoPlan = ref(false)
+const errorModalPlan = ref('')
 
 const modalDetalleAbierto = ref(false)
-const estrategiaDetalle = ref(null)
+const planDetalle = ref(null)
 
-const estrategiasActivas = computed(() => {
-  return estrategias.value.filter((item) => item.estado === 'activa' || item.estado === true).length
+const planesEnUso = computed(() => {
+  return planes.value.filter((item) => item.estado === 'en_uso').length
 })
 
-async function cargarEstrategias() {
+async function cargarPlanes() {
   cargando.value = true
   error.value = ''
 
   try {
-    const [estrategiasData, datosFormulario] = await Promise.all([
-      obtenerEstrategias(),
-      obtenerDatosFormularioEstrategia(),
-    ])
-
-    estrategias.value = estrategiasData
-    areas.value = datosFormulario.areas
+    planes.value = await obtenerPlanesEstrategicos()
   } catch (e) {
-    error.value = 'No se pudieron cargar las estrategias.'
+    error.value = 'No se pudieron cargar los planes estratégicos.'
   } finally {
     cargando.value = false
   }
 }
 
-async function aplicarResaltadoDesdeRuta() {
-  const idQuery = Number(route.query.resaltar)
-
-  if (!idQuery) {
-    return
-  }
-
-  idResaltado.value = idQuery
-
-  await nextTick()
-
-  const fila = document.getElementById(`fila-${idQuery}`)
-
-  if (fila) {
-    fila.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    })
-  }
-
-  if (timeoutResaltado) {
-    window.clearTimeout(timeoutResaltado)
-  }
-
-  timeoutResaltado = window.setTimeout(() => {
-    if (idResaltado.value === idQuery) {
-      idResaltado.value = null
-    }
-  }, 3500)
-}
-
-watch(
-  () => route.query.resaltar,
-  () => {
-    aplicarResaltadoDesdeRuta()
-  }
-)
-
 function estadoClase(estado) {
-  if (estado === 'activa' || estado === true) return 'active'
-  if (estado === 'finalizada') return 'finished'
-  if (estado === 'en_revision') return 'warning'
-  return 'inactive'
+  if (estado === 'en_uso') return 'active'
+  if (estado === 'cerrado') return 'finished'
+  return 'warning'
 }
 
 function textoEstado(estado) {
-  if (estado === true) return 'Activa'
-  if (estado === false) return 'Inactiva'
-
   const estados = {
-    activa: 'Activa',
-    en_revision: 'En revisión',
-    finalizada: 'Finalizada',
-    inactiva: 'Inactiva',
+    borrador: 'Borrador',
+    en_uso: 'En uso',
+    cerrado: 'Cerrado',
   }
 
   return estados[estado] || estado || 'Sin estado'
 }
 
-function abrirNuevaEstrategia() {
-  estrategiaSeleccionada.value = null
-  modalEstrategiaAbierto.value = true
+function puedeEditar(plan) {
+  return puedeGestionar.value && plan.estado !== 'cerrado'
+}
+
+function abrirNuevoPlan() {
+  planSeleccionado.value = null
+  modalPlanAbierto.value = true
   error.value = ''
   mensaje.value = ''
-  errorModalEstrategia.value = ''
+  errorModalPlan.value = ''
 }
 
-function abrirEditarEstrategia(estrategia) {
-  estrategiaSeleccionada.value = estrategia
-  modalEstrategiaAbierto.value = true
+function abrirEditarPlan(plan) {
+  if (!puedeEditar(plan)) {
+    return
+  }
+
+  planSeleccionado.value = plan
+  modalPlanAbierto.value = true
   error.value = ''
   mensaje.value = ''
-  errorModalEstrategia.value = ''
+  errorModalPlan.value = ''
 }
 
-function cerrarModalEstrategia() {
-  modalEstrategiaAbierto.value = false
-  estrategiaSeleccionada.value = null
-  guardandoEstrategia.value = false
-  errorModalEstrategia.value = ''
+function cerrarModalPlan() {
+  modalPlanAbierto.value = false
+  planSeleccionado.value = null
+  guardandoPlan.value = false
+  errorModalPlan.value = ''
 }
 
-function abrirDetalleEstrategia(estrategia) {
-  estrategiaDetalle.value = estrategia
+function abrirDetallePlan(plan) {
+  planDetalle.value = plan
   modalDetalleAbierto.value = true
 }
 
 function cerrarModalDetalle() {
   modalDetalleAbierto.value = false
-  estrategiaDetalle.value = null
+  planDetalle.value = null
 }
 
 function obtenerMensajeError(e, mensajeDefault) {
@@ -190,86 +146,73 @@ function obtenerMensajeError(e, mensajeDefault) {
   return mensajeDefault
 }
 
-async function guardarEstrategia(payload) {
-  guardandoEstrategia.value = true
-  errorModalEstrategia.value = ''
+async function guardarPlan(payload) {
+  guardandoPlan.value = true
+  errorModalPlan.value = ''
   mensaje.value = ''
 
   try {
-    if (estrategiaSeleccionada.value?.id) {
-      await actualizarEstrategia(estrategiaSeleccionada.value.id, payload)
-      mensaje.value = 'Estrategia actualizada correctamente.'
+    if (planSeleccionado.value?.id) {
+      await actualizarPlanEstrategico(planSeleccionado.value.id, payload)
+      mensaje.value = 'Plan estratégico actualizado correctamente.'
     } else {
-      await crearEstrategia(payload)
-      mensaje.value = 'Estrategia creada correctamente.'
+      await crearPlanEstrategico(payload)
+      mensaje.value = 'Plan estratégico creado correctamente.'
     }
 
-    cerrarModalEstrategia()
-    await cargarEstrategias()
+    cerrarModalPlan()
+    await cargarPlanes()
   } catch (e) {
-    errorModalEstrategia.value = obtenerMensajeError(
+    errorModalPlan.value = obtenerMensajeError(
       e,
-      estrategiaSeleccionada.value?.id
-        ? 'No se pudo actualizar la estrategia.'
-        : 'No se pudo crear la estrategia.'
+      planSeleccionado.value?.id
+        ? 'No se pudo actualizar el plan estratégico.'
+        : 'No se pudo crear el plan estratégico.'
     )
   } finally {
-    guardandoEstrategia.value = false
+    guardandoPlan.value = false
   }
 }
 
-async function manejarActivarEstrategia(estrategia) {
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await activarEstrategia(estrategia.id)
-    mensaje.value = 'Estrategia activada correctamente.'
-    await cargarEstrategias()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo activar la estrategia.')
-  }
-}
-
-function manejarFinalizarEstrategia(estrategia) {
+function manejarPonerEnUso(plan) {
   solicitarConfirmacion({
-    titulo: 'Finalizar estrategia',
-    mensaje: `¿Deseás finalizar la estrategia "${estrategia.nombre}"?`,
-    textoSecundario: 'Una vez finalizada, ya no se podrá seguir editando su seguimiento activo.',
-    textoConfirmar: 'Finalizar',
-    variante: 'advertencia',
+    titulo: 'Pasar a En uso',
+    mensaje: `¿Deseás poner en uso el Plan estratégico "${plan.titulo}"?`,
+    textoSecundario: 'El título y el periodo quedarán bloqueados; la descripción se podrá seguir editando.',
+    textoConfirmar: 'Pasar a En uso',
+    variante: 'normal',
     accion: async () => {
       error.value = ''
       mensaje.value = ''
 
       try {
-        await finalizarEstrategia(estrategia.id)
-        mensaje.value = 'Estrategia finalizada correctamente.'
-        await cargarEstrategias()
+        await ponerEnUsoPlanEstrategico(plan.id)
+        mensaje.value = 'Plan estratégico puesto En uso correctamente.'
+        await cargarPlanes()
       } catch (e) {
-        error.value = obtenerMensajeError(e, 'No se pudo finalizar la estrategia.')
+        error.value = obtenerMensajeError(e, 'No se pudo poner en uso el plan estratégico.')
       }
     },
   })
 }
 
-function manejarInactivarEstrategia(estrategia) {
+function manejarCerrar(plan) {
   solicitarConfirmacion({
-    titulo: 'Inactivar estrategia',
-    mensaje: `¿Deseás inactivar la estrategia "${estrategia.nombre}"?`,
-    textoSecundario: 'La estrategia dejará de estar disponible para seguimiento activo.',
-    textoConfirmar: 'Inactivar',
+    titulo: 'Cerrar plan estratégico',
+    mensaje: `¿Deseás cerrar el Plan estratégico "${plan.titulo}"?`,
+    textoSecundario: 'Esta acción es definitiva: el plan y todo lo que dependa de él quedarán inmutables, sin posibilidad de reactivarlo.',
+    textoConfirmar: 'Cerrar',
     variante: 'peligrosa',
     accion: async () => {
       error.value = ''
       mensaje.value = ''
 
       try {
-        await inactivarEstrategia(estrategia.id)
-        mensaje.value = 'Estrategia inactivada correctamente.'
-        await cargarEstrategias()
+        await cerrarPlanEstrategico(plan.id)
+        mensaje.value = 'Plan estratégico cerrado correctamente.'
+        await cargarPlanes()
       } catch (e) {
-        error.value = obtenerMensajeError(e, 'No se pudo inactivar la estrategia.')
+        error.value = obtenerMensajeError(e, 'No se pudo cerrar el plan estratégico.')
       }
     },
   })
@@ -280,28 +223,22 @@ function cerrarSesion() {
 }
 
 onMounted(async () => {
-  await cargarEstrategias()
+  await cargarPlanes()
   await aplicarResaltadoDesdeRuta()
-})
-
-onBeforeUnmount(() => {
-  if (timeoutResaltado) {
-    window.clearTimeout(timeoutResaltado)
-  }
 })
 </script>
 
 <template>
   <AppLayout
     :usuario="props.usuario"
-    titulo="Gestión de Estrategias"
-    subtitulo="Administra las estrategias empresariales vinculadas al seguimiento de indicadores KPI."
-    breadcrumb-actual="Estrategias"
+    titulo="Gestión de Planes estratégicos"
+    subtitulo="Administra los planes estratégicos institucionales."
+    breadcrumb-actual="Planes estratégicos"
     @logout="cerrarSesion"
   >
     <template v-if="puedeGestionar" #actions>
-      <button class="btn-primary" type="button" @click="abrirNuevaEstrategia">
-        + Nueva estrategia
+      <button class="btn-primary" type="button" @click="abrirNuevoPlan">
+        + Nuevo plan estratégico
       </button>
     </template>
 
@@ -315,39 +252,38 @@ onBeforeUnmount(() => {
 
     <section class="summary-grid">
       <article class="summary-card">
-        <span>Total registradas</span>
-        <strong>{{ estrategias.length }}</strong>
-        <p>Estrategias creadas en el sistema</p>
+        <span>Total registrados</span>
+        <strong>{{ planes.length }}</strong>
+        <p>Planes estratégicos creados en el sistema</p>
       </article>
 
       <article class="summary-card">
-        <span>Activas</span>
-        <strong>{{ estrategiasActivas }}</strong>
-        <p>Estrategias actualmente en seguimiento</p>
+        <span>En uso</span>
+        <strong>{{ planesEnUso }}</strong>
+        <p>Planes estratégicos actualmente en ejecución</p>
       </article>
     </section>
 
     <section class="card-panel">
       <div class="panel-head">
         <div>
-          <h2>Listado de estrategias</h2>
-          <p>Consulta general de estrategias registradas.</p>
+          <h2>Listado de planes estratégicos</h2>
+          <p>Consulta general de planes estratégicos registrados.</p>
         </div>
       </div>
 
       <div v-if="cargando" class="message">
-        Cargando estrategias...
+        Cargando planes estratégicos...
       </div>
 
-      <div v-else-if="!estrategias.length" class="empty-state">
-        No hay estrategias registradas todavía.
+      <div v-else-if="!planes.length" class="empty-state">
+        No hay planes estratégicos registrados todavía.
       </div>
 
       <table v-else>
         <thead>
           <tr>
-            <th>Nombre</th>
-            <th>Área</th>
+            <th>Título</th>
             <th>Fecha inicio</th>
             <th>Fecha fin</th>
             <th>Estado</th>
@@ -357,23 +293,22 @@ onBeforeUnmount(() => {
 
         <tbody>
           <tr
-            v-for="estrategia in estrategias"
-            :key="estrategia.id"
-            :id="`fila-${estrategia.id}`"
-            :class="{ 'highlight-row': idResaltado === Number(estrategia.id) }"
+            v-for="plan in planes"
+            :key="plan.id"
+            :id="`fila-${plan.id}`"
+            :class="{ 'highlight-row': idResaltado === Number(plan.id) }"
           >
             <td>
-              <div class="cell-main" :title="estrategia.nombre">{{ estrategia.nombre }}</div>
-              <div class="cell-sub" :title="estrategia.descripcion || 'Sin descripción'">{{ estrategia.descripcion || 'Sin descripción' }}</div>
+              <div class="cell-main" :title="plan.titulo">{{ plan.titulo }}</div>
+              <div class="cell-sub" :title="plan.descripcion || 'Sin descripción'">{{ plan.descripcion || 'Sin descripción' }}</div>
             </td>
 
-            <td>{{ estrategia.area_nombre || 'Sin área' }}</td>
-            <td>{{ estrategia.fecha_inicio || 'No definida' }}</td>
-            <td>{{ estrategia.fecha_fin || 'No definida' }}</td>
+            <td>{{ plan.fecha_inicio || 'No definida' }}</td>
+            <td>{{ plan.fecha_fin || 'No definida' }}</td>
 
             <td>
-              <span class="badge" :class="estadoClase(estrategia.estado)">
-                {{ textoEstado(estrategia.estado) }}
+              <span class="badge" :class="estadoClase(plan.estado)">
+                {{ textoEstado(plan.estado) }}
               </span>
             </td>
 
@@ -384,7 +319,7 @@ onBeforeUnmount(() => {
                   type="button"
                   title="Ver detalle"
                   aria-label="Ver detalle"
-                  @click="abrirDetalleEstrategia(estrategia)"
+                  @click="abrirDetallePlan(plan)"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" />
@@ -393,12 +328,12 @@ onBeforeUnmount(() => {
                 </button>
 
                 <button
-                  v-if="puedeGestionar && (esAdmin || estrategia.estado === 'en_revision')"
+                  v-if="puedeEditar(plan)"
                   class="action-icon-btn"
                   type="button"
                   title="Editar"
                   aria-label="Editar"
-                  @click="abrirEditarEstrategia(estrategia)"
+                  @click="abrirEditarPlan(plan)"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -406,32 +341,23 @@ onBeforeUnmount(() => {
                   </svg>
                 </button>
 
-                <template v-if="puedeGestionar && esAdmin">
+                <template v-if="esAdmin">
                   <button
-                    v-if="estrategia.estado !== 'activa'"
+                    v-if="plan.estado === 'borrador'"
                     class="action-btn"
                     type="button"
-                    @click="manejarActivarEstrategia(estrategia)"
+                    @click="manejarPonerEnUso(plan)"
                   >
-                    Activar
+                    Pasar a En uso
                   </button>
 
                   <button
-                    v-if="estrategia.estado !== 'finalizada'"
-                    class="action-btn"
-                    type="button"
-                    @click="manejarFinalizarEstrategia(estrategia)"
-                  >
-                    Finalizar
-                  </button>
-
-                  <button
-                    v-if="estrategia.estado !== 'inactiva'"
+                    v-if="plan.estado === 'en_uso'"
                     class="action-btn danger"
                     type="button"
-                    @click="manejarInactivarEstrategia(estrategia)"
+                    @click="manejarCerrar(plan)"
                   >
-                    Inactivar
+                    Cerrar
                   </button>
                 </template>
               </div>
@@ -442,38 +368,37 @@ onBeforeUnmount(() => {
     </section>
 
     <ModalBase
-      :abierto="modalEstrategiaAbierto"
-      :titulo="estrategiaSeleccionada ? 'Editar estrategia' : 'Nueva estrategia'"
+      :abierto="modalPlanAbierto"
+      :titulo="planSeleccionado ? 'Editar plan estratégico' : 'Nuevo plan estratégico'"
       :subtitulo="
-        estrategiaSeleccionada
-          ? 'Actualiza los datos generales de la estrategia.'
-          : 'Registra una estrategia para agrupar objetivos e indicadores KPI.'
+        planSeleccionado
+          ? 'Actualiza los datos generales del plan estratégico.'
+          : 'Registra un plan estratégico para agrupar objetivos generales.'
       "
-      @cerrar="cerrarModalEstrategia"
+      @cerrar="cerrarModalPlan"
     >
-      <div v-if="errorModalEstrategia" class="alert error">
-        {{ errorModalEstrategia }}
+      <div v-if="errorModalPlan" class="alert error">
+        {{ errorModalPlan }}
       </div>
 
-      <EstrategiaForm
-        :estrategia="estrategiaSeleccionada"
-        :areas="areas"
-        @guardar="guardarEstrategia"
-        @cancelar="cerrarModalEstrategia"
+      <PlanEstrategicoForm
+        :plan="planSeleccionado"
+        @guardar="guardarPlan"
+        @cancelar="cerrarModalPlan"
       />
 
-      <div v-if="guardandoEstrategia" class="saving-message">
-        Guardando estrategia...
+      <div v-if="guardandoPlan" class="saving-message">
+        Guardando plan estratégico...
       </div>
     </ModalBase>
 
     <ModalBase
       :abierto="modalDetalleAbierto"
-      titulo="Detalle de estrategia"
-      subtitulo="Información completa de la estrategia registrada."
+      titulo="Detalle de plan estratégico"
+      subtitulo="Información completa del plan estratégico registrado."
       @cerrar="cerrarModalDetalle"
     >
-      <EstrategiaDetalle v-if="estrategiaDetalle" :estrategia="estrategiaDetalle" />
+      <PlanEstrategicoDetalle v-if="planDetalle" :plan="planDetalle" />
     </ModalBase>
 
     <ConfirmacionModal
@@ -603,6 +528,7 @@ onBeforeUnmount(() => {
 .actions-cell {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
 }
 
@@ -737,11 +663,6 @@ td {
 .badge.finished {
   background: rgba(69, 123, 157, 0.12);
   color: #457b9d;
-}
-
-.badge.inactive {
-  background: rgba(154, 168, 184, 0.16);
-  color: #5e6e82;
 }
 
 @media (max-width: 800px) {

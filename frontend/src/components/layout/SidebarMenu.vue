@@ -58,23 +58,23 @@ const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
 
       <div class="nav-label top-space">Planeación</div>
 
-      <RouterLink to="/estrategias" class="nav-item" active-class="active">
+      <RouterLink to="/planes-estrategicos" class="nav-item" active-class="active">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="9" />
           <circle cx="12" cy="12" r="5" />
           <circle cx="12" cy="12" r="1" />
         </svg>
-        <span>Estrategias</span>
+        <span>Planes estratégicos</span>
       </RouterLink>
 
-      <RouterLink to="/objetivos" class="nav-item" active-class="active">
+      <RouterLink to="/objetivos-generales" class="nav-item" active-class="active">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <path d="M4 21V4a1 1 0 0 1 1-1h9l4 4v3" />
           <path d="M4 14h8" />
           <path d="M4 21h9" />
           <circle cx="18" cy="16" r="4" />
         </svg>
-        <span>Objetivos</span>
+        <span>Objetivos generales</span>
       </RouterLink>
 
       <RouterLink to="/indicadores" class="nav-item" active-class="active">

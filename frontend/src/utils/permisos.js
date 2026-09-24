@@ -92,11 +92,11 @@ export function puedeGestionarPlaneacion(usuario) {
   return esAdministrador(usuario) || esOperativo(usuario)
 }
 
-export function puedeGestionarEstrategias(usuario) {
+export function puedeGestionarPlanesEstrategicos(usuario) {
   return puedeGestionarPlaneacion(usuario)
 }
 
-export function puedeGestionarObjetivos(usuario) {
+export function puedeGestionarObjetivosGenerales(usuario) {
   return puedeGestionarPlaneacion(usuario)
 }
 

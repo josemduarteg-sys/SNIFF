@@ -72,7 +72,7 @@ function formatearCriterio(rango) {
 
     <div class="detail-grid">
       <div class="detail-item">
-        <span>Estrategia</span>
+        <span>Plan estratégico</span>
         <strong>{{ estrategiaNombre || 'Sin estrategia' }}</strong>
       </div>
 

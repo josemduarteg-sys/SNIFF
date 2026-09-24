@@ -1,22 +1,18 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
-import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
-import ObjetivoForm from '../components/objetivos/ObjetivoForm.vue'
+import ObjetivoGeneralForm from '../components/objetivos-generales/ObjetivoGeneralForm.vue'
 import {
-  activarObjetivo,
-  actualizarObjetivo,
-  crearObjetivo,
-  finalizarObjetivo,
-  inactivarObjetivo,
-  obtenerDatosFormularioObjetivo,
-  obtenerEstrategiasParaObjetivo,
-  obtenerObjetivos,
-} from '../services/objetivoService'
-import { esAdministrador, puedeGestionarObjetivos } from '../utils/permisos'
-import { useConfirmacion } from '../composables/useConfirmacion'
+  actualizarObjetivoGeneral,
+  crearObjetivoGeneral,
+  obtenerDatosFormularioObjetivoGeneral,
+  obtenerObjetivosGenerales,
+  obtenerPlanesEstrategicosParaObjetivo,
+} from '../services/objetivoGeneralService'
+import { esAdministrador, puedeGestionarObjetivosGenerales } from '../utils/permisos'
+import { useResaltado } from '../composables/useResaltado'
 
 const props = defineProps({
   usuario: {
@@ -26,30 +22,22 @@ const props = defineProps({
   },
 })
 
-const puedeGestionar = computed(() => puedeGestionarObjetivos(props.usuario))
+const puedeGestionar = computed(() => puedeGestionarObjetivosGenerales(props.usuario))
 const esAdmin = computed(() => esAdministrador(props.usuario))
 
 const emit = defineEmits(['logout'])
 
 const route = useRoute()
-const idResaltado = ref(null)
-let timeoutResaltado = null
+const { idResaltado, aplicarResaltadoDesdeRuta } = useResaltado(route)
 
 const objetivos = ref([])
-const estrategiasFormulario = ref([])
-const estrategiasFiltro = ref([])
+const planesFormulario = ref([])
+const planesFiltro = ref([])
 const busqueda = ref('')
-const estrategiaSeleccionada = ref('')
+const planSeleccionadoFiltro = ref('')
 const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
-
-const {
-  solicitud: confirmacion,
-  solicitar: solicitarConfirmacion,
-  cancelar: cancelarConfirmacion,
-  confirmar: confirmarAccionPendiente,
-} = useConfirmacion()
 
 const modalObjetivoAbierto = ref(false)
 const modalDetalleAbierto = ref(false)
@@ -62,59 +50,21 @@ async function cargarDatos() {
   error.value = ''
 
   try {
-    const [objetivosData, datosFormulario, estrategiasTodas] = await Promise.all([
-      obtenerObjetivos(),
-      obtenerDatosFormularioObjetivo(),
-      obtenerEstrategiasParaObjetivo(),
+    const [objetivosData, datosFormulario, planesTodos] = await Promise.all([
+      obtenerObjetivosGenerales(),
+      obtenerDatosFormularioObjetivoGeneral(),
+      obtenerPlanesEstrategicosParaObjetivo(),
     ])
 
     objetivos.value = objetivosData
-    estrategiasFormulario.value = datosFormulario.estrategias
-    estrategiasFiltro.value = estrategiasTodas
+    planesFormulario.value = datosFormulario.planes
+    planesFiltro.value = planesTodos
   } catch (e) {
-    error.value = 'No se pudieron cargar los objetivos.'
+    error.value = 'No se pudieron cargar los objetivos generales.'
   } finally {
     cargando.value = false
   }
 }
-
-async function aplicarResaltadoDesdeRuta() {
-  const idQuery = Number(route.query.resaltar)
-
-  if (!idQuery) {
-    return
-  }
-
-  idResaltado.value = idQuery
-
-  await nextTick()
-
-  const fila = document.getElementById(`fila-${idQuery}`)
-
-  if (fila) {
-    fila.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    })
-  }
-
-  if (timeoutResaltado) {
-    window.clearTimeout(timeoutResaltado)
-  }
-
-  timeoutResaltado = window.setTimeout(() => {
-    if (idResaltado.value === idQuery) {
-      idResaltado.value = null
-    }
-  }, 3500)
-}
-
-watch(
-  () => route.query.resaltar,
-  () => {
-    aplicarResaltadoDesdeRuta()
-  }
-)
 
 const objetivosFiltrados = computed(() => {
   const texto = busqueda.value.trim().toLowerCase()
@@ -122,58 +72,27 @@ const objetivosFiltrados = computed(() => {
   return objetivos.value.filter((objetivo) => {
     const coincideBusqueda =
       !texto ||
-      objetivo.nombre?.toLowerCase().includes(texto) ||
-      objetivo.descripcion?.toLowerCase().includes(texto) ||
-      objetivo.estrategia_nombre?.toLowerCase().includes(texto)
+      objetivo.texto_objetivo?.toLowerCase().includes(texto) ||
+      objetivo.plan_estrategico_titulo?.toLowerCase().includes(texto)
 
-    const coincideEstrategia =
-      !estrategiaSeleccionada.value ||
-      Number(objetivo.estrategia) === Number(estrategiaSeleccionada.value)
+    const coincidePlan =
+      !planSeleccionadoFiltro.value ||
+      Number(objetivo.plan_estrategico) === Number(planSeleccionadoFiltro.value)
 
-    return coincideBusqueda && coincideEstrategia
+    return coincideBusqueda && coincidePlan
   })
 })
-
-const objetivosActivos = computed(() => {
-  return objetivos.value.filter((objetivo) => objetivo.estado === 'activo').length
-})
-
-const objetivosRevision = computed(() => {
-  return objetivos.value.filter((objetivo) => objetivo.estado === 'en_revision').length
-})
-
-const objetivosFinalizados = computed(() => {
-  return objetivos.value.filter((objetivo) => objetivo.estado === 'finalizado').length
-})
-
-function textoEstado(estado) {
-  const estados = {
-    activo: 'Activo',
-    en_revision: 'En revisión',
-    finalizado: 'Finalizado',
-    inactivo: 'Inactivo',
-  }
-
-  return estados[estado] || estado || 'Sin estado'
-}
-
-function estadoClase(estado) {
-  const clases = {
-    activo: 'ok',
-    en_revision: 'warning',
-    finalizado: 'finished',
-    inactivo: 'neutral',
-  }
-
-  return clases[estado] || 'neutral'
-}
 
 function formatearFecha(fecha) {
   if (!fecha) {
     return 'No definida'
   }
 
-  const [anio, mes, dia] = fecha.split('-')
+  const soloFecha = fecha.split('T')[0]
+  const [anio, mes, dia] = soloFecha.split('-')
+
+  if (!anio || !mes || !dia) return fecha
+
   return `${dia}/${mes}/${anio}`
 }
 
@@ -190,6 +109,14 @@ function inicialesUsuario(nombre) {
     .toUpperCase()
 }
 
+function planCerrado(objetivo) {
+  return objetivo.plan_estrategico_estado === 'cerrado'
+}
+
+function puedeEditar(objetivo) {
+  return puedeGestionar.value && !planCerrado(objetivo)
+}
+
 function abrirNuevoObjetivo() {
   objetivoSeleccionado.value = null
   modalObjetivoAbierto.value = true
@@ -199,6 +126,10 @@ function abrirNuevoObjetivo() {
 }
 
 function abrirEditarObjetivo(objetivo) {
+  if (!puedeEditar(objetivo)) {
+    return
+  }
+
   objetivoSeleccionado.value = objetivo
   modalObjetivoAbierto.value = true
   error.value = ''
@@ -249,11 +180,11 @@ async function guardarObjetivo(payload) {
 
   try {
     if (objetivoSeleccionado.value?.id) {
-      await actualizarObjetivo(objetivoSeleccionado.value.id, payload)
-      mensaje.value = 'Objetivo actualizado correctamente.'
+      await actualizarObjetivoGeneral(objetivoSeleccionado.value.id, payload)
+      mensaje.value = 'Objetivo general actualizado correctamente.'
     } else {
-      await crearObjetivo(payload)
-      mensaje.value = 'Objetivo creado correctamente.'
+      await crearObjetivoGeneral(payload)
+      mensaje.value = 'Objetivo general creado correctamente.'
     }
 
     cerrarModalObjetivo()
@@ -262,72 +193,11 @@ async function guardarObjetivo(payload) {
     errorModalObjetivo.value = obtenerMensajeError(
       e,
       objetivoSeleccionado.value?.id
-        ? 'No se pudo actualizar el objetivo.'
-        : 'No se pudo crear el objetivo.'
+        ? 'No se pudo actualizar el objetivo general.'
+        : 'No se pudo crear el objetivo general.'
     )
   } finally {
     guardandoObjetivo.value = false
-  }
-}
-
-async function manejarActivarObjetivo(objetivo) {
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await activarObjetivo(objetivo.id)
-    mensaje.value = 'Objetivo activado correctamente.'
-    await cargarDatos()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo activar el objetivo.')
-  }
-}
-
-function manejarFinalizarObjetivo(objetivo) {
-  solicitarConfirmacion({
-    titulo: 'Finalizar objetivo',
-    mensaje: `¿Deseás finalizar el objetivo "${objetivo.nombre}"?`,
-    textoSecundario: 'Una vez finalizado, ya no se podrá seguir editando su seguimiento activo.',
-    textoConfirmar: 'Finalizar',
-    variante: 'advertencia',
-    accion: () => ejecutarFinalizarObjetivo(objetivo),
-  })
-}
-
-async function ejecutarFinalizarObjetivo(objetivo) {
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await finalizarObjetivo(objetivo.id)
-    mensaje.value = 'Objetivo finalizado correctamente.'
-    await cargarDatos()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo finalizar el objetivo.')
-  }
-}
-
-function manejarInactivarObjetivo(objetivo) {
-  solicitarConfirmacion({
-    titulo: 'Inactivar objetivo',
-    mensaje: `¿Deseás inactivar el objetivo "${objetivo.nombre}"?`,
-    textoSecundario: 'El objetivo dejará de estar disponible para seguimiento activo.',
-    textoConfirmar: 'Inactivar',
-    variante: 'peligrosa',
-    accion: () => ejecutarInactivarObjetivo(objetivo),
-  })
-}
-
-async function ejecutarInactivarObjetivo(objetivo) {
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await inactivarObjetivo(objetivo.id)
-    mensaje.value = 'Objetivo inactivado correctamente.'
-    await cargarDatos()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo inactivar el objetivo.')
   }
 }
 
@@ -339,20 +209,14 @@ onMounted(async () => {
   await cargarDatos()
   await aplicarResaltadoDesdeRuta()
 })
-
-onBeforeUnmount(() => {
-  if (timeoutResaltado) {
-    window.clearTimeout(timeoutResaltado)
-  }
-})
 </script>
 
 <template>
   <AppLayout
     :usuario="props.usuario"
-    titulo="Gestión de Objetivos Estratégicos"
-    subtitulo="Administra los objetivos derivados de cada estrategia institucional."
-    breadcrumb-actual="Objetivos"
+    titulo="Gestión de Objetivos generales"
+    subtitulo="Administra los objetivos generales derivados de cada plan estratégico."
+    breadcrumb-actual="Objetivos generales"
     @logout="cerrarSesion"
   >
     <template v-if="puedeGestionar" #actions>
@@ -371,7 +235,7 @@ onBeforeUnmount(() => {
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
 
-        Nuevo Objetivo
+        Nuevo objetivo general
       </button>
     </template>
 
@@ -405,80 +269,8 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="kpi-value">{{ objetivos.length }}</div>
-        <div class="kpi-label">Objetivos registrados</div>
+        <div class="kpi-label">Objetivos generales registrados</div>
         <div class="kpi-foot">Total creado en el sistema</div>
-      </article>
-
-      <article class="kpi-card">
-        <div class="kpi-top">
-          <div class="kpi-icon aqua">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M8 12l2.5 2.5L16 9" />
-            </svg>
-          </div>
-        </div>
-
-        <div class="kpi-value">{{ objetivosActivos }}</div>
-        <div class="kpi-label">Activos</div>
-        <div class="kpi-foot">En seguimiento actualmente</div>
-      </article>
-
-      <article class="kpi-card">
-        <div class="kpi-top">
-          <div class="kpi-icon orange">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 8v5" />
-              <path d="M12 17h.01" />
-              <circle cx="12" cy="12" r="9" />
-            </svg>
-          </div>
-        </div>
-
-        <div class="kpi-value">{{ objetivosRevision }}</div>
-        <div class="kpi-label">En revisión</div>
-        <div class="kpi-foot">Requieren validación</div>
-      </article>
-
-      <article class="kpi-card">
-        <div class="kpi-top">
-          <div class="kpi-icon steel">
-            <svg
-              width="17"
-              height="17"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-          </div>
-        </div>
-
-        <div class="kpi-value">{{ objetivosFinalizados }}</div>
-        <div class="kpi-label">Finalizados</div>
-        <div class="kpi-foot">Cumplieron su ciclo</div>
       </article>
     </section>
 
@@ -501,22 +293,22 @@ onBeforeUnmount(() => {
         <input
           v-model="busqueda"
           type="text"
-          placeholder="Buscar objetivo..."
+          placeholder="Buscar objetivo general..."
         />
       </div>
 
       <div class="toolbar-filter">
-        <span class="filter-label">Estrategia:</span>
+        <span class="filter-label">Plan estratégico:</span>
 
-        <select v-model="estrategiaSeleccionada">
-          <option value="">Todas</option>
+        <select v-model="planSeleccionadoFiltro">
+          <option value="">Todos</option>
 
           <option
-            v-for="estrategia in estrategiasFiltro"
-            :key="estrategia.id"
-            :value="estrategia.id"
+            v-for="plan in planesFiltro"
+            :key="plan.id"
+            :value="plan.id"
           >
-            {{ estrategia.nombre }}
+            {{ plan.titulo }}
           </option>
         </select>
       </div>
@@ -528,22 +320,20 @@ onBeforeUnmount(() => {
 
     <section class="card-panel table-card">
       <div v-if="cargando" class="message">
-        Cargando objetivos...
+        Cargando objetivos generales...
       </div>
 
       <div v-else-if="!objetivosFiltrados.length" class="empty-state">
-        No hay objetivos para mostrar.
+        No hay objetivos generales para mostrar.
       </div>
 
       <table v-else>
         <thead>
           <tr>
-            <th>Objetivo</th>
-            <th>Estrategia asociada</th>
+            <th>Texto del objetivo</th>
+            <th>Plan estratégico</th>
             <th>Creado por</th>
-            <th>Estado</th>
-            <th>Fecha inicio</th>
-            <th>Fecha fin</th>
+            <th>Fecha de creación</th>
             <th style="text-align: right;">Acciones</th>
           </tr>
         </thead>
@@ -556,18 +346,14 @@ onBeforeUnmount(() => {
             :class="{ 'highlight-row': idResaltado === Number(objetivo.id) }"
           >
             <td>
-              <div class="cell-main" :title="objetivo.nombre">
-                {{ objetivo.nombre }}
-              </div>
-
-              <div class="cell-sub" :title="objetivo.descripcion || 'Sin descripción'">
-                {{ objetivo.descripcion || 'Sin descripción' }}
+              <div class="cell-main" :title="objetivo.texto_objetivo">
+                {{ objetivo.texto_objetivo }}
               </div>
             </td>
 
             <td>
               <span class="code-chip">
-                {{ objetivo.estrategia_nombre || 'Sin estrategia' }}
+                {{ objetivo.plan_estrategico_titulo || 'Sin plan' }}
               </span>
             </td>
 
@@ -581,15 +367,7 @@ onBeforeUnmount(() => {
               </div>
             </td>
 
-            <td>
-              <span class="badge" :class="estadoClase(objetivo.estado)">
-                <span class="badge-dot"></span>
-                {{ textoEstado(objetivo.estado) }}
-              </span>
-            </td>
-
-            <td>{{ formatearFecha(objetivo.fecha_inicio) }}</td>
-            <td>{{ formatearFecha(objetivo.fecha_fin) }}</td>
+            <td>{{ formatearFecha(objetivo.fecha_creacion) }}</td>
 
             <td>
               <div class="actions-cell">
@@ -607,7 +385,7 @@ onBeforeUnmount(() => {
                 </button>
 
                 <button
-                  v-if="puedeGestionar && (esAdmin || objetivo.estado === 'en_revision')"
+                  v-if="puedeEditar(objetivo)"
                   class="action-icon-btn"
                   type="button"
                   title="Editar"
@@ -619,35 +397,6 @@ onBeforeUnmount(() => {
                     <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
                   </svg>
                 </button>
-
-                <template v-if="esAdmin">
-                  <button
-                    v-if="objetivo.estado !== 'activo'"
-                    class="action-btn"
-                    type="button"
-                    @click="manejarActivarObjetivo(objetivo)"
-                  >
-                    Activar
-                  </button>
-
-                  <button
-                    v-if="objetivo.estado !== 'finalizado'"
-                    class="action-btn"
-                    type="button"
-                    @click="manejarFinalizarObjetivo(objetivo)"
-                  >
-                    Finalizar
-                  </button>
-
-                  <button
-                    v-if="objetivo.estado !== 'inactivo'"
-                    class="action-btn danger"
-                    type="button"
-                    @click="manejarInactivarObjetivo(objetivo)"
-                  >
-                    Inactivar
-                  </button>
-                </template>
               </div>
             </td>
           </tr>
@@ -658,52 +407,16 @@ onBeforeUnmount(() => {
         <div class="showing">
           Mostrando {{ objetivosFiltrados.length }} de {{ objetivos.length }} objetivos
         </div>
-
-        <div class="pagination">
-          <button class="page-btn" type="button" disabled>
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-
-          <button class="page-btn active" type="button">
-            1
-          </button>
-
-          <button class="page-btn" type="button" disabled>
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
-        </div>
       </div>
     </section>
 
     <ModalBase
       :abierto="modalObjetivoAbierto"
-      :titulo="objetivoSeleccionado ? 'Editar objetivo' : 'Nuevo objetivo'"
+      :titulo="objetivoSeleccionado ? 'Editar objetivo general' : 'Nuevo objetivo general'"
       :subtitulo="
         objetivoSeleccionado
-          ? 'Actualiza los datos generales del objetivo.'
-          : 'Registra un objetivo asociado a una estrategia.'
+          ? 'Actualiza el texto del objetivo general.'
+          : 'Registra un objetivo general asociado a un plan estratégico En uso.'
       "
       @cerrar="cerrarModalObjetivo"
     >
@@ -711,70 +424,46 @@ onBeforeUnmount(() => {
         {{ errorModalObjetivo }}
       </div>
 
-      <ObjetivoForm
+      <ObjetivoGeneralForm
         :objetivo="objetivoSeleccionado"
-        :estrategias="estrategiasFormulario"
+        :planes="planesFormulario"
         @guardar="guardarObjetivo"
         @cancelar="cerrarModalObjetivo"
       />
 
       <div v-if="guardandoObjetivo" class="saving-message">
-        Guardando objetivo...
+        Guardando objetivo general...
       </div>
     </ModalBase>
 
     <ModalBase
       :abierto="modalDetalleAbierto"
-      titulo="Detalle del objetivo"
+      titulo="Detalle del objetivo general"
       subtitulo="Información general del objetivo seleccionado."
       @cerrar="cerrarModalDetalle"
     >
       <div v-if="objetivoSeleccionado" class="detail-grid">
         <div class="detail-item">
-          <span>Estrategia</span>
-          <strong>
-            {{ objetivoSeleccionado.estrategia_nombre || objetivoSeleccionado.nombre_estrategia || 'Sin especificar' }}
-          </strong>
+          <span>Plan estratégico</span>
+          <strong>{{ objetivoSeleccionado.plan_estrategico_titulo || 'Sin especificar' }}</strong>
         </div>
 
         <div class="detail-item">
-          <span>Objetivo</span>
-          <strong>{{ objetivoSeleccionado.nombre }}</strong>
+          <span>Creado por</span>
+          <strong>{{ objetivoSeleccionado.creado_por_username || 'Sin usuario' }}</strong>
         </div>
 
         <div class="detail-item">
-          <span>Estado</span>
-          <strong>{{ textoEstado(objetivoSeleccionado.estado) }}</strong>
-        </div>
-
-        <div class="detail-item">
-          <span>Fecha inicio</span>
-          <strong>{{ formatearFecha(objetivoSeleccionado.fecha_inicio) }}</strong>
-        </div>
-
-        <div class="detail-item">
-          <span>Fecha fin</span>
-          <strong>{{ formatearFecha(objetivoSeleccionado.fecha_fin) }}</strong>
+          <span>Fecha de creación</span>
+          <strong>{{ formatearFecha(objetivoSeleccionado.fecha_creacion) }}</strong>
         </div>
 
         <div class="detail-item detail-full">
-          <span>Descripción</span>
-          <strong>{{ objetivoSeleccionado.descripcion || 'Sin descripción registrada.' }}</strong>
+          <span>Texto del objetivo</span>
+          <strong>{{ objetivoSeleccionado.texto_objetivo }}</strong>
         </div>
       </div>
     </ModalBase>
-
-    <ConfirmacionModal
-      :abierto="!!confirmacion"
-      :titulo="confirmacion?.titulo"
-      :mensaje="confirmacion?.mensaje"
-      :texto-secundario="confirmacion?.textoSecundario"
-      :texto-confirmar="confirmacion?.textoConfirmar"
-      :texto-cancelar="confirmacion?.textoCancelar"
-      :variante="confirmacion?.variante"
-      @confirmar="confirmarAccionPendiente"
-      @cancelar="cancelarConfirmacion"
-    />
   </AppLayout>
 </template>
 
@@ -823,21 +512,6 @@ onBeforeUnmount(() => {
 .kpi-icon.navy {
   background: rgba(29, 53, 87, 0.08);
   color: #1d3557;
-}
-
-.kpi-icon.steel {
-  background: rgba(69, 123, 157, 0.10);
-  color: #457b9d;
-}
-
-.kpi-icon.aqua {
-  background: #eaf5f5;
-  color: #457b9d;
-}
-
-.kpi-icon.orange {
-  background: rgba(244, 162, 97, 0.14);
-  color: #f4a261;
 }
 
 .kpi-icon svg {
@@ -1044,17 +718,6 @@ tbody tr:hover {
   font-weight: 800;
   font-size: 13px;
   color: #1d3557;
-  max-width: 320px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cell-sub {
-  font-size: 11.5px;
-  color: #9aa8b8;
-  font-weight: 500;
-  margin-top: 3px;
   max-width: 460px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1072,6 +735,9 @@ tbody tr:hover {
   font-size: 11.5px;
   font-weight: 800;
   max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .owner-cell {
@@ -1095,77 +761,11 @@ tbody tr:hover {
   flex-shrink: 0;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 4px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-}
-
-.badge.ok {
-  background: rgba(42, 157, 143, 0.12);
-  color: #2a9d8f;
-}
-
-.badge.warning {
-  background: rgba(244, 162, 97, 0.16);
-  color: #b9701e;
-}
-
-.badge.finished {
-  background: rgba(69, 123, 157, 0.12);
-  color: #457b9d;
-}
-
-.badge.neutral {
-  background: rgba(154, 168, 184, 0.16);
-  color: #5e6e82;
-}
-
-.badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
 .actions-cell {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-}
-
-.action-btn {
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 9px;
-  border: 1px solid #e4eaef;
-  background: #ffffff;
-  color: #457b9d;
-  font-family: inherit;
-  font-size: 11.5px;
-  font-weight: 800;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-
-.action-btn:hover {
-  background: #eaf5f5;
-  border-color: #a8dadc;
-}
-
-.action-btn.danger {
-  color: #e76f51;
-}
-
-.action-btn.danger:hover {
-  background: rgba(231, 111, 81, 0.10);
-  border-color: rgba(231, 111, 81, 0.25);
 }
 
 .action-icon-btn {
@@ -1254,43 +854,6 @@ tbody tr:hover {
   font-size: 12px;
   color: #9aa8b8;
   font-weight: 600;
-}
-
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.page-btn {
-  min-width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  border: 1px solid #e4eaef;
-  background: #ffffff;
-  color: #5e6e82;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.page-btn svg {
-  stroke: currentColor;
-}
-
-.page-btn.active {
-  background: #1d3557;
-  color: #ffffff;
-  border-color: #1d3557;
-}
-
-.page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 @media (max-width: 1000px) {

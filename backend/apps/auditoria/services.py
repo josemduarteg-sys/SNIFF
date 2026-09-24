@@ -93,7 +93,7 @@ def notificar_administradores(tipo, titulo, mensaje, enlace=None):
 def generar_recordatorios_pendientes(fecha_referencia=None):
     from django.utils import timezone
 
-    from apps.estrategia.models import Estrategia, Objetivo
+    from apps.estrategia.models import PlanEstrategico
     from apps.indicadores.models import IndicadorKPI
     from apps.usuarios.models import Usuario
     from apps.usuarios.permissions import es_administrador, es_operativo_o_supervisor
@@ -108,22 +108,22 @@ def generar_recordatorios_pendientes(fecha_referencia=None):
 
     elementos = []
 
-    for estrategia in Estrategia.objects.filter(estado='en_revision'):
+    # Antes (Bloque 0): recordaba Estrategia/Objetivo con estado='en_revision'.
+    # Ese estado ya no existe en el nuevo modelo Borrador/En uso/Cerrado.
+    # El equivalente funcional más cercano de "pendiente de formalizarse" es
+    # un Plan estratégico que sigue en Borrador — se mantiene el mecanismo,
+    # solo se adapta el estado que consulta.
+    # ObjetivoGeneral ya no tiene ningún campo de estado propio (su ciclo de
+    # vida lo gobierna el Plan estratégico al que pertenece), así que no
+    # existe una condición equivalente para él: se retiró ese recordatorio
+    # sin reemplazarlo por ninguna regla nueva no confirmada.
+    for plan in PlanEstrategico.objects.filter(estado=PlanEstrategico.ESTADO_BORRADOR):
         elementos.append({
-            'tipo': 'recordatorio_estrategia_revision',
-            'titulo': 'Estrategia pendiente de revisión',
-            'mensaje': f'La estrategia "{estrategia.nombre}" continúa pendiente de revisión.',
-            'enlace': f'/estrategias?resaltar={estrategia.id}',
-            'nombre': estrategia.nombre,
-        })
-
-    for objetivo in Objetivo.objects.filter(estado='en_revision'):
-        elementos.append({
-            'tipo': 'recordatorio_objetivo_revision',
-            'titulo': 'Objetivo pendiente de revisión',
-            'mensaje': f'El objetivo "{objetivo.nombre}" continúa pendiente de revisión.',
-            'enlace': f'/objetivos?resaltar={objetivo.id}',
-            'nombre': objetivo.nombre,
+            'tipo': 'recordatorio_plan_estrategico_borrador',
+            'titulo': 'Plan estratégico pendiente de poner En uso',
+            'mensaje': f'El Plan estratégico "{plan.titulo}" continúa en Borrador.',
+            'enlace': f'/planes-estrategicos?resaltar={plan.id}',
+            'nombre': plan.titulo,
         })
 
     for indicador in IndicadorKPI.objects.filter(estado='borrador'):

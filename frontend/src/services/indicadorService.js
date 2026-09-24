@@ -15,13 +15,23 @@ export async function actualizarIndicador(id, payload) {
   return response.data
 }
 
+// NOTA (Bloque 1 del rediseño): estas dos funciones siguen llamándose
+// obtenerObjetivos/obtenerEstrategias y el objeto que arma
+// obtenerDatosFormularioIndicador() sigue devolviendo las claves
+// `objetivos`/`estrategias`, únicamente para no tocar IndicadorForm.vue/
+// IndicadoresView.vue más de lo estrictamente necesario para que sigan
+// funcionando (ver esos archivos: ahora leen `.plan_estrategico`/
+// `.titulo`/`.texto_objetivo` en vez de `.estrategia`/`.nombre`). Los
+// endpoints sí se actualizaron porque los viejos ya no existen. El
+// Bloque 3 hará el rediseño real de este formulario (Objetivo específico
+// en vez de Objetivo general).
 export async function obtenerObjetivos() {
-  const response = await api.get('objetivos/')
+  const response = await api.get('objetivos-generales/')
   return normalizarRespuesta(response)
 }
 
 export async function obtenerEstrategias() {
-  const response = await api.get('estrategias/')
+  const response = await api.get('planes-estrategicos/')
   return normalizarRespuesta(response)
 }
 

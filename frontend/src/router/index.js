@@ -3,8 +3,8 @@ import { debeCambiarPassword, estaAutenticado } from '../services/authService'
 
 import LoginView from '../views/LoginView.vue'
 import DashboardView from '../views/DashboardView.vue'
-import EstrategiasView from '../views/EstrategiasView.vue'
-import ObjetivosView from '../views/ObjetivosView.vue'
+import PlanesEstrategicosView from '../views/PlanesEstrategicosView.vue'
+import ObjetivosGeneralesView from '../views/ObjetivosGeneralesView.vue'
 import IndicadoresView from '../views/IndicadoresView.vue'
 import MedicionesView from '../views/MedicionesView.vue'
 import ConfiguracionView from '../views/ConfiguracionView.vue'
@@ -37,17 +37,17 @@ const routes = [
     },
   },
   {
-    path: '/estrategias',
-    name: 'estrategias',
-    component: EstrategiasView,
+    path: '/planes-estrategicos',
+    name: 'planes-estrategicos',
+    component: PlanesEstrategicosView,
     meta: {
       requiresAuth: true,
     },
   },
   {
-    path: '/objetivos',
-    name: 'objetivos',
-    component: ObjetivosView,
+    path: '/objetivos-generales',
+    name: 'objetivos-generales',
+    component: ObjetivosGeneralesView,
     meta: {
       requiresAuth: true,
     },

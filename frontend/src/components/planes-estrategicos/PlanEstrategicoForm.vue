@@ -1,132 +1,52 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
-import { obtenerEstrategiasParaObjetivo } from '../../services/objetivoService'
+import { computed, reactive, watch } from 'vue'
 
 const props = defineProps({
-  objetivo: {
+  plan: {
     type: Object,
     default: null,
-  },
-  estrategias: {
-    type: Array,
-    default: () => [],
   },
 })
 
 const emit = defineEmits(['guardar', 'cancelar'])
 
 const estado = reactive({
-  estrategia: '',
-  nombre: '',
+  titulo: '',
   descripcion: '',
   fecha_inicio: '',
   fecha_fin: '',
   error: '',
 })
 
-const estrategiaFaltante = ref(null)
+const esEdicion = computed(() => Boolean(props.plan?.id))
 
-const esEdicion = computed(() => Boolean(props.objetivo?.id))
+const esEnUso = computed(() => props.plan?.estado === 'en_uso')
 
 const tituloBoton = computed(() => {
-  return esEdicion.value ? 'Actualizar objetivo' : 'Crear objetivo'
+  return esEdicion.value ? 'Actualizar plan estratégico' : 'Crear plan estratégico'
 })
-
-const estrategiasDisponibles = computed(() => {
-  const estrategiaActualId = props.objetivo?.estrategia
-
-  const yaIncluida = props.estrategias.some(
-    (estrategia) => Number(estrategia.id) === Number(estrategiaActualId)
-  )
-
-  const lista = props.estrategias.map((estrategia) => ({
-    id: estrategia.id,
-    nombre: agregarSufijoEstado(estrategia.nombre, estrategia.estado),
-  }))
-
-  if (esEdicion.value && estrategiaActualId && !yaIncluida) {
-    const nombreBase =
-      estrategiaFaltante.value?.nombre || props.objetivo?.estrategia_nombre || 'Estrategia'
-
-    lista.push({
-      id: estrategiaActualId,
-      nombre: agregarSufijoEstado(nombreBase, estrategiaFaltante.value?.estado, true),
-    })
-  }
-
-  return lista
-})
-
-function agregarSufijoEstado(nombre, estadoEstrategia, esFallback = false) {
-  if (estadoEstrategia === 'finalizada') {
-    return `${nombre} (finalizada)`
-  }
-
-  if (estadoEstrategia === 'inactiva') {
-    return `${nombre} (inactiva)`
-  }
-
-  if (estadoEstrategia === 'en_revision') {
-    return `${nombre} (en revisión)`
-  }
-
-  return esFallback ? `${nombre} (no disponible)` : nombre
-}
 
 watch(
-  () => props.objetivo,
+  () => props.plan,
   () => {
     cargarFormulario()
-    cargarEstrategiaFaltante()
   },
   { immediate: true }
 )
 
-async function cargarEstrategiaFaltante() {
-  estrategiaFaltante.value = null
-
-  const estrategiaActualId = props.objetivo?.estrategia
-
-  if (!estrategiaActualId) {
-    return
-  }
-
-  const yaIncluida = props.estrategias.some(
-    (estrategia) => Number(estrategia.id) === Number(estrategiaActualId)
-  )
-
-  if (yaIncluida) {
-    return
-  }
-
-  try {
-    const todas = await obtenerEstrategiasParaObjetivo()
-    estrategiaFaltante.value =
-      todas.find((estrategia) => Number(estrategia.id) === Number(estrategiaActualId)) || null
-  } catch {
-    estrategiaFaltante.value = null
-  }
-}
-
 function cargarFormulario() {
-  estado.estrategia = props.objetivo?.estrategia || ''
-  estado.nombre = props.objetivo?.nombre || ''
-  estado.descripcion = props.objetivo?.descripcion || ''
-  estado.fecha_inicio = props.objetivo?.fecha_inicio || ''
-  estado.fecha_fin = props.objetivo?.fecha_fin || ''
+  estado.titulo = props.plan?.titulo || ''
+  estado.descripcion = props.plan?.descripcion || ''
+  estado.fecha_inicio = props.plan?.fecha_inicio || ''
+  estado.fecha_fin = props.plan?.fecha_fin || ''
   estado.error = ''
 }
 
 function validarFormulario() {
   estado.error = ''
 
-  if (!estado.estrategia) {
-    estado.error = 'Seleccioná la estrategia relacionada con el objetivo.'
-    return false
-  }
-
-  if (!estado.nombre.trim()) {
-    estado.error = 'Ingresá el nombre del objetivo.'
+  if (!estado.titulo.trim()) {
+    estado.error = 'Ingresá el título del plan estratégico.'
     return false
   }
 
@@ -143,13 +63,20 @@ function guardar() {
     return
   }
 
-  emit('guardar', {
-    estrategia: estado.estrategia,
-    nombre: estado.nombre.trim(),
+  const payload = {
     descripcion: estado.descripcion.trim(),
-    fecha_inicio: estado.fecha_inicio || null,
-    fecha_fin: estado.fecha_fin || null,
-  })
+  }
+
+  // Título y periodo solo se envían cuando todavía se pueden modificar
+  // (Borrador). Mientras está En uso, el backend los rechaza de todas
+  // formas, pero evitamos mandarlos ya bloqueados desde acá.
+  if (!esEnUso.value) {
+    payload.titulo = estado.titulo.trim()
+    payload.fecha_inicio = estado.fecha_inicio || null
+    payload.fecha_fin = estado.fecha_fin || null
+  }
+
+  emit('guardar', payload)
 }
 
 function cancelar() {
@@ -158,35 +85,24 @@ function cancelar() {
 </script>
 
 <template>
-  <form class="objetivo-form" @submit.prevent="guardar">
+  <form class="plan-form" @submit.prevent="guardar">
     <div v-if="estado.error" class="alert error">
       {{ estado.error }}
     </div>
 
+    <div v-if="esEnUso" class="help-box warning">
+      Este plan está En uso: el título y el periodo ya no pueden modificarse. Solo la descripción es editable.
+    </div>
+
     <div class="form-grid">
       <label class="field field-full">
-        <span>Estrategia</span>
-
-        <select v-model="estado.estrategia">
-          <option value="">Seleccionar estrategia</option>
-
-          <option
-            v-for="estrategia in estrategiasDisponibles"
-            :key="estrategia.id"
-            :value="estrategia.id"
-          >
-            {{ estrategia.nombre }}
-          </option>
-        </select>
-      </label>
-
-      <label class="field field-full">
-        <span>Nombre del objetivo</span>
+        <span>Título del plan estratégico</span>
 
         <input
-          v-model="estado.nombre"
+          v-model="estado.titulo"
           type="text"
-          placeholder="Ejemplo: Incrementar la recuperación de cartera"
+          placeholder="Ejemplo: Plan estratégico 2027-2030"
+          :disabled="esEnUso"
         />
       </label>
 
@@ -196,7 +112,7 @@ function cancelar() {
         <textarea
           v-model="estado.descripcion"
           rows="4"
-          placeholder="Describe qué se desea alcanzar con este objetivo."
+          placeholder="Describe el enfoque general del plan estratégico."
         ></textarea>
       </label>
 
@@ -206,6 +122,7 @@ function cancelar() {
         <input
           v-model="estado.fecha_inicio"
           type="date"
+          :disabled="esEnUso"
         />
       </label>
 
@@ -215,14 +132,14 @@ function cancelar() {
         <input
           v-model="estado.fecha_fin"
           type="date"
+          :disabled="esEnUso"
         />
       </label>
 
     </div>
 
     <div class="help-box">
-      Completa los datos generales del objetivo. El sistema gestionará su estado
-      durante el proceso de revisión.
+      Todo plan estratégico nuevo nace en Borrador. Desde el listado podés pasarlo a En uso cuando esté listo para ejecutarse.
     </div>
 
     <div class="form-actions">
@@ -238,14 +155,14 @@ function cancelar() {
 </template>
 
 <style scoped>
-.objetivo-form {
+.plan-form {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.objetivo-form,
-.objetivo-form * {
+.plan-form,
+.plan-form * {
   box-sizing: border-box;
 }
 
@@ -313,6 +230,14 @@ function cancelar() {
   box-shadow: 0 0 0 4px rgba(168, 218, 220, 0.25);
 }
 
+.field input:disabled,
+.field select:disabled,
+.field textarea:disabled {
+  background: #f4f7f9;
+  color: #9aa8b8;
+  cursor: not-allowed;
+}
+
 .help-box {
   border-radius: 12px;
   background: #eaf5f5;
@@ -321,6 +246,11 @@ function cancelar() {
   font-size: 12.5px;
   line-height: 1.45;
   font-weight: 650;
+}
+
+.help-box.warning {
+  background: rgba(244, 162, 97, 0.14);
+  color: #b9701e;
 }
 
 .form-actions {

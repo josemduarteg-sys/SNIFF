@@ -355,9 +355,9 @@ function obtenerEstrategiaNombreDeIndicador(indicador) {
     return ''
   }
 
-  const estrategia = estrategias.value.find((item) => Number(item.id) === Number(objetivo.estrategia))
+  const estrategia = estrategias.value.find((item) => Number(item.id) === Number(objetivo.plan_estrategico))
 
-  return estrategia?.nombre || ''
+  return estrategia?.titulo || ''
 }
 
 const estrategiaNombreDetalle = computed(() => {
@@ -611,7 +611,7 @@ onBeforeUnmount(() => {
             :key="objetivo.id"
             :value="objetivo.id"
           >
-            {{ objetivo.nombre }}
+            {{ objetivo.texto_objetivo }}
           </option>
         </select>
       </div>
