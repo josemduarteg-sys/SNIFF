@@ -1,11 +1,19 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import Alerta, EstadoCumplimiento, IndicadorKPI, Medicion, RangoKPI
+from .models import Alerta, EstadoCumplimiento, IndicadorKPI, Medicion, MetaKPI, PeriodoMedicion, RangoKPI
+
+
+def hoy():
+    """Punto único de acceso a la fecha 'actual' del sistema (Bloque 4).
+    Usa la fecha local de Django (respeta TIME_ZONE), nunca la fecha del
+    navegador. Centralizado acá para que las pruebas puedan mockear
+    `apps.indicadores.services.hoy` en vez de manipular el reloj real."""
+    return timezone.localdate()
 
 
 def calcular_porcentaje_cumplimiento(valor_resultado, valor_meta):
@@ -336,16 +344,27 @@ def generar_alerta_para_medicion(medicion):
 
 def resolver_alertas_periodo_vencido(medicion, usuario=None):
     """Descarta las alertas de 'Periodo vencido sin medición' cuyo periodo
-    ya quedó cubierto por esta medición. No borra nada, solo cambia estado."""
+    ya quedó cubierto por esta medición (manual o cierre automático). No
+    borra nada, solo cambia estado. Bloque 4: como ahora existen periodos
+    de más de un mes, el nombre se calcula con el mismo intervalo real del
+    periodo (derivado de sus propias fecha_inicio/fecha_fin) para que
+    coincida exactamente con el mensaje que generó la alerta."""
     if not medicion.periodo_id or not medicion.periodo.fecha_inicio:
         return 0
+
+    intervalo = (
+        (medicion.periodo.fecha_fin.year - medicion.periodo.fecha_inicio.year) * 12
+        + (medicion.periodo.fecha_fin.month - medicion.periodo.fecha_inicio.month)
+        + 1
+    )
 
     periodo_nombre = formatear_periodo(
         date(
             medicion.periodo.fecha_inicio.year,
             medicion.periodo.fecha_inicio.month,
             1,
-        )
+        ),
+        intervalo,
     )
 
     return Alerta.objects.filter(
@@ -360,22 +379,54 @@ def resolver_alertas_periodo_vencido(medicion, usuario=None):
     )
 
 
-def obtener_intervalo_meses(indicador):
+NOMBRES_MESES = {
+    1: 'enero',
+    2: 'febrero',
+    3: 'marzo',
+    4: 'abril',
+    5: 'mayo',
+    6: 'junio',
+    7: 'julio',
+    8: 'agosto',
+    9: 'septiembre',
+    10: 'octubre',
+    11: 'noviembre',
+    12: 'diciembre',
+}
+
+# Único lugar que traduce la Frecuencia de un KPI a un intervalo de meses y
+# al tipo_periodo real de PeriodoMedicion (Bloque 4). `obtener_intervalo_meses`
+# se mantiene con la misma firma que ya usaban services/serializers previos
+# a este bloque (no se duplica una segunda lógica paralela).
+FRECUENCIA_INTERVALO = {
+    'mensual': 1,
+    'bimestral': 2,
+    'trimestral': 3,
+    'semestral': 6,
+    'anual': 12,
+}
+
+
+def obtener_tipo_periodo(indicador):
     frecuencia = (indicador.frecuencia.nombre or '').lower()
 
     if 'bimestral' in frecuencia or 'bimensual' in frecuencia:
-        return 2
+        return 'bimestral'
 
     if 'trimestral' in frecuencia:
-        return 3
+        return 'trimestral'
 
     if 'semestral' in frecuencia:
-        return 6
+        return 'semestral'
 
     if 'anual' in frecuencia:
-        return 12
+        return 'anual'
 
-    return 1
+    return 'mensual'
+
+
+def obtener_intervalo_meses(indicador):
+    return FRECUENCIA_INTERVALO[obtener_tipo_periodo(indicador)]
 
 
 def sumar_meses(fecha, meses):
@@ -386,23 +437,22 @@ def sumar_meses(fecha, meses):
     return date(anio, mes, 1)
 
 
-def formatear_periodo(fecha):
-    meses = {
-        1: 'enero',
-        2: 'febrero',
-        3: 'marzo',
-        4: 'abril',
-        5: 'mayo',
-        6: 'junio',
-        7: 'julio',
-        8: 'agosto',
-        9: 'septiembre',
-        10: 'octubre',
-        11: 'noviembre',
-        12: 'diciembre',
-    }
+def formatear_periodo(fecha_inicio, intervalo_meses=1):
+    """Nombre legible de un periodo a partir de su mes de inicio.
+    intervalo_meses=1 (mensual, default de siempre) -> 'enero 2027'.
+    intervalo_meses>1 (bimestral/trimestral/semestral/anual) -> rango,
+    ej. 'enero - febrero 2027'. Firma retrocompatible: todo llamador
+    existente que no pase intervalo_meses sigue obteniendo el mismo
+    resultado de antes."""
+    if intervalo_meses <= 1:
+        return f"{NOMBRES_MESES.get(fecha_inicio.month, fecha_inicio.month)} {fecha_inicio.year}"
 
-    return f"{meses.get(fecha.month, fecha.month)} {fecha.year}"
+    fecha_fin_mes = sumar_meses(fecha_inicio, intervalo_meses - 1)
+
+    return (
+        f"{NOMBRES_MESES.get(fecha_inicio.month, fecha_inicio.month)} - "
+        f"{NOMBRES_MESES.get(fecha_fin_mes.month, fecha_fin_mes.month)} {fecha_fin_mes.year}"
+    )
 
 
 def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
@@ -450,8 +500,278 @@ def calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo_meses):
     return obtener_ultimo_dia_mes(mes_final)
 
 
+VENTANA_REGISTRO_DIAS = 5
+"""Ventana oficial del proyecto (Bloque 4): la medición manual puede
+registrarse el mismo día del cierre del periodo y durante los 5 días
+calendario siguientes."""
+
+
+def calcular_fecha_limite_registro(fecha_cierre):
+    return fecha_cierre + timedelta(days=VENTANA_REGISTRO_DIAS)
+
+
+def obtener_o_crear_periodo(indicador, fecha_inicio_periodo):
+    """Obtiene (o crea) el PeriodoMedicion real que corresponde al mes de
+    inicio dado, según la frecuencia del KPI. Reutiliza PeriodoMedicion
+    como catálogo compartido: dos KPI con la misma frecuencia y el mismo
+    año reutilizan la misma fila (la relación con un indicador específico
+    vive en Medicion.indicador + Medicion.periodo, no acá)."""
+    tipo_periodo = obtener_tipo_periodo(indicador)
+    intervalo = FRECUENCIA_INTERVALO[tipo_periodo]
+    fecha_fin_periodo = calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo)
+    descripcion = formatear_periodo(fecha_inicio_periodo, intervalo).capitalize()
+
+    periodo, _ = PeriodoMedicion.objects.get_or_create(
+        tipo_periodo=tipo_periodo,
+        fecha_inicio=fecha_inicio_periodo,
+        fecha_fin=fecha_fin_periodo,
+        defaults={
+            'anio': fecha_inicio_periodo.year,
+            'mes': fecha_inicio_periodo.month if tipo_periodo == 'mensual' else None,
+            'descripcion': descripcion,
+        },
+    )
+
+    return periodo
+
+
+def obtener_o_crear_meta_vigente(indicador):
+    """Centraliza la creación/reuso de la MetaKPI 'vigente' de un indicador,
+    usada tanto por el registro manual de mediciones como por el cierre
+    automático (Bloque 4). MetaKPI no se rediseña en este bloque: se sigue
+    derivando de IndicadorKPI.valor_meta + su vigencia heredada del Plan
+    anual (fecha_inicio_vigencia / fecha_fin_vigencia, ver Bloque 3)."""
+    meta_existente = MetaKPI.objects.filter(
+        indicador=indicador,
+        estado='vigente',
+    ).order_by('-fecha_inicio').first()
+
+    if meta_existente:
+        return meta_existente
+
+    if indicador.valor_meta is None:
+        raise ValueError('El KPI seleccionado no tiene una meta configurada.')
+
+    meta, _ = MetaKPI.objects.get_or_create(
+        indicador=indicador,
+        valor_meta=indicador.valor_meta,
+        fecha_inicio=indicador.fecha_inicio_vigencia,
+        fecha_fin=indicador.fecha_fin_vigencia,
+        estado='vigente',
+    )
+
+    return meta
+
+
+def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
+    """Fuente ÚNICA de verdad (Bloque 4) sobre qué periodo corresponde
+    registrar para un KPI y si está disponible ahora mismo. La usan tanto
+    el endpoint `GET /mediciones/siguiente-periodo/` como la creación de
+    Medicion (serializer) y el cierre automático (management command), para
+    no duplicar la regla en varios lugares.
+
+    Devuelve siempre las mismas claves:
+      disponible, motivo, periodo_nombre, tipo_periodo,
+      fecha_inicio_periodo, fecha_cierre, fecha_limite_registro.
+
+    `fecha_cierre` es None únicamente cuando no hay un periodo concreto que
+    evaluar todavía (KPI no autorizado, sin meta, o sin más periodos dentro
+    de su vigencia) — el comando de cierre automático usa exactamente esa
+    condición para saber cuándo dejar de intentar cerrar periodos de un KPI.
+    """
+    fecha_referencia = fecha_referencia or hoy()
+
+    base = {
+        'disponible': False,
+        'motivo': '',
+        'periodo_nombre': None,
+        'tipo_periodo': None,
+        'fecha_inicio_periodo': None,
+        'fecha_cierre': None,
+        'fecha_limite_registro': None,
+    }
+
+    if indicador.estado != 'autorizado':
+        return {
+            **base,
+            'motivo': 'Solo se pueden registrar mediciones para KPI autorizados.',
+        }
+
+    if not indicador.valor_meta:
+        return {
+            **base,
+            'motivo': 'El KPI seleccionado no tiene una meta configurada.',
+        }
+
+    tipo_periodo = obtener_tipo_periodo(indicador)
+    intervalo = FRECUENCIA_INTERVALO[tipo_periodo]
+    fecha_inicio_periodo = obtener_siguiente_periodo_esperado(indicador)
+
+    fecha_fin_vigencia_mes = date(
+        indicador.fecha_fin_vigencia.year,
+        indicador.fecha_fin_vigencia.month,
+        1,
+    )
+
+    if fecha_inicio_periodo > fecha_fin_vigencia_mes:
+        return {
+            **base,
+            'tipo_periodo': tipo_periodo,
+            'motivo': 'No existen más periodos pendientes dentro de la vigencia del KPI.',
+        }
+
+    fecha_cierre = calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo)
+    fecha_limite = calcular_fecha_limite_registro(fecha_cierre)
+    periodo_nombre = formatear_periodo(fecha_inicio_periodo, intervalo)
+
+    info = {
+        'disponible': False,
+        'motivo': '',
+        'periodo_nombre': periodo_nombre,
+        'tipo_periodo': tipo_periodo,
+        'fecha_inicio_periodo': fecha_inicio_periodo,
+        'fecha_cierre': fecha_cierre,
+        'fecha_limite_registro': fecha_limite,
+    }
+
+    if fecha_referencia < fecha_cierre:
+        info['motivo'] = f'El periodo {periodo_nombre} todavía no está disponible para registro.'
+        return info
+
+    if fecha_referencia <= fecha_limite:
+        info['disponible'] = True
+        return info
+
+    info['motivo'] = (
+        f'El periodo {periodo_nombre} venció su ventana de registro y está '
+        'pendiente de cierre automático.'
+    )
+    return info
+
+
+def cerrar_mediciones_vencidas(fecha_referencia=None):
+    """Servicio central del management command `cerrar_mediciones_vencidas`
+    (Bloque 4). Por cada KPI autorizado, cierra EN ORDEN todos los periodos
+    cuya ventana de 5 días ya venció sin medición manual, creando una
+    Medicion con valor_resultado=0.00 y cierre_automatico=True.
+
+    Idempotente: se apoya en `obtener_info_siguiente_periodo`, que siempre
+    calcula el siguiente periodo a partir de la última Medicion real ya
+    guardada — si un periodo ya fue cerrado (automática o manualmente), la
+    siguiente llamada directamente evalúa el periodo posterior. Además
+    verifica explícitamente que no exista ya una Medicion para ese
+    (indicador, periodo) antes de crear, sin depender únicamente de que la
+    constraint `unique_medicion_por_indicador_periodo` lo impida."""
+    fecha_referencia = fecha_referencia or hoy()
+
+    kpi_revisados = 0
+    cierres_creados = 0
+    kpi_bloqueados = 0
+    errores = []
+    detalle = []
+
+    indicadores = IndicadorKPI.objects.filter(estado='autorizado').select_related(
+        'frecuencia',
+        'objetivo_especifico',
+        'objetivo_especifico__plan_anual',
+        'objetivo_especifico__plan_anual__plan_estrategico',
+    )
+
+    for indicador in indicadores:
+        kpi_revisados += 1
+
+        if indicador.esta_bloqueado():
+            # Plan anual o Plan estratégico Cerrado: la inmutabilidad ya
+            # implementada tiene prioridad, el cierre automático no debe
+            # tocar nada debajo de un Plan Cerrado.
+            kpi_bloqueados += 1
+            continue
+
+        while True:
+            info = obtener_info_siguiente_periodo(indicador, fecha_referencia=fecha_referencia)
+
+            if info['disponible'] or info['fecha_cierre'] is None:
+                # Vigente/en ventana todavía, o no quedan periodos: nada
+                # que cerrar para este KPI por ahora.
+                break
+
+            if fecha_referencia <= info['fecha_limite_registro']:
+                # Ventana aún no vence: se detiene, tal como exige la regla
+                # de no saltar/adelantar periodos.
+                break
+
+            try:
+                with transaction.atomic():
+                    periodo = obtener_o_crear_periodo(indicador, info['fecha_inicio_periodo'])
+
+                    ya_existe = Medicion.objects.select_for_update().filter(
+                        indicador=indicador,
+                        periodo=periodo,
+                    ).exists()
+
+                    if ya_existe:
+                        # Verificación defensiva de idempotencia: no debería
+                        # ocurrir dado que obtener_info_siguiente_periodo ya
+                        # excluye periodos con Medicion existente, pero no se
+                        # depende únicamente de la constraint de base de datos.
+                        break
+
+                    meta = obtener_o_crear_meta_vigente(indicador)
+                    estado_cumplimiento = obtener_estado_para_medicion(
+                        indicador=indicador,
+                        meta=meta,
+                        valor_resultado=Decimal('0.00'),
+                    )
+
+                    if estado_cumplimiento is None:
+                        raise ValueError(
+                            'No se encontró un estado de cumplimiento válido para clasificar el cierre automático.'
+                        )
+
+                    medicion = Medicion.objects.create(
+                        indicador=indicador,
+                        meta=meta,
+                        estado_cumplimiento=estado_cumplimiento,
+                        periodo=periodo,
+                        registrado_por=None,
+                        fecha_medicion=info['fecha_cierre'],
+                        valor_resultado=Decimal('0.00'),
+                        cierre_automatico=True,
+                    )
+
+                    generar_alerta_para_medicion(medicion)
+                    resolver_alertas_periodo_vencido(medicion, usuario=None)
+            except Exception as error:
+                errores.append({
+                    'indicador_id': indicador.id,
+                    'indicador': indicador.nombre,
+                    'periodo': info['periodo_nombre'],
+                    'error': str(error),
+                })
+                break
+
+            cierres_creados += 1
+            detalle.append({
+                'indicador_id': indicador.id,
+                'indicador': indicador.nombre,
+                'periodo': info['periodo_nombre'],
+                'medicion_id': medicion.id,
+            })
+            # Continúa el while: puede haber más de un periodo vencido
+            # atrasado (Bloque 4, punto 8) — se procesan en orden hasta
+            # llegar a uno que ya no esté vencido o hasta agotar el año.
+
+    return {
+        'kpi_revisados': kpi_revisados,
+        'cierres_creados': cierres_creados,
+        'kpi_bloqueados': kpi_bloqueados,
+        'errores': errores,
+        'detalle': detalle,
+    }
+
+
 def generar_alertas_periodos_vencidos(fecha_referencia=None):
-    fecha_referencia = fecha_referencia or date.today()
+    fecha_referencia = fecha_referencia or hoy()
 
     total_kpi_revisados = 0
     total_alertas_creadas = 0
@@ -488,7 +808,7 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
         if fecha_cierre >= fecha_referencia:
             continue
 
-        periodo_nombre = formatear_periodo(periodo_esperado)
+        periodo_nombre = formatear_periodo(periodo_esperado, intervalo)
 
         ya_existe = Alerta.objects.filter(
             indicador=indicador,

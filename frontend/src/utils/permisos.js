@@ -80,8 +80,20 @@ export function puedeRegistrarMedicion(usuario) {
   return esAdministrador(usuario) || esOperativo(usuario)
 }
 
-export function puedeEditarMedicion(usuario) {
-  return esAdministrador(usuario) || esOperativo(usuario)
+export function puedeEditarMedicion(usuario, medicion = null) {
+  if (!esAdministrador(usuario) && !esOperativo(usuario)) {
+    return false
+  }
+
+  if (!medicion) {
+    return true
+  }
+
+  // Bloque 4: una medición de cierre automático, o una cuyo Plan
+  // anual/Plan estratégico esté Cerrado, no puede modificarse. El backend
+  // ya aplica esta regla de verdad (ver MedicionSerializer.validate); acá
+  // solo se refleja para no mostrar un botón que el backend rechazaría.
+  return medicion.puede_modificarse !== false
 }
 
 export function puedeSoloConsultar(usuario) {

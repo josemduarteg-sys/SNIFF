@@ -10,45 +10,17 @@ export async function obtenerIndicadoresKpi() {
   return normalizarRespuesta(response)
 }
 
-export async function obtenerEstadosCumplimiento() {
-  const response = await api.get('estados-cumplimiento/')
-  return normalizarRespuesta(response)
-}
-
 export async function obtenerDatosFormularioMedicion() {
-  const [indicadores, estadosCumplimiento] = await Promise.all([
-    obtenerIndicadoresKpi(),
-    obtenerEstadosCumplimiento(),
-  ])
+  const indicadores = await obtenerIndicadoresKpi()
 
-  const indicadoresAutorizados = indicadores.filter((indicador) => {
-    return (
-      indicador.estado === 'autorizado' &&
-      indicador.valor_meta &&
-      indicador.fecha_inicio_vigencia &&
-      indicador.fecha_fin_vigencia
-    )
-  })
+  // Solo KPI autorizados son elegibles para medición (ver también la
+  // validación equivalente y autoritativa en backend:
+  // MedicionSerializer.validate / obtener_info_siguiente_periodo).
+  const indicadoresAutorizados = indicadores.filter((indicador) => indicador.estado === 'autorizado')
 
   return {
     indicadores: indicadoresAutorizados,
-    estadosCumplimiento,
   }
-}
-
-export async function crearMedicion(payload) {
-  const response = await api.post('mediciones/', limpiarPayloadMedicion(payload))
-  return response.data
-}
-
-export async function actualizarMedicion(id, payload) {
-  const response = await api.patch(`mediciones/${id}/`, limpiarPayloadMedicion(payload))
-  return response.data
-}
-
-export async function eliminarMedicion(id) {
-  const response = await api.delete(`mediciones/${id}/`)
-  return response.data
 }
 
 export async function obtenerSiguientePeriodo(indicadorId) {
@@ -61,26 +33,57 @@ export async function obtenerSiguientePeriodo(indicadorId) {
   return response.data
 }
 
-/*
-  Estas funciones quedan solo para compatibilidad temporal.
-  La lógica nueva ya no usa meta ni periodo manual desde frontend.
-*/
-export async function obtenerMetasKpi() {
-  return []
+export async function crearMedicion(payload) {
+  const formData = construirFormData(payload, { incluirIndicador: true })
+
+  const response = await api.post('mediciones/', formData, {
+    headers: { 'Content-Type': undefined },
+  })
+
+  return response.data
 }
 
-export async function obtenerPeriodosMedicion() {
-  return []
+export async function actualizarMedicion(id, payload) {
+  const formData = construirFormData(payload, { incluirIndicador: false })
+
+  const response = await api.patch(`mediciones/${id}/`, formData, {
+    headers: { 'Content-Type': undefined },
+  })
+
+  return response.data
 }
 
-function limpiarPayloadMedicion(payload) {
-  return {
-    indicador: payload.indicador,
-    mes_medicion: payload.mes_medicion,
-    valor_resultado: payload.valor_resultado,
-    observacion: payload.observacion || '',
-    evidencia: payload.evidencia || '',
+export function obtenerUrlEvidencia(id) {
+  return `mediciones/${id}/evidencia/`
+}
+
+export async function descargarEvidencia(id) {
+  const response = await api.get(obtenerUrlEvidencia(id), {
+    responseType: 'blob',
+  })
+
+  return response.data
+}
+
+// Construye el FormData que se envía como multipart/form-data (Bloque 4:
+// la evidencia ahora es un archivo real, no texto). Solo se agrega
+// `evidencia` cuando el usuario efectivamente seleccionó un archivo nuevo,
+// para no pisar sin querer una evidencia ya guardada al editar.
+function construirFormData(payload, { incluirIndicador }) {
+  const formData = new FormData()
+
+  if (incluirIndicador) {
+    formData.append('indicador', payload.indicador)
   }
+
+  formData.append('valor_resultado', payload.valor_resultado)
+  formData.append('observacion', payload.observacion || '')
+
+  if (payload.evidencia instanceof File) {
+    formData.append('evidencia', payload.evidencia)
+  }
+
+  return formData
 }
 
 function normalizarRespuesta(response) {

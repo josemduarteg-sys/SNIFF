@@ -47,7 +47,10 @@ const mostrarModalDetalle = ref(false)
 const medicionDetalle = ref(null)
 
 const puedeRegistrar = computed(() => puedeRegistrarMedicion(props.usuario))
-const puedeEditar = computed(() => puedeEditarMedicion(props.usuario))
+
+function puedeEditar(medicion) {
+  return puedeEditarMedicion(props.usuario, medicion)
+}
 
 const tituloModal = computed(() => {
   return medicionSeleccionada.value?.id ? 'Editar medición' : 'Nueva medición'
@@ -139,9 +142,25 @@ function abrirModalCrear() {
 }
 
 function abrirModalEditar(medicion) {
+  if (!puedeEditar(medicion)) {
+    return
+  }
+
   mensajeExito.value = ''
   medicionSeleccionada.value = { ...medicion }
   mostrarModal.value = true
+}
+
+function textoTipoRegistro(medicion) {
+  return medicion.cierre_automatico ? 'Automático' : 'Manual'
+}
+
+function textoRegistradoPor(medicion) {
+  if (medicion.cierre_automatico && !medicion.registrado_por_username) {
+    return 'Sistema'
+  }
+
+  return medicion.registrado_por_username || 'Sistema'
 }
 
 function abrirModalDetalle(medicion) {
@@ -351,6 +370,7 @@ onMounted(async () => {
             <th title="Se calcula comparando el resultado obtenido con la meta establecida.">Cumplimiento de la meta</th>
             <th>Estado</th>
             <th>Registrado por</th>
+            <th>Tipo</th>
             <th style="text-align: right;">Acciones</th>
           </tr>
         </thead>
@@ -369,10 +389,10 @@ onMounted(async () => {
 
             <td>
               <div class="cell-main">
-                {{ medicion.periodo_nombre || medicion.mes_medicion || 'Periodo no definido' }}
+                {{ medicion.periodo_nombre || 'Periodo no definido' }}
               </div>
               <div class="cell-sub">
-                Periodo de seguimiento
+                Cierre: {{ formatearFecha(medicion.fecha_medicion) }}
               </div>
             </td>
 
@@ -428,11 +448,17 @@ onMounted(async () => {
 
             <td>
               <div class="cell-main">
-                {{ medicion.registrado_por_username || 'Sistema' }}
+                {{ textoRegistradoPor(medicion) }}
               </div>
               <div class="cell-sub">
                 {{ formatearFecha(medicion.fecha_registro) }}
               </div>
+            </td>
+
+            <td>
+              <span class="source-chip" :class="medicion.cierre_automatico ? 'dw' : 'manual'">
+                {{ textoTipoRegistro(medicion) }}
+              </span>
             </td>
 
             <td>
@@ -444,7 +470,7 @@ onMounted(async () => {
                   </svg>
                 </button>
 
-                <button v-if="puedeEditar" class="action-icon-btn" type="button" title="Editar" aria-label="Editar" @click="abrirModalEditar(medicion)">
+                <button v-if="puedeEditar(medicion)" class="action-icon-btn" type="button" title="Editar" aria-label="Editar" @click="abrirModalEditar(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                     <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />

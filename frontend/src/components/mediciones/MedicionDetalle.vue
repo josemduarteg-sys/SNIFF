@@ -1,7 +1,8 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { formatearNumero, formatearDiferencia } from '../../utils/formato'
 import { claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
+import { descargarEvidencia } from '../../services/medicionService'
 
 const props = defineProps({
   medicion: {
@@ -22,6 +23,39 @@ const diferencia = computed(() => {
     unidad: props.medicion.unidad_medida,
   })
 })
+
+// Bloque 4: una medición de cierre automático no tiene un usuario humano
+// real detrás (registrado_por queda NULL a propósito). Se muestra "Sistema"
+// únicamente en pantalla, sin inventar un usuario falso en la base.
+const registradoPorTexto = computed(() => {
+  if (props.medicion.cierre_automatico && !props.medicion.registrado_por_username) {
+    return 'Sistema'
+  }
+
+  return props.medicion.registrado_por_username || 'Sistema'
+})
+
+const tipoRegistroTexto = computed(() => {
+  return props.medicion.cierre_automatico ? 'Cierre automático' : 'Manual'
+})
+
+const descargando = ref(false)
+
+async function verEvidencia() {
+  descargando.value = true
+
+  try {
+    const blob = await descargarEvidencia(props.medicion.id)
+    const url = window.URL.createObjectURL(blob)
+    window.open(url, '_blank', 'noopener')
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60000)
+  } catch {
+    // Silencioso: la descarga es una acción secundaria del detalle: si
+    // falla (por ejemplo, el archivo ya no existe), no rompe la vista.
+  } finally {
+    descargando.value = false
+  }
+}
 
 function formatearFecha(fecha) {
   if (!fecha) return 'No definida'
@@ -76,8 +110,28 @@ function formatearFecha(fecha) {
       </div>
 
       <div class="detail-item">
+        <span>Plan estratégico</span>
+        <strong>{{ medicion.indicador_plan_estrategico_titulo || 'No definido' }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Plan anual</span>
+        <strong>{{ medicion.indicador_plan_anual_nombre || 'No definido' }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Objetivo específico</span>
+        <strong>{{ medicion.indicador_objetivo_especifico_texto || 'No definido' }}</strong>
+      </div>
+
+      <div class="detail-item">
         <span>Periodo evaluado</span>
-        <strong>{{ medicion.periodo_nombre || medicion.mes_medicion || 'No definido' }}</strong>
+        <strong>{{ medicion.periodo_nombre || 'No definido' }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Frecuencia</span>
+        <strong>{{ medicion.indicador_frecuencia_nombre || 'No definida' }}</strong>
       </div>
 
       <div class="detail-item">
@@ -106,8 +160,18 @@ function formatearFecha(fecha) {
       </div>
 
       <div class="detail-item">
+        <span>Tipo de registro</span>
+        <strong>{{ tipoRegistroTexto }}</strong>
+      </div>
+
+      <div class="detail-item">
         <span>Registrado por</span>
-        <strong>{{ medicion.registrado_por_username || 'Sistema' }}</strong>
+        <strong>{{ registradoPorTexto }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Fecha de medición</span>
+        <strong>{{ formatearFecha(medicion.fecha_medicion) }}</strong>
       </div>
 
       <div class="detail-item">
@@ -122,8 +186,23 @@ function formatearFecha(fecha) {
     </div>
 
     <div class="observation-box">
-      <span>Evidencias / respaldo de lo realizado</span>
-      <p>{{ medicion.evidencia || 'Sin evidencias registradas.' }}</p>
+      <span>Evidencia / respaldo de lo realizado</span>
+
+      <button
+        v-if="medicion.tiene_evidencia"
+        class="btn-evidencia"
+        type="button"
+        :disabled="descargando"
+        @click="verEvidencia"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+        {{ descargando ? 'Abriendo...' : 'Ver evidencia' }}
+      </button>
+      <p v-else>Sin evidencia adjunta.</p>
     </div>
 
     <div class="note-box">
@@ -302,6 +381,37 @@ p {
   font-size: 13px;
   font-weight: 600;
   line-height: 1.5;
+}
+
+.btn-evidencia {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #1d3557;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-evidencia:hover:not(:disabled) {
+  background: #eaf5f5;
+  border-color: #a8dadc;
+}
+
+.btn-evidencia:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-evidencia svg {
+  stroke: currentColor;
 }
 
 .note-box {

@@ -124,6 +124,7 @@ class MedicionAdmin(admin.ModelAdmin):
         'meta',
         'estado_cumplimiento',
         'valor_resultado',
+        'cierre_automatico',
         'fecha_medicion',
         'registrado_por',
         'archivo_importado',
@@ -133,6 +134,7 @@ class MedicionAdmin(admin.ModelAdmin):
     search_fields = ('indicador__nombre',)
     list_filter = (
         'estado_cumplimiento',
+        'cierre_automatico',
         'fecha_medicion',
         'periodo__tipo_periodo',
     )

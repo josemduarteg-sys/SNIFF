@@ -121,6 +121,16 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Archivos subidos por usuarios (Bloque 4: evidencia de mediciones).
+# Almacenamiento local (FileSystemStorage, el default de Django): el
+# proyecto corre localmente y luego en un servidor institucional propio, sin
+# integración con S3/Drive/nube en esta etapa. MEDIA_URL no se expone como
+# ruta pública en config/urls.py a propósito: los archivos se sirven
+# únicamente mediante el endpoint autenticado GET /api/mediciones/{id}/evidencia/,
+# que respeta los mismos permisos de lectura que el resto de Medicion.
+MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = '/media/'
+
 AUTH_USER_MODEL = 'usuarios.Usuario'
 
 

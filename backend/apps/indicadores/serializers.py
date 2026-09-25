@@ -1,4 +1,5 @@
-from datetime import date
+import os
+
 from rest_framework import serializers
 
 from .models import (
@@ -13,6 +14,7 @@ from .models import (
     PeriodoMedicion,
     Medicion,
     Alerta,
+    validar_archivo_evidencia,
 )
 
 
@@ -368,9 +370,26 @@ class PeriodoMedicionSerializer(serializers.ModelSerializer):
 
 
 class MedicionSerializer(serializers.ModelSerializer):
-    mes_medicion = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    """Bloque 4: el usuario ya NO elige periodo/fecha de medición — el
+    backend los determina siempre a partir de `obtener_info_siguiente_periodo`
+    (única fuente de verdad, compartida con el endpoint `siguiente-periodo`
+    y con el cierre automático). En edición, solo se permiten tocar
+    valor_resultado/observacion/evidencia."""
+
     indicador_nombre = serializers.CharField(source='indicador.nombre', read_only=True)
     unidad_medida = serializers.CharField(source='indicador.unidad_medida', read_only=True)
+    indicador_plan_estrategico_titulo = serializers.CharField(
+        source='indicador.plan_estrategico.titulo', read_only=True
+    )
+    indicador_plan_anual_nombre = serializers.CharField(
+        source='indicador.plan_anual.nombre', read_only=True
+    )
+    indicador_objetivo_especifico_texto = serializers.CharField(
+        source='indicador.objetivo_especifico.texto_objetivo', read_only=True
+    )
+    indicador_frecuencia_nombre = serializers.CharField(
+        source='indicador.frecuencia.nombre', read_only=True
+    )
     periodo_nombre = serializers.SerializerMethodField()
     valor_meta = serializers.SerializerMethodField()
     observaciones = serializers.CharField(source='observacion', read_only=True)
@@ -385,9 +404,19 @@ class MedicionSerializer(serializers.ModelSerializer):
     )
     registrado_por_username = serializers.CharField(
         source='registrado_por.username',
-        read_only=True
+        read_only=True,
+        default=None,
     )
     porcentaje_cumplimiento = serializers.SerializerMethodField()
+    evidencia = serializers.FileField(
+        required=False,
+        allow_null=True,
+        write_only=True,
+        validators=[validar_archivo_evidencia],
+    )
+    evidencia_nombre = serializers.SerializerMethodField()
+    tiene_evidencia = serializers.SerializerMethodField()
+    puede_modificarse = serializers.SerializerMethodField()
 
     class Meta:
         model = Medicion
@@ -396,6 +425,10 @@ class MedicionSerializer(serializers.ModelSerializer):
             'indicador',
             'indicador_nombre',
             'unidad_medida',
+            'indicador_plan_estrategico_titulo',
+            'indicador_plan_anual_nombre',
+            'indicador_objetivo_especifico_texto',
+            'indicador_frecuencia_nombre',
             'meta',
             'valor_meta',
             'estado_cumplimiento',
@@ -403,7 +436,6 @@ class MedicionSerializer(serializers.ModelSerializer):
             'estado_cumplimiento_color',
             'periodo',
             'periodo_nombre',
-            'mes_medicion',
             'registrado_por',
             'registrado_por_username',
             'archivo_importado',
@@ -414,6 +446,10 @@ class MedicionSerializer(serializers.ModelSerializer):
             'observacion',
             'observaciones',
             'evidencia',
+            'evidencia_nombre',
+            'tiene_evidencia',
+            'cierre_automatico',
+            'puede_modificarse',
             'fecha_registro',
         ]
         read_only_fields = [
@@ -429,7 +465,15 @@ class MedicionSerializer(serializers.ModelSerializer):
             'observaciones',
             'registrado_por',
             'registrado_por_username',
+            'cierre_automatico',
+            'puede_modificarse',
         ]
+        # Mismo motivo que en los demás serializers de este proyecto desde
+        # Bloque 2: se desactiva el UniqueTogetherValidator automático de
+        # DRF (derivado de unique_medicion_por_indicador_periodo) porque acá
+        # el periodo ni siquiera lo envía el cliente — la disponibilidad ya
+        # la resuelve obtener_info_siguiente_periodo() en validate().
+        validators = []
 
     def get_periodo_nombre(self, obj):
         if not obj.periodo:
@@ -458,177 +502,72 @@ class MedicionSerializer(serializers.ModelSerializer):
     def get_porcentaje_cumplimiento(self, obj):
         return round(obj.calcular_cumplimiento(), 2)
 
-    def obtener_fechas_mes(self, mes_medicion):
-        try:
-            anio_texto, mes_texto = mes_medicion.split('-')
-            anio = int(anio_texto)
-            mes = int(mes_texto)
-        except (ValueError, AttributeError):
-            raise serializers.ValidationError({
-                'mes_medicion': 'El mes de medición debe tener formato YYYY-MM.'
-            })
+    def get_evidencia_nombre(self, obj):
+        if not obj.evidencia:
+            return None
 
-        if mes < 1 or mes > 12:
-            raise serializers.ValidationError({
-                'mes_medicion': 'El mes de medición no es válido.'
-            })
+        return os.path.basename(obj.evidencia.name)
 
-        fecha_inicio = date(anio, mes, 1)
+    def get_tiene_evidencia(self, obj):
+        return bool(obj.evidencia)
 
-        if mes == 12:
-            fecha_fin = date(anio, 12, 31)
-        else:
-            fecha_fin = date(anio, mes + 1, 1) - date.resolution
+    def get_puede_modificarse(self, obj):
+        if obj.cierre_automatico:
+            return False
 
-        return anio, mes, fecha_inicio, fecha_fin
-
-    def obtener_o_crear_periodo_mensual(self, mes_medicion):
-        anio, mes, fecha_inicio, fecha_fin = self.obtener_fechas_mes(mes_medicion)
-
-        periodo, _ = PeriodoMedicion.objects.get_or_create(
-            tipo_periodo='mensual',
-            fecha_inicio=fecha_inicio,
-            fecha_fin=fecha_fin,
-            defaults={
-                'anio': anio,
-                'mes': mes,
-                'descripcion': f'Periodo {mes:02d}/{anio}',
-            }
-        )
-
-        return periodo
-
-    def obtener_o_crear_meta_para_indicador(self, indicador):
-        meta_existente = MetaKPI.objects.filter(
-            indicador=indicador,
-            estado='vigente',
-        ).order_by('-fecha_inicio').first()
-
-        if meta_existente:
-            return meta_existente
-
-        if indicador.valor_meta is None:
-            raise serializers.ValidationError({
-                'indicador': 'El KPI seleccionado no tiene una meta configurada.'
-            })
-
-        # Compatibilidad Bloque 3: el KPI ya no almacena fecha_inicio/fecha_fin
-        # propias; la vigencia se deriva de su Plan anual (ver
-        # IndicadorKPI.fecha_inicio_vigencia / fecha_fin_vigencia). MetaKPI
-        # todavía no se rediseña, así que sigue recibiendo fechas concretas.
-        meta, _ = MetaKPI.objects.get_or_create(
-            indicador=indicador,
-            valor_meta=indicador.valor_meta,
-            fecha_inicio=indicador.fecha_inicio_vigencia,
-            fecha_fin=indicador.fecha_fin_vigencia,
-            estado='vigente',
-        )
-
-        return meta
-
-    def preparar_datos_mensuales(self, attrs):
-        from .services import formatear_periodo, obtener_siguiente_periodo_esperado
-
-        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
-        mes_medicion = attrs.pop('mes_medicion', None)
-
-        if not indicador:
-            raise serializers.ValidationError({
-                'indicador': 'Seleccioná el KPI.'
-            })
-
-        meta = self.obtener_o_crear_meta_para_indicador(indicador)
-        attrs['meta'] = meta
-
-        if mes_medicion:
-            periodo = self.obtener_o_crear_periodo_mensual(mes_medicion)
-            attrs['periodo'] = periodo
-            attrs['fecha_medicion'] = periodo.fecha_fin
-
-            fecha_periodo = periodo.fecha_inicio
-
-            fecha_inicio_kpi = date(
-                indicador.fecha_inicio_vigencia.year,
-                indicador.fecha_inicio_vigencia.month,
-                1,
-            )
-
-            fecha_fin_kpi = date(
-                indicador.fecha_fin_vigencia.year,
-                indicador.fecha_fin_vigencia.month,
-                1,
-            )
-
-            if fecha_periodo < fecha_inicio_kpi or fecha_periodo > fecha_fin_kpi:
-                raise serializers.ValidationError({
-                    'mes_medicion': 'El periodo seleccionado está fuera de la vigencia del KPI.'
-                })
-
-            medicion_existente = Medicion.objects.filter(
-                indicador=indicador,
-                periodo=periodo,
-            ).exclude(
-                id=self.instance.id if self.instance else None
-            ).exists()
-
-            if medicion_existente:
-                raise serializers.ValidationError({
-                    'mes_medicion': 'Ya existe una medición registrada para este KPI en el mes seleccionado.'
-                })
-
-            es_edicion_mismo_periodo = (
-                self.instance is not None
-                and getattr(self.instance, 'periodo_id', None) == periodo.id
-            )
-
-            if not es_edicion_mismo_periodo:
-                periodo_esperado = obtener_siguiente_periodo_esperado(
-                    indicador,
-                    excluir_medicion_id=self.instance.id if self.instance else None,
-                )
-
-                if fecha_periodo != periodo_esperado:
-                    raise serializers.ValidationError({
-                        'mes_medicion': (
-                            f'El siguiente periodo esperado para este KPI es '
-                            f'{formatear_periodo(periodo_esperado)}. '
-                            f'No se puede registrar {formatear_periodo(fecha_periodo)} '
-                            f'porque hay periodos anteriores pendientes.'
-                        )
-                    })
-        elif not self.instance:
-            raise serializers.ValidationError({
-                'mes_medicion': 'Seleccioná el mes que se va a medir.'
-            })
-
-        return attrs
+        return not obj.indicador.esta_bloqueado()
 
     def validate(self, attrs):
-        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
+        from .services import obtener_info_siguiente_periodo
 
-        if not indicador:
-            raise serializers.ValidationError({
-                'indicador': 'Debe seleccionar un KPI.'
-            })
+        instance = self.instance
 
-        if indicador.estado != 'autorizado':
-            raise serializers.ValidationError({
-                'indicador': 'Solo se pueden registrar mediciones para KPI autorizados.'
-            })
+        if instance is not None:
+            if instance.cierre_automatico:
+                raise serializers.ValidationError(
+                    'Esta medición fue cerrada automáticamente y no puede modificarse.'
+                )
 
-        if not indicador.valor_meta:
-            raise serializers.ValidationError({
-                'indicador': 'El KPI seleccionado no tiene una meta configurada.'
-            })
+            if instance.indicador.esta_bloqueado():
+                raise serializers.ValidationError(
+                    'El Plan anual o el Plan estratégico de este KPI están Cerrados y '
+                    'no permiten modificar mediciones.'
+                )
 
-        # Compatibilidad Bloque 3: fecha_inicio_vigencia/fecha_fin_vigencia
-        # se derivan siempre del Plan anual del KPI (nunca son None), así
-        # que ya no hace falta validar su ausencia como antes.
+            campos_permitidos = {'valor_resultado', 'observacion', 'evidencia'}
+            campos_no_permitidos = set(attrs.keys()) - campos_permitidos
+
+            if campos_no_permitidos:
+                raise serializers.ValidationError(
+                    'Solo se pueden modificar el resultado, la observación y la '
+                    'evidencia de una medición existente.'
+                )
+
+            indicador = instance.indicador
+        else:
+            indicador = attrs.get('indicador')
+
+            if not indicador:
+                raise serializers.ValidationError({
+                    'indicador': 'Debe seleccionar un KPI.'
+                })
+
+            if indicador.esta_bloqueado():
+                raise serializers.ValidationError(
+                    'El Plan anual o el Plan estratégico de este KPI están Cerrados.'
+                )
+
+            info = obtener_info_siguiente_periodo(indicador)
+
+            if not info['disponible']:
+                raise serializers.ValidationError({'indicador': info['motivo']})
+
+            attrs['_info_periodo'] = info
 
         valor_resultado = attrs.get('valor_resultado')
 
-        if valor_resultado is None and self.instance is not None and 'valor_resultado' not in attrs:
-            valor_resultado = self.instance.valor_resultado
+        if valor_resultado is None and instance is not None and 'valor_resultado' not in attrs:
+            valor_resultado = instance.valor_resultado
 
         if valor_resultado is not None:
             if valor_resultado < 0:
@@ -644,16 +583,6 @@ class MedicionSerializer(serializers.ModelSerializer):
                     )
                 })
 
-        attrs = self.preparar_datos_mensuales(attrs)
-
-        indicador = attrs.get('indicador') or getattr(self.instance, 'indicador', None)
-        meta = attrs.get('meta') or getattr(self.instance, 'meta', None)
-
-        if indicador and meta and meta.indicador_id != indicador.id:
-            raise serializers.ValidationError(
-                'La meta seleccionada no pertenece al indicador indicado.'
-            )
-
         return attrs
 
     def create(self, validated_data):
@@ -661,17 +590,26 @@ class MedicionSerializer(serializers.ModelSerializer):
         from .services import (
             generar_alerta_para_medicion,
             obtener_estado_para_medicion,
+            obtener_o_crear_meta_vigente,
+            obtener_o_crear_periodo,
             resolver_alertas_periodo_vencido,
         )
 
-        indicador = validated_data.get('indicador')
-        meta = validated_data.get('meta')
-        valor_resultado = validated_data.get('valor_resultado')
+        info = validated_data.pop('_info_periodo')
+        indicador = validated_data['indicador']
+
+        periodo = obtener_o_crear_periodo(indicador, info['fecha_inicio_periodo'])
+        meta = obtener_o_crear_meta_vigente(indicador)
+
+        validated_data['periodo'] = periodo
+        validated_data['meta'] = meta
+        validated_data['fecha_medicion'] = info['fecha_cierre']
+        validated_data['cierre_automatico'] = False
 
         estado = obtener_estado_para_medicion(
             indicador=indicador,
             meta=meta,
-            valor_resultado=valor_resultado,
+            valor_resultado=validated_data.get('valor_resultado'),
         )
 
         if estado is None:
@@ -699,8 +637,8 @@ class MedicionSerializer(serializers.ModelSerializer):
             modulo='mediciones',
             descripcion=(
                 f'Se registró una medición para el indicador '
-                f'"{medicion.indicador.nombre}" con resultado '
-                f'{medicion.valor_resultado}.'
+                f'"{medicion.indicador.nombre}" (periodo {medicion.periodo.descripcion}) '
+                f'con resultado {medicion.valor_resultado}.'
             ),
             request=request,
         )
@@ -727,16 +665,14 @@ class MedicionSerializer(serializers.ModelSerializer):
             resolver_alertas_periodo_vencido,
         )
 
-        indicador = validated_data.get('indicador', instance.indicador)
-        meta = validated_data.get('meta', instance.meta)
-        valor_resultado = validated_data.get(
-            'valor_resultado',
-            instance.valor_resultado
-        )
+        evidencia_anterior = instance.evidencia
+        reemplaza_evidencia = 'evidencia' in validated_data
+
+        valor_resultado = validated_data.get('valor_resultado', instance.valor_resultado)
 
         estado = obtener_estado_para_medicion(
-            indicador=indicador,
-            meta=meta,
+            indicador=instance.indicador,
+            meta=instance.meta,
             valor_resultado=valor_resultado,
         )
 
@@ -748,6 +684,11 @@ class MedicionSerializer(serializers.ModelSerializer):
         validated_data['estado_cumplimiento'] = estado
 
         medicion = super().update(instance, validated_data)
+
+        # Reemplazo de evidencia (punto 31): evita dejar el archivo anterior
+        # huérfano en el almacenamiento local cuando se sube uno nuevo.
+        if reemplaza_evidencia and evidencia_anterior and evidencia_anterior != medicion.evidencia:
+            evidencia_anterior.delete(save=False)
 
         request = self.context.get('request')
         usuario = request.user if request and request.user.is_authenticated else medicion.registrado_por

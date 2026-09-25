@@ -328,6 +328,9 @@ class PeriodoMedicion(models.Model):
         ('diario', 'Diario'),
         ('semanal', 'Semanal'),
         ('mensual', 'Mensual'),
+        ('bimestral', 'Bimestral'),
+        ('trimestral', 'Trimestral'),
+        ('semestral', 'Semestral'),
         ('anual', 'Anual'),
     ]
 
@@ -362,6 +365,34 @@ class PeriodoMedicion(models.Model):
         return f'{self.tipo_periodo} - {self.fecha_inicio} a {self.fecha_fin}'
 
 
+ARCHIVO_EVIDENCIA_EXTENSIONES = ('.pdf', '.jpg', '.jpeg')
+ARCHIVO_EVIDENCIA_CONTENT_TYPES = ('application/pdf', 'image/jpeg', 'image/jpg')
+ARCHIVO_EVIDENCIA_TAMANO_MAXIMO = 10 * 1024 * 1024  # 10 MB
+
+
+def validar_archivo_evidencia(archivo):
+    """Validación backend de la evidencia de una Medicion (Bloque 4): no se
+    confía únicamente en el `accept` del navegador. Revisa extensión, tipo
+    de contenido declarado y tamaño máximo."""
+    import os
+
+    nombre = getattr(archivo, 'name', '') or ''
+    extension = os.path.splitext(nombre)[1].lower()
+
+    if extension not in ARCHIVO_EVIDENCIA_EXTENSIONES:
+        raise ValidationError('Solo se permiten archivos PDF, JPG o JPEG.')
+
+    content_type = getattr(archivo, 'content_type', None)
+
+    if content_type and content_type.lower() not in ARCHIVO_EVIDENCIA_CONTENT_TYPES:
+        raise ValidationError('Solo se permiten archivos PDF, JPG o JPEG.')
+
+    tamano = getattr(archivo, 'size', 0) or 0
+
+    if tamano > ARCHIVO_EVIDENCIA_TAMANO_MAXIMO:
+        raise ValidationError('El archivo no puede superar los 10 MB.')
+
+
 class Medicion(models.Model):
     indicador = models.ForeignKey(
         IndicadorKPI,
@@ -386,7 +417,10 @@ class Medicion(models.Model):
     registrado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='mediciones_registradas'
+        related_name='mediciones_registradas',
+        blank=True,
+        null=True,
+        help_text='Vacío únicamente cuando la medición fue creada por el cierre automático del sistema.'
     )
     archivo_importado = models.ForeignKey(
         'integraciones.ArchivoImportado',
@@ -402,13 +436,21 @@ class Medicion(models.Model):
         blank=True,
         null=True
     )
-    fecha_medicion = models.DateField()
+    fecha_medicion = models.DateField(
+        help_text='Fecha de cierre del periodo medido (no la fecha en que se registró).'
+    )
     valor_resultado = models.DecimalField(max_digits=14, decimal_places=4)
     observacion = models.TextField(blank=True, null=True)
-    evidencia = models.TextField(
+    evidencia = models.FileField(
+        upload_to='evidencias/mediciones/%Y/%m/',
         blank=True,
         null=True,
-        help_text='Evidencias, respaldo o detalle de lo realizado durante la medición.'
+        validators=[validar_archivo_evidencia],
+        help_text='Respaldo opcional de la medición. Solo PDF, JPG o JPEG, máximo 10 MB.'
+    )
+    cierre_automatico = models.BooleanField(
+        default=False,
+        help_text='True cuando el sistema creó esta medición automáticamente en 0.00 por vencimiento de la ventana de registro.'
     )
     fecha_registro = models.DateTimeField(auto_now_add=True)
 

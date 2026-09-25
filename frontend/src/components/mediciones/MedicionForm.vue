@@ -1,10 +1,7 @@
 <script setup>
 import { computed, reactive, watch } from 'vue'
-import {
-  actualizarMedicion,
-  crearMedicion,
-  obtenerSiguientePeriodo,
-} from '../../services/medicionService'
+import SelectorBuscable from '../common/SelectorBuscable.vue'
+import { actualizarMedicion, crearMedicion, obtenerSiguientePeriodo } from '../../services/medicionService'
 import { formatearNumero } from '../../utils/formato'
 
 const props = defineProps({
@@ -23,25 +20,41 @@ const emit = defineEmits(['guardado', 'cancelar'])
 
 const form = reactive({
   indicador: '',
-  mes_medicion: '',
   valor_resultado: '',
   observacion: '',
-  evidencia: '',
+  evidencia: null,
 })
 
 const estado = reactive({
   guardando: false,
   error: '',
   cargandoPeriodo: false,
-  periodoDisponible: true,
-  mensajePeriodo: '',
+  periodo: null,
 })
 
 const esEdicion = computed(() => !!props.medicionEditar?.id)
 
+// El botón debe reflejar explícitamente cuándo no se puede guardar (no
+// alcanza con ocultar los campos): en creación, exige un KPI elegido, el
+// periodo ya calculado (no cargando) y disponible=true.
+const puedeGuardar = computed(() => {
+  if (estado.guardando) return false
+  if (esEdicion.value) return true
+  if (!form.indicador) return false
+  if (estado.cargandoPeriodo) return false
+  return estado.periodo?.disponible === true
+})
+
 const tituloBoton = computed(() => {
   if (estado.guardando) return esEdicion.value ? 'Actualizando...' : 'Guardando...'
   return esEdicion.value ? 'Actualizar medición' : 'Guardar medición'
+})
+
+const opcionesKpi = computed(() => {
+  return props.indicadores.map((indicador) => ({
+    id: indicador.id,
+    texto: `${indicador.nombre} — ${indicador.plan_anual_nombre || 'Sin plan anual'} — ${indicador.objetivo_especifico_texto || 'Sin objetivo'}`,
+  }))
 })
 
 const indicadorSeleccionado = computed(() => {
@@ -52,27 +65,55 @@ const indicadorSeleccionado = computed(() => {
   }) || null
 })
 
-const metaVigente = computed(() => {
-  const indicador = indicadorSeleccionado.value
-
-  if (!indicador?.valor_meta) {
-    return null
+// Contexto de solo lectura a mostrar: en creación viene del KPI elegido, en
+// edición viene directamente de la medición (que ya trae los datos de su
+// KPI expandidos, sin necesidad de que ese KPI siga en la lista de
+// "autorizados" seleccionables).
+const contexto = computed(() => {
+  if (esEdicion.value) {
+    const medicion = props.medicionEditar
+    return {
+      planEstrategico: medicion.indicador_plan_estrategico_titulo,
+      planAnual: medicion.indicador_plan_anual_nombre,
+      objetivoEspecifico: medicion.indicador_objetivo_especifico_texto,
+      nombreKpi: medicion.indicador_nombre,
+      formula: medicion.formula_medicion,
+      unidad: medicion.unidad_medida,
+      meta: medicion.valor_meta,
+      frecuencia: medicion.indicador_frecuencia_nombre,
+      periodoNombre: medicion.periodo_nombre,
+    }
   }
 
-  return Number(indicador.valor_meta)
+  const indicador = indicadorSeleccionado.value
+
+  if (!indicador) return null
+
+  return {
+    planEstrategico: indicador.plan_estrategico_titulo,
+    planAnual: indicador.plan_anual_nombre,
+    objetivoEspecifico: indicador.objetivo_especifico_texto,
+    nombreKpi: indicador.nombre,
+    formula: indicador.formula_medicion,
+    unidad: indicador.unidad_medida,
+    meta: indicador.valor_meta,
+    frecuencia: indicador.frecuencia_nombre,
+    periodoNombre: estado.periodo?.periodo_nombre,
+  }
 })
 
-const unidadMedida = computed(() => indicadorSeleccionado.value?.unidad_medida || 'unidad')
+const unidadMedida = computed(() => contexto.value?.unidad || 'unidad')
+
+const puedeEditarEvidencia = computed(() => {
+  if (!esEdicion.value) return true
+  return props.medicionEditar?.puede_modificarse !== false
+})
 
 const ayudaResultado = computed(() => {
   const unidad = unidadMedida.value
 
   if (unidad === '%') {
     return 'Ingresá el porcentaje real obtenido en el periodo. Ejemplo: 85 para representar 85%.'
-  }
-
-  if (unidad.toLowerCase().includes('q')) {
-    return 'Ingresá el monto real obtenido en el periodo. Ejemplo: 85000.'
   }
 
   return `Ingresá el valor real obtenido en el periodo usando la unidad configurada: ${unidad}.`
@@ -82,13 +123,13 @@ watch(
   () => props.medicionEditar,
   (medicion) => {
     estado.error = ''
+    form.evidencia = null
 
     if (medicion?.id) {
       form.indicador = medicion.indicador || ''
-      form.mes_medicion = obtenerMesDesdeMedicion(medicion)
       form.valor_resultado = medicion.valor_resultado || ''
       form.observacion = medicion.observacion || medicion.observaciones || ''
-      form.evidencia = medicion.evidencia || ''
+      estado.periodo = null
       return
     }
 
@@ -101,94 +142,86 @@ watch(
   () => form.indicador,
   (nuevoIndicador) => {
     estado.error = ''
+
+    if (esEdicion.value) return
+
     cargarSiguientePeriodo(nuevoIndicador)
   }
 )
 
 function limpiarFormulario() {
   form.indicador = ''
-  form.mes_medicion = ''
   form.valor_resultado = ''
   form.observacion = ''
-  form.evidencia = ''
+  form.evidencia = null
+  estado.periodo = null
 }
 
 async function cargarSiguientePeriodo(indicadorId) {
-  if (!indicadorId || esEdicion.value) {
-    estado.mensajePeriodo = ''
-    estado.periodoDisponible = true
+  if (!indicadorId) {
+    estado.periodo = null
     return
   }
 
-  form.mes_medicion = ''
-  estado.mensajePeriodo = ''
-  estado.periodoDisponible = true
   estado.cargandoPeriodo = true
+  estado.periodo = null
 
   try {
-    const data = await obtenerSiguientePeriodo(indicadorId)
-
-    estado.periodoDisponible = data.disponible !== false
-    estado.mensajePeriodo = data.mensaje || ''
-
-    if (data.disponible && data.mes_medicion) {
-      form.mes_medicion = data.mes_medicion
-    }
+    estado.periodo = await obtenerSiguientePeriodo(indicadorId)
   } catch (error) {
-    estado.periodoDisponible = false
-    estado.mensajePeriodo =
-      error.response?.data?.detail ||
-      'No se pudo calcular el siguiente periodo de medición.'
+    estado.periodo = {
+      disponible: false,
+      motivo:
+        error.response?.data?.detail ||
+        'No se pudo calcular el siguiente periodo de medición.',
+    }
   } finally {
     estado.cargandoPeriodo = false
   }
 }
 
-function obtenerMesDesdeMedicion(medicion) {
-  const fecha = medicion.fecha_medicion || medicion.fecha_registro || ''
+function manejarSeleccionArchivo(evento) {
+  const archivo = evento.target.files?.[0] || null
 
-  if (!fecha) return ''
-
-  return fecha.slice(0, 7)
-}
-
-function formatearFecha(fecha) {
-  if (!fecha) return 'No definida'
-
-  const soloFecha = fecha.split('T')[0]
-  const [anio, mes, dia] = soloFecha.split('-')
-
-  if (!anio || !mes || !dia) return fecha
-
-  return `${dia}/${mes}/${anio}`
-}
-
-function textoEstadoKpi(estadoKpi) {
-  const estados = {
-    borrador: 'Borrador',
-    autorizado: 'Autorizado',
-    anulado: 'Anulado',
-    activo: 'Activo',
+  if (!archivo) {
+    form.evidencia = null
+    return
   }
 
-  return estados[estadoKpi] || estadoKpi || 'Sin estado'
+  const extension = archivo.name.split('.').pop()?.toLowerCase()
+  const extensionesValidas = ['pdf', 'jpg', 'jpeg']
+
+  if (!extensionesValidas.includes(extension)) {
+    estado.error = 'Solo se permiten archivos PDF, JPG o JPEG.'
+    evento.target.value = ''
+    form.evidencia = null
+    return
+  }
+
+  if (archivo.size > 10 * 1024 * 1024) {
+    estado.error = 'El archivo no puede superar los 10 MB.'
+    evento.target.value = ''
+    form.evidencia = null
+    return
+  }
+
+  estado.error = ''
+  form.evidencia = archivo
 }
 
 function validarFormulario() {
-  if (!form.indicador) return 'Seleccioná el KPI.'
+  if (!esEdicion.value) {
+    if (!form.indicador) return 'Seleccioná el KPI.'
 
-  if (!metaVigente.value) {
-    return 'El KPI seleccionado no tiene una meta configurada. Primero configurá la meta en el KPI.'
+    if (estado.cargandoPeriodo) return 'Esperá a que se calcule el periodo a registrar.'
+
+    if (!estado.periodo?.disponible) {
+      return estado.periodo?.motivo || 'Este KPI no tiene un periodo disponible para registrar.'
+    }
   }
-
-  if (!estado.periodoDisponible) {
-    return estado.mensajePeriodo || 'Este KPI no tiene periodos disponibles para registrar.'
-  }
-
-  if (!form.mes_medicion) return 'No se pudo determinar el periodo de medición.'
 
   if (form.valor_resultado === '' || form.valor_resultado === null) {
-    return 'Ingresá el valor obtenido en el mes.'
+    return 'Ingresá el valor obtenido en el periodo.'
   }
 
   const resultado = Number(form.valor_resultado)
@@ -217,10 +250,9 @@ async function guardar() {
 
   const payload = {
     indicador: Number(form.indicador),
-    mes_medicion: form.mes_medicion,
     valor_resultado: form.valor_resultado,
     observacion: form.observacion,
-    evidencia: form.evidencia.trim(),
+    evidencia: form.evidencia,
   }
 
   try {
@@ -256,102 +288,121 @@ async function guardar() {
 
 <template>
   <form class="medicion-form" @submit.prevent="guardar">
-    <div class="form-group full">
+    <div v-if="!esEdicion" class="form-group full">
       <label>KPI</label>
-      <select v-model="form.indicador">
-        <option value="">Seleccionar KPI</option>
-
-        <option
-          v-for="indicador in indicadores"
-          :key="indicador.id"
-          :value="indicador.id"
-        >
-          {{ indicador.nombre }}
-        </option>
-      </select>
+      <SelectorBuscable
+        v-model="form.indicador"
+        :opciones="opcionesKpi"
+        placeholder="Seleccionar KPI"
+        placeholder-busqueda="Escribí el nombre del KPI..."
+        mensaje-vacio="No hay KPI autorizados disponibles."
+      />
     </div>
 
-    <section v-if="indicadorSeleccionado" class="kpi-context full">
+    <section v-if="contexto" class="kpi-context full">
+      <div class="context-item">
+        <span>Plan estratégico</span>
+        <strong>{{ contexto.planEstrategico || 'No definido' }}</strong>
+      </div>
+
+      <div class="context-item">
+        <span>Plan anual</span>
+        <strong>{{ contexto.planAnual || 'No definido' }}</strong>
+      </div>
+
+      <div class="context-item">
+        <span>Objetivo específico</span>
+        <strong>{{ contexto.objetivoEspecifico || 'No definido' }}</strong>
+      </div>
+
+      <div class="context-item">
+        <span>Frecuencia</span>
+        <strong>{{ contexto.frecuencia || 'No definida' }}</strong>
+      </div>
+
+      <div class="context-item full">
+        <span>Fórmula de medición</span>
+        <strong>{{ contexto.formula || 'No definida' }}</strong>
+      </div>
+
       <div class="context-item">
         <span>Meta configurada</span>
-        <strong>{{ formatearNumero(metaVigente, { unidad: unidadMedida }) }}</strong>
+        <strong>{{ formatearNumero(contexto.meta, { unidad: contexto.unidad }) }}</strong>
       </div>
 
       <div class="context-item">
-        <span>Vigencia del KPI</span>
-        <strong>
-          {{ formatearFecha(indicadorSeleccionado.fecha_inicio_vigencia) }}
-          al
-          {{ formatearFecha(indicadorSeleccionado.fecha_fin_vigencia) }}
-        </strong>
-      </div>
-
-      <div class="context-item">
-        <span>Frecuencia / seguimiento</span>
-        <strong>{{ indicadorSeleccionado.frecuencia_nombre || 'Mensual' }}</strong>
-      </div>
-
-      <div class="context-item">
-        <span>Estado del KPI</span>
-        <strong>{{ textoEstadoKpi(indicadorSeleccionado.estado) }}</strong>
+        <span>Periodo a registrar</span>
+        <strong>{{ contexto.periodoNombre || 'No definido' }}</strong>
       </div>
     </section>
 
-    <div class="form-group">
-      <label>Periodo a medir</label>
-      <input
-        v-model="form.mes_medicion"
-        type="month"
-        disabled
-      />
-      <small>El periodo se determina automáticamente según la frecuencia configurada en el KPI.</small>
-
+    <div v-if="!esEdicion && form.indicador" class="form-group full">
       <p v-if="estado.cargandoPeriodo" class="field-hint">
-        Calculando siguiente periodo...
+        Calculando el periodo que corresponde registrar...
       </p>
 
       <p
-        v-else-if="estado.mensajePeriodo"
+        v-else-if="estado.periodo"
         class="field-hint"
-        :class="{ error: !estado.periodoDisponible }"
+        :class="{ error: !estado.periodo.disponible, ok: estado.periodo.disponible }"
       >
-        {{ estado.mensajePeriodo }}
+        <template v-if="estado.periodo.disponible">
+          Podés registrar la medición de <strong>{{ estado.periodo.periodo_nombre }}</strong>.
+          Fecha de cierre: {{ estado.periodo.fecha_cierre }}. Fecha límite de registro:
+          {{ estado.periodo.fecha_limite_registro }}.
+        </template>
+        <template v-else>
+          {{ estado.periodo.motivo }}
+        </template>
       </p>
     </div>
 
-    <div class="form-group">
-      <label>Valor obtenido en el periodo</label>
-      <div class="input-with-unit">
-        <input
-          v-model="form.valor_resultado"
-          type="number"
-          min="0"
-          :max="unidadMedida === '%' ? 100 : undefined"
-          step="0.01"
-          placeholder="Ejemplo: 85"
-        />
-        <span>{{ unidadMedida }}</span>
+    <template v-if="esEdicion || estado.periodo?.disponible">
+      <div class="form-group">
+        <label>Valor obtenido en el periodo</label>
+        <div class="input-with-unit">
+          <input
+            v-model="form.valor_resultado"
+            type="number"
+            min="0"
+            :max="unidadMedida === '%' ? 100 : undefined"
+            step="0.01"
+            placeholder="Ejemplo: 85"
+          />
+          <span>{{ unidadMedida }}</span>
+        </div>
+        <small>{{ ayudaResultado }}</small>
       </div>
-      <small>{{ ayudaResultado }}</small>
-    </div>
 
-    <div class="form-group full">
-      <label>Razones / observaciones</label>
-      <textarea
-        v-model="form.observacion"
-        rows="4"
-        placeholder="Explicá brevemente el resultado obtenido, causas o contexto del periodo evaluado."
-      ></textarea>
-    </div>
+      <div class="form-group full">
+        <label>Observación</label>
+        <textarea
+          v-model="form.observacion"
+          rows="3"
+          placeholder="Explicá brevemente el resultado obtenido, causas o contexto del periodo evaluado."
+        ></textarea>
+      </div>
 
-    <div class="form-group full">
-      <label>Evidencias / respaldo de lo realizado</label>
-      <textarea
-        v-model="form.evidencia"
-        rows="6"
-        placeholder="Describe el respaldo de la medición: acciones realizadas, acuerdos, documentos revisados, resultados obtenidos, justificación del avance, etc."
-      ></textarea>
-    </div>
+      <div class="form-group full">
+        <label>Evidencia (opcional)</label>
+
+        <input
+          v-if="puedeEditarEvidencia"
+          type="file"
+          accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"
+          @change="manejarSeleccionArchivo"
+        />
+
+        <p v-if="form.evidencia" class="field-hint ok">
+          Archivo seleccionado: {{ form.evidencia.name }}
+        </p>
+        <p v-else-if="esEdicion && medicionEditar?.tiene_evidencia" class="field-hint">
+          Ya existe una evidencia adjunta. Seleccioná un archivo nuevo únicamente si querés reemplazarla.
+        </p>
+
+        <small>Solo PDF, JPG o JPEG. Tamaño máximo 10 MB.</small>
+      </div>
+    </template>
 
     <div v-if="estado.error" class="form-error full">
       {{ estado.error }}
@@ -370,7 +421,7 @@ async function guardar() {
       <button
         class="btn-primary"
         type="submit"
-        :disabled="estado.guardando"
+        :disabled="!puedeGuardar"
       >
         {{ tituloBoton }}
       </button>
@@ -423,6 +474,13 @@ textarea {
   background: #ffffff;
 }
 
+input[type='file'] {
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 650;
+  height: auto;
+}
+
 input,
 select {
   height: 40px;
@@ -464,6 +522,10 @@ small {
 
 .field-hint.error {
   color: #e76f51;
+}
+
+.field-hint.ok {
+  color: #2a9d8f;
 }
 
 .kpi-context {

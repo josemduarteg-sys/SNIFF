@@ -1,10 +1,12 @@
-from datetime import date
+import os
 
 from django.db import transaction
+from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from apps.usuarios.permissions import (
     PermisoCatalogoSoloAdmin,
@@ -40,8 +42,7 @@ from .serializers import (
 )
 from .services import (
     crear_rangos_provisionales,
-    formatear_periodo,
-    obtener_siguiente_periodo_esperado,
+    obtener_info_siguiente_periodo,
 )
 
 
@@ -256,6 +257,10 @@ class PeriodoMedicionViewSet(viewsets.ModelViewSet):
 class MedicionViewSet(viewsets.ModelViewSet):
     queryset = Medicion.objects.select_related(
         'indicador',
+        'indicador__objetivo_especifico',
+        'indicador__objetivo_especifico__plan_anual',
+        'indicador__objetivo_especifico__plan_anual__plan_estrategico',
+        'indicador__frecuencia',
         'meta',
         'estado_cumplimiento',
         'periodo',
@@ -265,6 +270,7 @@ class MedicionViewSet(viewsets.ModelViewSet):
     ).all()
     serializer_class = MedicionSerializer
     permission_classes = [PermisoMedicion]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def perform_create(self, serializer):
         serializer.save(registrado_por=self.request.user)
@@ -297,40 +303,34 @@ class MedicionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if indicador.estado != 'autorizado':
-            return Response(
-                {'detail': 'Solo se pueden registrar mediciones para KPI autorizados.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not indicador.valor_meta:
-            return Response(
-                {'detail': 'El KPI seleccionado no tiene una meta configurada.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        periodo_esperado = obtener_siguiente_periodo_esperado(indicador)
-
-        fecha_fin_kpi = date(
-            indicador.fecha_fin_vigencia.year,
-            indicador.fecha_fin_vigencia.month,
-            1,
-        )
-
-        if periodo_esperado > fecha_fin_kpi:
-            return Response({
-                'disponible': False,
-                'mes_medicion': None,
-                'periodo_nombre': None,
-                'mensaje': 'Este KPI ya tiene registradas todas las mediciones dentro de su vigencia.',
-            })
+        info = obtener_info_siguiente_periodo(indicador)
 
         return Response({
-            'disponible': True,
-            'mes_medicion': periodo_esperado.strftime('%Y-%m'),
-            'periodo_nombre': formatear_periodo(periodo_esperado),
-            'mensaje': f'El siguiente periodo a registrar es {formatear_periodo(periodo_esperado)}.',
+            'disponible': info['disponible'],
+            'periodo_nombre': info['periodo_nombre'],
+            'tipo_periodo': info['tipo_periodo'],
+            'fecha_inicio_periodo': info['fecha_inicio_periodo'],
+            'fecha_cierre': info['fecha_cierre'],
+            'fecha_limite_registro': info['fecha_limite_registro'],
+            'motivo': info['motivo'],
         })
+
+    @action(detail=True, methods=['get'], url_path='evidencia')
+    def evidencia(self, request, pk=None):
+        # Descarga autenticada (punto 30): no se expone MEDIA_URL como ruta
+        # pública. get_object() ya aplica permission_classes + el queryset
+        # del propio ViewSet, así que respeta exactamente los mismos
+        # permisos de lectura que el resto de Medicion.
+        medicion = self.get_object()
+
+        if not medicion.evidencia:
+            raise Http404('Esta medición no tiene evidencia adjunta.')
+
+        return FileResponse(
+            medicion.evidencia.open('rb'),
+            as_attachment=False,
+            filename=os.path.basename(medicion.evidencia.name),
+        )
 
 
 class AlertaViewSet(viewsets.ModelViewSet):
