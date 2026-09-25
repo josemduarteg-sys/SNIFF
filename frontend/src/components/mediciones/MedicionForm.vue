@@ -167,7 +167,6 @@ function textoEstadoKpi(estadoKpi) {
   const estados = {
     borrador: 'Borrador',
     autorizado: 'Autorizado',
-    inactivo: 'Inactivo',
     anulado: 'Anulado',
     activo: 'Activo',
   }
@@ -281,9 +280,9 @@ async function guardar() {
       <div class="context-item">
         <span>Vigencia del KPI</span>
         <strong>
-          {{ formatearFecha(indicadorSeleccionado.fecha_inicio) }}
+          {{ formatearFecha(indicadorSeleccionado.fecha_inicio_vigencia) }}
           al
-          {{ formatearFecha(indicadorSeleccionado.fecha_fin) }}
+          {{ formatearFecha(indicadorSeleccionado.fecha_fin_vigencia) }}
         </strong>
       </div>
 

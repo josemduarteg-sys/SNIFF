@@ -1,28 +1,21 @@
 <script setup>
 import { computed, reactive, watch } from 'vue'
+import SelectorBuscable from '../common/SelectorBuscable.vue'
 
 const props = defineProps({
   indicador: {
     type: Object,
     default: null,
   },
-  estrategias: {
+  planesAnuales: {
     type: Array,
     default: () => [],
   },
-  objetivos: {
+  objetivosEspecificos: {
     type: Array,
     default: () => [],
   },
   frecuencias: {
-    type: Array,
-    default: () => [],
-  },
-  tiposCalculo: {
-    type: Array,
-    default: () => [],
-  },
-  fuentesDato: {
     type: Array,
     default: () => [],
   },
@@ -42,18 +35,15 @@ const UNIDADES_MEDIDA = [
 ]
 
 const estado = reactive({
-  estrategia: '',
-  objetivo: '',
+  plan_anual: '',
+  objetivo_especifico: '',
   frecuencia: '',
-  tipo_calculo: '',
-  fuente_dato: '',
   nombre: '',
   descripcion: '',
+  formula_medicion: '',
   unidad_medida: '',
   unidad_personalizada: '',
   valor_meta: '',
-  fecha_inicio: '',
-  fecha_fin: '',
   error: '',
 })
 
@@ -61,52 +51,9 @@ const esEdicion = computed(() => Boolean(props.indicador?.id))
 
 const esPorcentaje = computed(() => estado.unidad_medida === '%')
 
-const objetivosFiltrados = computed(() => {
-  if (!estado.estrategia) {
-    return []
-  }
-
-  return props.objetivos.filter(
-    (objetivo) => Number(objetivo.plan_estrategico) === Number(estado.estrategia)
-  )
-})
-
-const notaFuente = computed(() => {
-  const fuente = props.fuentesDato.find(
-    (item) => Number(item.id) === Number(estado.fuente_dato)
-  )
-
-  if (!fuente) {
-    return 'Selecciona la fuente de datos que respaldará el seguimiento del KPI.'
-  }
-
-  const nombre = (fuente.nombre || '').toLowerCase()
-
-  if (nombre.includes('manual')) {
-    return 'Las mediciones de este KPI serán registradas manualmente desde el módulo de mediciones.'
-  }
-
-  if (nombre.includes('csv')) {
-    return 'Esta fuente deja el KPI preparado para carga por archivo CSV. La importación se configurará en una etapa posterior; por ahora el seguimiento puede registrarse manualmente.'
-  }
-
-  if (nombre.includes('warehouse') || nombre.includes('data')) {
-    return 'Esta fuente identifica un origen de datos institucional. La conexión automática con el almacén de datos se configurará en una etapa posterior.'
-  }
-
-  return 'Selecciona la fuente de datos que respaldará el seguimiento del KPI.'
-})
-
-function etiquetaFuente(fuente) {
-  const nombre = fuente?.nombre || ''
-
-  if (nombre.toLowerCase().includes('warehouse')) {
-    return 'Almacén de datos'
-  }
-
-  return nombre
-}
-
+// Mientras el KPI ya esté autorizado, sus datos principales quedan
+// bloqueados (ver IndicadorKPISerializer.validate). El listado ya oculta
+// la acción Editar en ese caso; este disabled es un resguardo defensivo.
 const puedeEditar = computed(() => {
   if (!props.indicador) {
     return true
@@ -119,6 +66,33 @@ const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar KPI' : 'Crear KPI'
 })
 
+const opcionesPlanesAnuales = computed(() => {
+  return props.planesAnuales.map((plan) => ({
+    id: plan.id,
+    texto: `${plan.nombre || `Plan ${plan.anio}`} — ${plan.plan_estrategico_titulo || 'Sin plan estratégico'}`,
+  }))
+})
+
+const objetivoEspecificoSeleccionado = computed(() => {
+  return (
+    props.objetivosEspecificos.find(
+      (objetivo) => Number(objetivo.id) === Number(estado.objetivo_especifico)
+    ) || null
+  )
+})
+
+// Solo objetivos específicos que pertenecen al Plan anual elegido (ver
+// validación equivalente, y autoritativa, en backend).
+const opcionesObjetivosEspecificos = computed(() => {
+  if (!estado.plan_anual) {
+    return []
+  }
+
+  return props.objetivosEspecificos
+    .filter((objetivo) => Number(objetivo.plan_anual) === Number(estado.plan_anual))
+    .map((objetivo) => ({ id: objetivo.id, texto: objetivo.texto_objetivo }))
+})
+
 watch(
   () => props.indicador,
   () => {
@@ -128,33 +102,32 @@ watch(
 )
 
 watch(
-  () => estado.estrategia,
+  () => estado.plan_anual,
   () => {
-    const objetivoActual = props.objetivos.find(
-      (objetivo) => Number(objetivo.id) === Number(estado.objetivo)
+    const siguePerteneciendo = opcionesObjetivosEspecificos.value.some(
+      (opcion) => Number(opcion.id) === Number(estado.objetivo_especifico)
     )
 
-    if (objetivoActual && Number(objetivoActual.plan_estrategico) !== Number(estado.estrategia)) {
-      estado.objetivo = ''
+    if (!siguePerteneciendo) {
+      estado.objetivo_especifico = ''
     }
   }
 )
 
 function cargarFormulario() {
-  const objetivoActual = props.indicador?.objetivo
-    ? props.objetivos.find((objetivo) => Number(objetivo.id) === Number(props.indicador.objetivo))
+  const objetivoActual = props.indicador?.objetivo_especifico
+    ? props.objetivosEspecificos.find(
+        (objetivo) => Number(objetivo.id) === Number(props.indicador.objetivo_especifico)
+      )
     : null
 
-  estado.estrategia = objetivoActual?.plan_estrategico || ''
-  estado.objetivo = props.indicador?.objetivo || ''
+  estado.plan_anual = objetivoActual?.plan_anual || ''
+  estado.objetivo_especifico = props.indicador?.objetivo_especifico || ''
   estado.frecuencia = props.indicador?.frecuencia || ''
-  estado.tipo_calculo = props.indicador?.tipo_calculo || ''
-  estado.fuente_dato = props.indicador?.fuente_dato || ''
   estado.nombre = props.indicador?.nombre || ''
   estado.descripcion = props.indicador?.descripcion || ''
+  estado.formula_medicion = props.indicador?.formula_medicion || ''
   estado.valor_meta = props.indicador?.valor_meta || ''
-  estado.fecha_inicio = props.indicador?.fecha_inicio || ''
-  estado.fecha_fin = props.indicador?.fecha_fin || ''
   estado.error = ''
 
   const unidadExistente = props.indicador?.unidad_medida || ''
@@ -177,13 +150,23 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.objetivo) {
-    estado.error = 'Seleccioná el objetivo asociado al KPI.'
+  if (!estado.plan_anual) {
+    estado.error = 'Seleccioná un plan anual.'
+    return false
+  }
+
+  if (!estado.objetivo_especifico) {
+    estado.error = 'Seleccioná un objetivo específico.'
     return false
   }
 
   if (!estado.nombre.trim()) {
     estado.error = 'Ingresá el nombre del KPI.'
+    return false
+  }
+
+  if (!estado.formula_medicion.trim()) {
+    estado.error = 'Ingresá la fórmula de medición.'
     return false
   }
 
@@ -197,8 +180,8 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.valor_meta || Number(estado.valor_meta) <= 0) {
-    estado.error = 'Ingresá una meta mayor a cero.'
+  if (estado.valor_meta === '' || estado.valor_meta === null || Number(estado.valor_meta) < 0) {
+    estado.error = 'Ingresá la meta del KPI.'
     return false
   }
 
@@ -207,33 +190,8 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.fecha_inicio) {
-    estado.error = 'Seleccioná la fecha de inicio de vigencia.'
-    return false
-  }
-
-  if (!estado.fecha_fin) {
-    estado.error = 'Seleccioná la fecha de fin de vigencia.'
-    return false
-  }
-
-  if (estado.fecha_fin < estado.fecha_inicio) {
-    estado.error = 'La fecha fin no puede ser menor que la fecha inicio.'
-    return false
-  }
-
   if (!estado.frecuencia) {
-    estado.error = 'Seleccioná la frecuencia o seguimiento del KPI.'
-    return false
-  }
-
-  if (!estado.tipo_calculo) {
-    estado.error = 'Seleccioná el tipo de cálculo.'
-    return false
-  }
-
-  if (!estado.fuente_dato) {
-    estado.error = 'Seleccioná la fuente de dato.'
+    estado.error = 'Seleccioná la frecuencia del KPI.'
     return false
   }
 
@@ -251,16 +209,13 @@ function guardar() {
       : estado.unidad_medida
 
   emit('guardar', {
-    objetivo: estado.objetivo,
+    objetivo_especifico: estado.objetivo_especifico,
     frecuencia: estado.frecuencia,
-    tipo_calculo: estado.tipo_calculo,
-    fuente_dato: estado.fuente_dato,
     nombre: estado.nombre.trim(),
     descripcion: estado.descripcion.trim(),
+    formula_medicion: estado.formula_medicion.trim(),
     unidad_medida: unidadFinal,
     valor_meta: estado.valor_meta,
-    fecha_inicio: estado.fecha_inicio,
-    fecha_fin: estado.fecha_fin,
   })
 }
 
@@ -281,37 +236,29 @@ function cancelar() {
 
     <div class="form-grid">
       <label class="field field-full">
-        <span>Plan estratégico</span>
+        <span>Plan anual</span>
 
-        <select v-model="estado.estrategia" :disabled="!puedeEditar">
-          <option value="">Seleccionar plan estratégico</option>
-
-          <option
-            v-for="estrategia in estrategias"
-            :key="estrategia.id"
-            :value="estrategia.id"
-          >
-            {{ estrategia.titulo }}
-          </option>
-        </select>
+        <SelectorBuscable
+          v-model="estado.plan_anual"
+          :opciones="opcionesPlanesAnuales"
+          placeholder="Seleccionar plan anual"
+          placeholder-busqueda="Escribí el plan o el año..."
+          mensaje-vacio="No hay planes anuales En uso disponibles."
+          :disabled="!puedeEditar"
+        />
       </label>
 
       <label class="field field-full">
-        <span>Objetivo general asociado</span>
+        <span>Objetivo específico</span>
 
-        <select v-model="estado.objetivo" :disabled="!puedeEditar || !estado.estrategia">
-          <option value="">
-            {{ estado.estrategia ? 'Seleccionar objetivo general' : 'Primero seleccioná un plan estratégico' }}
-          </option>
-
-          <option
-            v-for="objetivo in objetivosFiltrados"
-            :key="objetivo.id"
-            :value="objetivo.id"
-          >
-            {{ objetivo.texto_objetivo }}
-          </option>
-        </select>
+        <SelectorBuscable
+          v-model="estado.objetivo_especifico"
+          :opciones="opcionesObjetivosEspecificos"
+          placeholder="Seleccionar objetivo específico"
+          placeholder-busqueda="Escribí el texto del objetivo..."
+          mensaje-vacio="Seleccioná primero un plan anual."
+          :disabled="!puedeEditar || !estado.plan_anual"
+        />
       </label>
 
       <label class="field field-full">
@@ -332,6 +279,17 @@ function cancelar() {
           v-model="estado.descripcion"
           rows="3"
           placeholder="Describe qué mide este indicador y para qué se utilizará."
+          :disabled="!puedeEditar"
+        ></textarea>
+      </label>
+
+      <label class="field field-full">
+        <span>Fórmula de medición</span>
+
+        <textarea
+          v-model="estado.formula_medicion"
+          rows="3"
+          placeholder="Ejemplo: (Ventas actuales / Meta de ventas) × 100"
           :disabled="!puedeEditar"
         ></textarea>
       </label>
@@ -378,27 +336,7 @@ function cancelar() {
       </label>
 
       <label class="field">
-        <span>Fecha inicio</span>
-
-        <input
-          v-model="estado.fecha_inicio"
-          type="date"
-          :disabled="!puedeEditar"
-        />
-      </label>
-
-      <label class="field">
-        <span>Fecha fin</span>
-
-        <input
-          v-model="estado.fecha_fin"
-          type="date"
-          :disabled="!puedeEditar"
-        />
-      </label>
-
-      <label class="field">
-        <span>Frecuencia / seguimiento</span>
+        <span>Frecuencia</span>
 
         <select v-model="estado.frecuencia" :disabled="!puedeEditar">
           <option value="">Seleccionar frecuencia</option>
@@ -412,45 +350,11 @@ function cancelar() {
           </option>
         </select>
       </label>
-
-      <label class="field">
-        <span>Tipo de cálculo</span>
-
-        <select v-model="estado.tipo_calculo" :disabled="!puedeEditar">
-          <option value="">Seleccionar tipo</option>
-
-          <option
-            v-for="tipo in tiposCalculo"
-            :key="tipo.id"
-            :value="tipo.id"
-          >
-            {{ tipo.nombre }}
-          </option>
-        </select>
-      </label>
-
-      <label class="field field-full">
-        <span>Fuente de dato</span>
-
-        <select v-model="estado.fuente_dato" :disabled="!puedeEditar">
-          <option value="">Seleccionar fuente</option>
-
-          <option
-            v-for="fuente in fuentesDato"
-            :key="fuente.id"
-            :value="fuente.id"
-          >
-            {{ etiquetaFuente(fuente) }}
-          </option>
-        </select>
-
-        <p class="field-note">{{ notaFuente }}</p>
-      </label>
     </div>
 
     <div class="help-box">
       El KPI se guardará como borrador y quedará pendiente de autorización antes de
-      iniciar su seguimiento.
+      iniciar su seguimiento. Su vigencia se hereda automáticamente del año del plan anual seleccionado.
     </div>
 
     <div class="form-actions">
@@ -521,14 +425,6 @@ function cancelar() {
   color: #1d3557;
 }
 
-.field-note {
-  margin: 2px 2px 0;
-  font-size: 11.5px;
-  font-weight: 650;
-  color: #457b9d;
-  line-height: 1.4;
-}
-
 .field input,
 .field select,
 .field textarea {
@@ -549,7 +445,7 @@ function cancelar() {
 
 .field textarea {
   resize: vertical;
-  min-height: 86px;
+  min-height: 78px;
 }
 
 .field input:focus,
@@ -575,10 +471,6 @@ function cancelar() {
   font-size: 12.5px;
   line-height: 1.45;
   font-weight: 650;
-}
-
-.help-box strong {
-  color: #1d3557;
 }
 
 .form-actions {

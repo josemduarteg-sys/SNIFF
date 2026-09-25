@@ -112,7 +112,7 @@ function obtenerUltimaMedicionPorIndicador() {
 
 function obtenerObjetivoDeIndicador(indicadorId) {
   const indicador = indicadores.value.find((item) => item.id === indicadorId)
-  return indicador?.objetivo_nombre || ''
+  return indicador?.objetivo_especifico_texto || ''
 }
 
 function claseAlerta(alerta) {
@@ -182,12 +182,12 @@ const cumplimientoPorEstrategia = computed(() => {
   return estrategias.value
     .filter(esEstrategiaActiva)
     .map((estrategia) => {
-      const idsObjetivos = objetivos.value
-        .filter((objetivo) => Number(objetivo.plan_estrategico) === Number(estrategia.id))
-        .map((objetivo) => objetivo.id)
-
+      // Bloque 3: el KPI ya no cuelga de ObjetivoGeneral sino de
+      // ObjetivoEspecifico (vía PlanAnual); el serializer expone
+      // `plan_estrategico` (id) directamente para no reconstruir esa
+      // cadena acá.
       const porcentajes = indicadores.value
-        .filter((indicador) => idsObjetivos.includes(indicador.objetivo))
+        .filter((indicador) => Number(indicador.plan_estrategico) === Number(estrategia.id))
         .map((indicador) => mapaUltimaMedicion.get(indicador.id))
         .filter(Boolean)
         .map((medicion) => Number(medicion.porcentaje_cumplimiento))

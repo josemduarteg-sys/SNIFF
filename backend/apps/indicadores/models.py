@@ -1,9 +1,11 @@
+from datetime import date
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 
-from apps.estrategia.models import ObjetivoGeneral
+from apps.estrategia.models import ObjetivoEspecifico
 
 class Frecuencia(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
@@ -51,21 +53,22 @@ class FuenteDato(models.Model):
 
 
 class IndicadorKPI(models.Model):
+    """Bloque 3 del rediseño: el KPI pertenece a un ObjetivoEspecifico de un
+    PlanAnual concreto (Opción A — un año, un registro de KPI). Por diseño
+    NO guarda `anio`, `plan_anual` ni `plan_estrategico` propios: todo eso
+    se deriva de `objetivo_especifico` a través de las propiedades de abajo,
+    para no duplicar información ni acoplarse rígidamente a la jerarquía
+    (ver notas de cada propiedad para la compatibilidad con una eventual
+    Opción B futura, no implementada)."""
+
     ESTADO_CHOICES = [
         ('borrador', 'Borrador'),
         ('autorizado', 'Autorizado'),
-        ('inactivo', 'Inactivo'),
         ('anulado', 'Anulado'),
     ]
 
-    # NOTA (Bloque 1 del rediseño): esta FK sigue llamándose `objetivo` y
-    # sigue apuntando al modelo que agrupa objetivos macro (ahora
-    # ObjetivoGeneral, antes Objetivo) únicamente para que el proyecto siga
-    # compilando tras el rename de apps.estrategia. El Bloque 3 del
-    # rediseño la reapuntará a ObjetivoEspecifico — no se adelanta ese
-    # cambio funcional acá.
-    objetivo = models.ForeignKey(
-        ObjetivoGeneral,
+    objetivo_especifico = models.ForeignKey(
+        ObjetivoEspecifico,
         on_delete=models.PROTECT,
         related_name='indicadores'
     )
@@ -74,37 +77,22 @@ class IndicadorKPI(models.Model):
         on_delete=models.PROTECT,
         related_name='indicadores'
     )
-    tipo_calculo = models.ForeignKey(
-        TipoCalculo,
-        on_delete=models.PROTECT,
-        related_name='indicadores'
-    )
-    fuente_dato = models.ForeignKey(
-        FuenteDato,
-        on_delete=models.PROTECT,
-        related_name='indicadores'
-    )
     nombre = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True, null=True)
+    formula_medicion = models.TextField(
+        help_text=(
+            'Explicación funcional de cómo se obtiene el resultado del KPI '
+            '(no se interpreta ni se ejecuta). Ejemplo: "(Ventas actuales / '
+            'Meta de ventas) × 100".'
+        )
+    )
     unidad_medida = models.CharField(max_length=50)
 
     valor_meta = models.DecimalField(
         max_digits=14,
         decimal_places=4,
         validators=[MinValueValidator(0)],
-        blank=True,
-        null=True,
-        help_text='Meta total esperada para el KPI durante su vigencia.'
-    )
-    fecha_inicio = models.DateField(
-        blank=True,
-        null=True,
-        help_text='Fecha de inicio de vigencia del KPI.'
-    )
-    fecha_fin = models.DateField(
-        blank=True,
-        null=True,
-        help_text='Fecha final esperada para cumplir el KPI.'
+        help_text='Meta del KPI para el año de su Plan anual.'
     )
 
     estado = models.CharField(
@@ -138,19 +126,75 @@ class IndicadorKPI(models.Model):
         ordering = ['nombre']
         constraints = [
             models.UniqueConstraint(
-                fields=['objetivo', 'nombre'],
-                name='unique_indicador_por_objetivo'
+                fields=['objetivo_especifico', 'nombre'],
+                name='unique_indicador_por_objetivo_especifico'
             )
         ]
 
     def clean(self):
-        if self.fecha_inicio and self.fecha_fin and self.fecha_fin < self.fecha_inicio:
+        if not self.formula_medicion or not self.formula_medicion.strip():
             raise ValidationError(
-                'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+                'La fórmula de medición es obligatoria.'
             )
 
     def puede_modificarse(self):
         return self.estado == 'borrador'
+
+    def esta_bloqueado(self):
+        """True si el KPI no puede modificarse por el estado de su Plan
+        anual o de su Plan estratégico ancestro (Cerrado congela toda la
+        descendencia). Reutiliza el helper centralizado de Bloque 2 en vez
+        de duplicar la regla acá."""
+        from apps.estrategia.services import plan_anual_esta_bloqueado
+
+        return plan_anual_esta_bloqueado(self.plan_anual)
+
+    @property
+    def plan_anual(self):
+        """PlanAnual del KPI, derivado de objetivo_especifico. No se
+        almacena en este modelo para no duplicar la relación (ver nota de
+        clase) ni acoplar el KPI a un esquema donde en el futuro pudiera
+        pertenecer a más de un año."""
+        return self.objetivo_especifico.plan_anual
+
+    @property
+    def plan_estrategico(self):
+        """PlanEstrategico del KPI, derivado transitivamente vía PlanAnual."""
+        return self.plan_anual.plan_estrategico
+
+    @property
+    def anio(self):
+        """Año del KPI: SIEMPRE derivado de PlanAnual.anio, nunca un campo
+        propio (así una eventual Opción B futura, donde un KPI conceptual
+        se reutilice entre años, no exigiría migrar un campo `anio` fijo
+        en IndicadorKPI)."""
+        return self.plan_anual.anio
+
+    @property
+    def fecha_inicio_vigencia(self):
+        """Compatibilidad técnica (Bloque 3): la vigencia real del KPI ya
+        no se almacena; se deriva del año de su PlanAnual, acotada por la
+        vigencia del PlanEstrategico. Existe únicamente para que la lógica
+        actual de Medicion/periodos (que se rediseñará en Bloque 4) tenga
+        fechas concretas con las que seguir funcionando."""
+        inicio_anio = date(self.anio, 1, 1)
+        inicio_plan = self.plan_estrategico.fecha_inicio
+
+        if inicio_plan and inicio_plan > inicio_anio:
+            return inicio_plan
+
+        return inicio_anio
+
+    @property
+    def fecha_fin_vigencia(self):
+        """Ver fecha_inicio_vigencia."""
+        fin_anio = date(self.anio, 12, 31)
+        fin_plan = self.plan_estrategico.fecha_fin
+
+        if fin_plan and fin_plan < fin_anio:
+            return fin_plan
+
+        return fin_anio
 
     def __str__(self):
         return self.nombre

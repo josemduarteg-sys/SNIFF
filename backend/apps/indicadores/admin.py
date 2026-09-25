@@ -41,16 +41,15 @@ class IndicadorKPIAdmin(admin.ModelAdmin):
     list_display = (
         'id',
         'nombre',
-        'objetivo',
+        'objetivo_especifico',
         'frecuencia',
-        'tipo_calculo',
-        'fuente_dato',
         'unidad_medida',
+        'valor_meta',
         'estado',
         'fecha_creacion',
     )
-    search_fields = ('nombre', 'descripcion')
-    list_filter = ('estado', 'frecuencia', 'tipo_calculo', 'fuente_dato')
+    search_fields = ('nombre', 'descripcion', 'objetivo_especifico__texto_objetivo')
+    list_filter = ('estado', 'frecuencia')
 
 
 @admin.register(MetaKPI)

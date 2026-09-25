@@ -409,8 +409,8 @@ def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
     intervalo = obtener_intervalo_meses(indicador)
 
     primer_periodo = date(
-        indicador.fecha_inicio.year,
-        indicador.fecha_inicio.month,
+        indicador.fecha_inicio_vigencia.year,
+        indicador.fecha_inicio_vigencia.month,
         1,
     )
 
@@ -458,28 +458,29 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
     total_omitidas = 0
     detalle = []
 
-    indicadores = IndicadorKPI.objects.filter(estado='autorizado').select_related('frecuencia')
+    indicadores = IndicadorKPI.objects.filter(estado='autorizado').select_related(
+        'frecuencia',
+        'objetivo_especifico',
+        'objetivo_especifico__plan_anual',
+        'objetivo_especifico__plan_anual__plan_estrategico',
+    )
 
     for indicador in indicadores:
         total_kpi_revisados += 1
-
-        if not indicador.fecha_inicio:
-            continue
 
         periodo_esperado = obtener_siguiente_periodo_esperado(indicador)
 
         if not periodo_esperado:
             continue
 
-        if indicador.fecha_fin:
-            fecha_fin_kpi = date(
-                indicador.fecha_fin.year,
-                indicador.fecha_fin.month,
-                1,
-            )
+        fecha_fin_kpi = date(
+            indicador.fecha_fin_vigencia.year,
+            indicador.fecha_fin_vigencia.month,
+            1,
+        )
 
-            if periodo_esperado > fecha_fin_kpi:
-                continue
+        if periodo_esperado > fecha_fin_kpi:
+            continue
 
         intervalo = obtener_intervalo_meses(indicador)
         fecha_cierre = calcular_fecha_cierre_periodo(periodo_esperado, intervalo)

@@ -5,6 +5,8 @@ import LoginView from '../views/LoginView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import PlanesEstrategicosView from '../views/PlanesEstrategicosView.vue'
 import ObjetivosGeneralesView from '../views/ObjetivosGeneralesView.vue'
+import PlanesAnualesView from '../views/PlanesAnualesView.vue'
+import ObjetivosEspecificosView from '../views/ObjetivosEspecificosView.vue'
 import IndicadoresView from '../views/IndicadoresView.vue'
 import MedicionesView from '../views/MedicionesView.vue'
 import ConfiguracionView from '../views/ConfiguracionView.vue'
@@ -48,6 +50,22 @@ const routes = [
     path: '/objetivos-generales',
     name: 'objetivos-generales',
     component: ObjetivosGeneralesView,
+    meta: {
+      requiresAuth: true,
+    },
+  },
+  {
+    path: '/planes-anuales',
+    name: 'planes-anuales',
+    component: PlanesAnualesView,
+    meta: {
+      requiresAuth: true,
+    },
+  },
+  {
+    path: '/objetivos-especificos',
+    name: 'objetivos-especificos',
+    component: ObjetivosEspecificosView,
     meta: {
       requiresAuth: true,
     },

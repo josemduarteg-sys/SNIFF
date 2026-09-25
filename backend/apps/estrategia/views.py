@@ -6,12 +6,15 @@ from apps.usuarios.permissions import (
     PermisoCatalogoSoloAdmin,
     PermisoEstrategiaObjetivo,
 )
-from .models import Area, PlanEstrategico, ObjetivoGeneral
+from .models import Area, ObjetivoEspecifico, ObjetivoGeneral, PlanAnual, PlanEstrategico
 from .serializers import (
     AreaSerializer,
-    PlanEstrategicoSerializer,
+    ObjetivoEspecificoSerializer,
     ObjetivoGeneralSerializer,
+    PlanAnualSerializer,
+    PlanEstrategicoSerializer,
 )
+from .services import plan_estrategico_esta_cerrado
 
 # Sin DELETE: un Plan estratégico o un Objetivo general con trazabilidad
 # asociada no debe poder desaparecer físicamente por una acción normal de
@@ -169,6 +172,174 @@ class ObjetivoGeneralViewSet(viewsets.ModelViewSet):
             descripcion=(
                 f'Actualizó un objetivo general del Plan estratégico '
                 f'{objetivo.plan_estrategico.titulo}.'
+            ),
+            request=self.request,
+        )
+
+
+class PlanAnualViewSet(viewsets.ModelViewSet):
+    queryset = PlanAnual.objects.select_related('plan_estrategico', 'creado_por').all()
+    serializer_class = PlanAnualSerializer
+    permission_classes = [PermisoEstrategiaObjetivo]
+    http_method_names = METODOS_SIN_BORRADO
+
+    def perform_create(self, serializer):
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+
+        plan_anual = serializer.save(
+            creado_por=self.request.user,
+            estado=PlanAnual.ESTADO_BORRADOR,
+        )
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Planes anuales',
+            descripcion=(
+                f'Creó el {plan_anual.nombre} del Plan estratégico '
+                f'{plan_anual.plan_estrategico.titulo}.'
+            ),
+            request=self.request,
+        )
+
+        notificar_usuarios_gestion(
+            tipo='plan_anual_creado',
+            titulo='Nuevo Plan anual registrado',
+            mensaje=(
+                f'{self.request.user.username} registró el {plan_anual.nombre} en '
+                f'"{plan_anual.plan_estrategico.titulo}".'
+            ),
+            enlace=f'/planes-anuales?resaltar={plan_anual.id}',
+            excluir_usuario=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        plan_anual = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Planes anuales',
+            descripcion=f'Actualizó el {plan_anual.nombre}.',
+            request=self.request,
+        )
+
+    @action(detail=True, methods=['post'], url_path='poner-en-uso')
+    def poner_en_uso(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        plan_anual = self.get_object()
+
+        if plan_estrategico_esta_cerrado(plan_anual.plan_estrategico):
+            return Response(
+                {'detail': 'El Plan estratégico está Cerrado; el Plan anual no puede modificarse.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if plan_anual.estado != PlanAnual.ESTADO_BORRADOR:
+            return Response(
+                {'detail': 'Solo un Plan anual en Borrador puede pasar a En uso.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        plan_anual.estado = PlanAnual.ESTADO_EN_USO
+        plan_anual.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Planes anuales',
+            descripcion=f'Puso en uso el {plan_anual.nombre}.',
+            request=request,
+        )
+
+        serializer = self.get_serializer(plan_anual)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def cerrar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        plan_anual = self.get_object()
+
+        if plan_estrategico_esta_cerrado(plan_anual.plan_estrategico):
+            return Response(
+                {'detail': 'El Plan estratégico está Cerrado; el Plan anual no puede modificarse.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if plan_anual.estado != PlanAnual.ESTADO_EN_USO:
+            return Response(
+                {'detail': 'Solo un Plan anual En uso puede Cerrarse.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        plan_anual.estado = PlanAnual.ESTADO_CERRADO
+        plan_anual.save(update_fields=['estado'])
+
+        registrar_bitacora_seguro(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Planes anuales',
+            descripcion=f'Cerró el {plan_anual.nombre}.',
+            request=request,
+        )
+
+        serializer = self.get_serializer(plan_anual)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ObjetivoEspecificoViewSet(viewsets.ModelViewSet):
+    queryset = ObjetivoEspecifico.objects.select_related(
+        'plan_anual',
+        'plan_anual__plan_estrategico',
+        'objetivo_general',
+        'creado_por',
+    ).all()
+    serializer_class = ObjetivoEspecificoSerializer
+    permission_classes = [PermisoEstrategiaObjetivo]
+    http_method_names = METODOS_SIN_BORRADO
+
+    def perform_create(self, serializer):
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+
+        objetivo = serializer.save(creado_por=self.request.user)
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Objetivos específicos',
+            descripcion=(
+                f'Creó un objetivo específico en el {objetivo.plan_anual.nombre} '
+                f'del Plan estratégico {objetivo.plan_anual.plan_estrategico.titulo}.'
+            ),
+            request=self.request,
+        )
+
+        notificar_usuarios_gestion(
+            tipo='objetivo_especifico_creado',
+            titulo='Nuevo objetivo específico registrado',
+            mensaje=(
+                f'{self.request.user.username} registró un objetivo específico en '
+                f'"{objetivo.plan_anual.nombre}".'
+            ),
+            enlace=f'/objetivos-especificos?resaltar={objetivo.id}',
+            excluir_usuario=self.request.user,
+        )
+
+    def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        objetivo = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Objetivos específicos',
+            descripcion=(
+                f'Actualizó un objetivo específico del {objetivo.plan_anual.nombre}.'
             ),
             request=self.request,
         )

@@ -25,8 +25,8 @@ export async function obtenerDatosFormularioMedicion() {
     return (
       indicador.estado === 'autorizado' &&
       indicador.valor_meta &&
-      indicador.fecha_inicio &&
-      indicador.fecha_fin
+      indicador.fecha_inicio_vigencia &&
+      indicador.fecha_fin_vigencia
     )
   })
 

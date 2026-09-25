@@ -53,14 +53,22 @@ class FuenteDatoSerializer(serializers.ModelSerializer):
 
 
 class IndicadorKPISerializer(serializers.ModelSerializer):
-    # source actualizado tras el rename Objetivo->ObjetivoGeneral (Bloque 1
-    # del rediseño): ObjetivoGeneral ya no tiene `nombre`, tiene
-    # `texto_objetivo`. Se mantiene el nombre de campo `objetivo_nombre`
-    # para no romper el frontend que ya lo consume.
-    objetivo_nombre = serializers.CharField(source='objetivo.texto_objetivo', read_only=True)
+    objetivo_especifico_texto = serializers.CharField(
+        source='objetivo_especifico.texto_objetivo', read_only=True
+    )
+    plan_anual = serializers.SerializerMethodField()
+    plan_anual_nombre = serializers.SerializerMethodField()
+    plan_anual_estado = serializers.SerializerMethodField()
+    plan_estrategico = serializers.SerializerMethodField()
+    plan_estrategico_titulo = serializers.SerializerMethodField()
+    # Expuesto solo para que el frontend pueda ocultar acciones cuando el
+    # Plan estratégico ancestro está Cerrado. El bloqueo real lo aplica la
+    # validación de abajo (ver validate() e IndicadorKPI.esta_bloqueado()).
+    plan_estrategico_estado = serializers.SerializerMethodField()
+    anio = serializers.ReadOnlyField()
+    fecha_inicio_vigencia = serializers.ReadOnlyField()
+    fecha_fin_vigencia = serializers.ReadOnlyField()
     frecuencia_nombre = serializers.CharField(source='frecuencia.nombre', read_only=True)
-    tipo_calculo_nombre = serializers.CharField(source='tipo_calculo.nombre', read_only=True)
-    fuente_dato_nombre = serializers.CharField(source='fuente_dato.nombre', read_only=True)
     autorizado_por_username = serializers.CharField(source='autorizado_por.username', read_only=True)
     creado_por_username = serializers.CharField(source='creado_por.username', read_only=True)
     puede_modificarse = serializers.SerializerMethodField()
@@ -69,20 +77,24 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
         model = IndicadorKPI
         fields = [
             'id',
-            'objetivo',
-            'objetivo_nombre',
+            'objetivo_especifico',
+            'objetivo_especifico_texto',
+            'plan_anual',
+            'plan_anual_nombre',
+            'plan_anual_estado',
+            'plan_estrategico',
+            'plan_estrategico_titulo',
+            'plan_estrategico_estado',
+            'anio',
             'frecuencia',
             'frecuencia_nombre',
-            'tipo_calculo',
-            'tipo_calculo_nombre',
-            'fuente_dato',
-            'fuente_dato_nombre',
             'nombre',
             'descripcion',
+            'formula_medicion',
             'unidad_medida',
             'valor_meta',
-            'fecha_inicio',
-            'fecha_fin',
+            'fecha_inicio_vigencia',
+            'fecha_fin_vigencia',
             'estado',
             'fecha_autorizacion',
             'autorizado_por',
@@ -103,53 +115,155 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'creado_por_username',
             'puede_modificarse',
         ]
+        # DRF genera automáticamente un UniqueTogetherValidator a partir de
+        # la UniqueConstraint del modelo (objetivo_especifico, nombre), que
+        # correría antes que validate() con un mensaje técnico en
+        # non_field_errors (mismo problema ya corregido en PlanAnualSerializer
+        # durante Bloque 2). Se desactiva acá para que el único chequeo de
+        # duplicado sea el de validate(), con mensaje en español natural. La
+        # constraint del modelo/base de datos sigue intacta.
+        validators = []
+
+    def get_plan_anual(self, obj):
+        return obj.plan_anual.id
+
+    def get_plan_anual_nombre(self, obj):
+        return obj.plan_anual.nombre
+
+    def get_plan_anual_estado(self, obj):
+        return obj.plan_anual.estado
+
+    def get_plan_estrategico(self, obj):
+        return obj.plan_estrategico.id
+
+    def get_plan_estrategico_titulo(self, obj):
+        return obj.plan_estrategico.titulo
+
+    def get_plan_estrategico_estado(self, obj):
+        return obj.plan_estrategico.estado
 
     def get_puede_modificarse(self, obj):
         return obj.puede_modificarse()
 
     def validate(self, attrs):
+        from apps.estrategia.services import plan_anual_esta_bloqueado
+
         instance = self.instance
+        objetivo_especifico = attrs.get(
+            'objetivo_especifico', getattr(instance, 'objetivo_especifico', None)
+        )
 
-        if instance and not instance.puede_modificarse():
-            campos_bloqueados = {
-                'objetivo',
-                'frecuencia',
-                'tipo_calculo',
-                'fuente_dato',
-                'nombre',
-                'descripcion',
-                'unidad_medida',
-                'valor_meta',
-                'fecha_inicio',
-                'fecha_fin',
-            }
+        if not objetivo_especifico:
+            raise serializers.ValidationError({
+                'objetivo_especifico': 'Seleccioná el objetivo específico del KPI.'
+            })
 
-            campos_intentados = campos_bloqueados.intersection(set(attrs.keys()))
+        if instance is None:
+            # Creación: solo dentro de un Plan anual En uso, cuyo Plan
+            # estratégico no esté Cerrado (plan_anual_esta_bloqueado ya
+            # contempla ambos casos).
+            plan_anual = objetivo_especifico.plan_anual
 
-            if campos_intentados:
+            if not plan_anual.esta_en_uso() or plan_anual_esta_bloqueado(plan_anual):
+                raise serializers.ValidationError({
+                    'objetivo_especifico': (
+                        'Solo se pueden crear KPI sobre un objetivo específico '
+                        'cuyo Plan anual esté En uso.'
+                    )
+                })
+        else:
+            if instance.esta_bloqueado():
                 raise serializers.ValidationError(
-                    'El KPI ya está autorizado y no permite modificar sus datos principales.'
+                    'El Plan anual o el Plan estratégico de este KPI están '
+                    'Cerrados y no permiten modificaciones.'
                 )
 
-        fecha_inicio = attrs.get('fecha_inicio', getattr(instance, 'fecha_inicio', None))
-        fecha_fin = attrs.get('fecha_fin', getattr(instance, 'fecha_fin', None))
+            if not instance.puede_modificarse():
+                campos_bloqueados = {
+                    'objetivo_especifico',
+                    'frecuencia',
+                    'nombre',
+                    'descripcion',
+                    'formula_medicion',
+                    'unidad_medida',
+                    'valor_meta',
+                }
 
-        if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
-            raise serializers.ValidationError(
-                'La fecha de finalización no puede ser anterior a la fecha de inicio.'
-            )
+                campos_intentados = campos_bloqueados.intersection(set(attrs.keys()))
+
+                if campos_intentados:
+                    raise serializers.ValidationError(
+                        'El KPI ya está autorizado y no permite modificar sus datos principales.'
+                    )
+
+            # Si se intenta reasociar el KPI a otro objetivo específico,
+            # ese nuevo contexto también debe estar en uso y no bloqueado.
+            if 'objetivo_especifico' in attrs:
+                nuevo_plan_anual = objetivo_especifico.plan_anual
+
+                if not nuevo_plan_anual.esta_en_uso() or plan_anual_esta_bloqueado(nuevo_plan_anual):
+                    raise serializers.ValidationError({
+                        'objetivo_especifico': (
+                            'El objetivo específico seleccionado debe pertenecer a un '
+                            'Plan anual En uso.'
+                        )
+                    })
+
+        formula_medicion = attrs.get('formula_medicion', getattr(instance, 'formula_medicion', None))
+
+        if formula_medicion is None or not formula_medicion.strip():
+            raise serializers.ValidationError({
+                'formula_medicion': 'Ingresá la fórmula de medición.'
+            })
+
+        nombre = attrs.get('nombre', getattr(instance, 'nombre', None))
+
+        if not nombre or not nombre.strip():
+            raise serializers.ValidationError({
+                'nombre': 'Ingresá el nombre del KPI.'
+            })
+
+        duplicados = IndicadorKPI.objects.filter(
+            objetivo_especifico=objetivo_especifico,
+            nombre=nombre,
+        )
+
+        if instance is not None:
+            duplicados = duplicados.exclude(pk=instance.pk)
+
+        if duplicados.exists():
+            raise serializers.ValidationError({
+                'nombre': 'Ya existe un KPI con ese nombre para este objetivo específico.'
+            })
 
         unidad_medida = attrs.get('unidad_medida', getattr(instance, 'unidad_medida', None))
+
+        if not unidad_medida:
+            raise serializers.ValidationError({
+                'unidad_medida': 'Seleccioná la unidad de medida del KPI.'
+            })
+
         valor_meta = attrs.get('valor_meta')
 
         if valor_meta is None and instance is not None and 'valor_meta' not in attrs:
             valor_meta = instance.valor_meta
 
-        if unidad_medida == '%' and valor_meta is not None:
-            if valor_meta < 0 or valor_meta > 100:
-                raise serializers.ValidationError({
-                    'valor_meta': 'Cuando la unidad de medida es porcentaje, la meta debe estar entre 0 y 100.'
-                })
+        if valor_meta is None:
+            raise serializers.ValidationError({
+                'valor_meta': 'Ingresá la meta del KPI.'
+            })
+
+        if unidad_medida == '%' and (valor_meta < 0 or valor_meta > 100):
+            raise serializers.ValidationError({
+                'valor_meta': 'Cuando la unidad de medida es porcentaje, la meta debe estar entre 0 y 100.'
+            })
+
+        frecuencia = attrs.get('frecuencia', getattr(instance, 'frecuencia', None))
+
+        if not frecuencia:
+            raise serializers.ValidationError({
+                'frecuencia': 'Seleccioná la frecuencia del KPI.'
+            })
 
         return attrs
 
@@ -398,16 +512,15 @@ class MedicionSerializer(serializers.ModelSerializer):
                 'indicador': 'El KPI seleccionado no tiene una meta configurada.'
             })
 
-        if not indicador.fecha_inicio:
-            raise serializers.ValidationError({
-                'indicador': 'El KPI seleccionado no tiene fecha de inicio configurada.'
-            })
-
+        # Compatibilidad Bloque 3: el KPI ya no almacena fecha_inicio/fecha_fin
+        # propias; la vigencia se deriva de su Plan anual (ver
+        # IndicadorKPI.fecha_inicio_vigencia / fecha_fin_vigencia). MetaKPI
+        # todavía no se rediseña, así que sigue recibiendo fechas concretas.
         meta, _ = MetaKPI.objects.get_or_create(
             indicador=indicador,
             valor_meta=indicador.valor_meta,
-            fecha_inicio=indicador.fecha_inicio,
-            fecha_fin=indicador.fecha_fin,
+            fecha_inicio=indicador.fecha_inicio_vigencia,
+            fecha_fin=indicador.fecha_fin_vigencia,
             estado='vigente',
         )
 
@@ -435,14 +548,14 @@ class MedicionSerializer(serializers.ModelSerializer):
             fecha_periodo = periodo.fecha_inicio
 
             fecha_inicio_kpi = date(
-                indicador.fecha_inicio.year,
-                indicador.fecha_inicio.month,
+                indicador.fecha_inicio_vigencia.year,
+                indicador.fecha_inicio_vigencia.month,
                 1,
             )
 
             fecha_fin_kpi = date(
-                indicador.fecha_fin.year,
-                indicador.fecha_fin.month,
+                indicador.fecha_fin_vigencia.year,
+                indicador.fecha_fin_vigencia.month,
                 1,
             )
 
@@ -500,7 +613,7 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         if indicador.estado != 'autorizado':
             raise serializers.ValidationError({
-                'indicador': 'Solo se pueden registrar mediciones para KPI activos.'
+                'indicador': 'Solo se pueden registrar mediciones para KPI autorizados.'
             })
 
         if not indicador.valor_meta:
@@ -508,10 +621,9 @@ class MedicionSerializer(serializers.ModelSerializer):
                 'indicador': 'El KPI seleccionado no tiene una meta configurada.'
             })
 
-        if not indicador.fecha_inicio or not indicador.fecha_fin:
-            raise serializers.ValidationError({
-                'indicador': 'El KPI seleccionado no tiene vigencia configurada.'
-            })
+        # Compatibilidad Bloque 3: fecha_inicio_vigencia/fecha_fin_vigencia
+        # se derivan siempre del Plan anual del KPI (nunca son None), así
+        # que ya no hace falta validar su ausencia como antes.
 
         valor_resultado = attrs.get('valor_resultado')
 

@@ -15,23 +15,13 @@ export async function actualizarIndicador(id, payload) {
   return response.data
 }
 
-// NOTA (Bloque 1 del rediseño): estas dos funciones siguen llamándose
-// obtenerObjetivos/obtenerEstrategias y el objeto que arma
-// obtenerDatosFormularioIndicador() sigue devolviendo las claves
-// `objetivos`/`estrategias`, únicamente para no tocar IndicadorForm.vue/
-// IndicadoresView.vue más de lo estrictamente necesario para que sigan
-// funcionando (ver esos archivos: ahora leen `.plan_estrategico`/
-// `.titulo`/`.texto_objetivo` en vez de `.estrategia`/`.nombre`). Los
-// endpoints sí se actualizaron porque los viejos ya no existen. El
-// Bloque 3 hará el rediseño real de este formulario (Objetivo específico
-// en vez de Objetivo general).
-export async function obtenerObjetivos() {
-  const response = await api.get('objetivos-generales/')
+export async function obtenerPlanesAnualesParaIndicador() {
+  const response = await api.get('planes-anuales/')
   return normalizarRespuesta(response)
 }
 
-export async function obtenerEstrategias() {
-  const response = await api.get('planes-estrategicos/')
+export async function obtenerObjetivosEspecificosParaIndicador() {
+  const response = await api.get('objetivos-especificos/')
   return normalizarRespuesta(response)
 }
 
@@ -40,37 +30,22 @@ export async function obtenerFrecuencias() {
   return normalizarRespuesta(response)
 }
 
-export async function obtenerTiposCalculo() {
-  const response = await api.get('tipos-calculo/')
-  return normalizarRespuesta(response)
-}
-
-export async function obtenerFuentesDato() {
-  const response = await api.get('fuentes-dato/')
-  return normalizarRespuesta(response)
-}
-
 export async function obtenerDatosFormularioIndicador() {
-  const [
-    estrategias,
-    objetivos,
-    frecuencias,
-    tiposCalculo,
-    fuentesDato,
-  ] = await Promise.all([
-    obtenerEstrategias(),
-    obtenerObjetivos(),
+  const [planesAnuales, objetivosEspecificos, frecuencias] = await Promise.all([
+    obtenerPlanesAnualesParaIndicador(),
+    obtenerObjetivosEspecificosParaIndicador(),
     obtenerFrecuencias(),
-    obtenerTiposCalculo(),
-    obtenerFuentesDato(),
   ])
 
+  // Solo se pueden crear/reasociar KPI sobre un Plan anual En uso (ver
+  // también la validación equivalente y autoritativa en backend:
+  // IndicadorKPISerializer.validate).
+  const planesAnualesEnUso = planesAnuales.filter((plan) => plan.estado === 'en_uso')
+
   return {
-    estrategias,
-    objetivos,
+    planesAnuales: planesAnualesEnUso,
+    objetivosEspecificos,
     frecuencias,
-    tiposCalculo,
-    fuentesDato,
   }
 }
 
@@ -91,16 +66,13 @@ export async function anularIndicador(id) {
 
 function limpiarPayloadIndicador(payload) {
   return {
-    objetivo: payload.objetivo,
+    objetivo_especifico: payload.objetivo_especifico,
     frecuencia: payload.frecuencia,
-    tipo_calculo: payload.tipo_calculo,
-    fuente_dato: payload.fuente_dato,
     nombre: payload.nombre,
     descripcion: payload.descripcion || '',
+    formula_medicion: payload.formula_medicion,
     unidad_medida: payload.unidad_medida,
     valor_meta: payload.valor_meta,
-    fecha_inicio: payload.fecha_inicio,
-    fecha_fin: payload.fecha_fin,
   }
 }
 

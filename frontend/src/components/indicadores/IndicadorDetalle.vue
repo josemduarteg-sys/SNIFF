@@ -6,11 +6,6 @@ defineProps({
     type: Object,
     required: true,
   },
-  estrategiaNombre: {
-    type: String,
-    required: false,
-    default: '',
-  },
   rangos: {
     type: Array,
     required: false,
@@ -18,22 +13,10 @@ defineProps({
   },
 })
 
-function formatearFecha(fecha) {
-  if (!fecha) return 'No definida'
-
-  const soloFecha = fecha.split('T')[0]
-  const [anio, mes, dia] = soloFecha.split('-')
-
-  if (!anio || !mes || !dia) return fecha
-
-  return `${dia}/${mes}/${anio}`
-}
-
 function textoEstado(estado) {
   const estados = {
     borrador: 'Borrador',
     autorizado: 'Activo',
-    inactivo: 'Inactivo',
     anulado: 'Anulado',
   }
 
@@ -73,12 +56,17 @@ function formatearCriterio(rango) {
     <div class="detail-grid">
       <div class="detail-item">
         <span>Plan estratégico</span>
-        <strong>{{ estrategiaNombre || 'Sin estrategia' }}</strong>
+        <strong>{{ indicador.plan_estrategico_titulo || 'Sin plan estratégico' }}</strong>
       </div>
 
       <div class="detail-item">
-        <span>Objetivo asociado</span>
-        <strong>{{ indicador.objetivo_nombre || 'Sin objetivo' }}</strong>
+        <span>Plan anual</span>
+        <strong>{{ indicador.plan_anual_nombre || 'Sin plan anual' }}</strong>
+      </div>
+
+      <div class="detail-item detail-full">
+        <span>Objetivo específico</span>
+        <strong>{{ indicador.objetivo_especifico_texto || 'Sin objetivo específico' }}</strong>
       </div>
 
       <div class="detail-item">
@@ -97,28 +85,8 @@ function formatearCriterio(rango) {
       </div>
 
       <div class="detail-item">
-        <span>Tipo de cálculo</span>
-        <strong>{{ indicador.tipo_calculo_nombre || 'Sin tipo' }}</strong>
-      </div>
-
-      <div class="detail-item">
-        <span>Fuente de datos</span>
-        <strong>{{ indicador.fuente_dato_nombre || 'Sin fuente' }}</strong>
-      </div>
-
-      <div class="detail-item">
         <span>Estado</span>
         <strong>{{ textoEstado(indicador.estado) }}</strong>
-      </div>
-
-      <div class="detail-item">
-        <span>Fecha de inicio</span>
-        <strong>{{ formatearFecha(indicador.fecha_inicio) }}</strong>
-      </div>
-
-      <div class="detail-item">
-        <span>Fecha de finalización</span>
-        <strong>{{ formatearFecha(indicador.fecha_fin) }}</strong>
       </div>
 
       <div class="detail-item">
@@ -131,9 +99,9 @@ function formatearCriterio(rango) {
         <strong>{{ indicador.autorizado_por_username || 'Aún no autorizado' }}</strong>
       </div>
 
-      <div class="detail-item">
-        <span>Fecha de autorización</span>
-        <strong>{{ formatearFecha(indicador.fecha_autorizacion) }}</strong>
+      <div class="detail-item detail-full">
+        <span>Fórmula de medición</span>
+        <strong>{{ indicador.formula_medicion || 'Sin fórmula registrada' }}</strong>
       </div>
     </div>
 
@@ -207,6 +175,10 @@ p {
   background: #ffffff;
 }
 
+.detail-full {
+  grid-column: 1 / -1;
+}
+
 .detail-item span {
   display: block;
   color: #9aa8b8;
@@ -219,6 +191,7 @@ p {
   color: #1d3557;
   font-size: 14px;
   font-weight: 800;
+  line-height: 1.45;
 }
 
 .criterios-block {

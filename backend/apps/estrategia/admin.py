@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Area, PlanEstrategico, ObjetivoGeneral
+from .models import Area, ObjetivoEspecifico, ObjetivoGeneral, PlanAnual, PlanEstrategico
 
 
 @admin.register(Area)
@@ -36,3 +36,31 @@ class ObjetivoGeneralAdmin(admin.ModelAdmin):
     )
     search_fields = ('texto_objetivo',)
     list_filter = ('plan_estrategico',)
+
+
+@admin.register(PlanAnual)
+class PlanAnualAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'anio',
+        'plan_estrategico',
+        'estado',
+        'creado_por',
+        'fecha_creacion',
+    )
+    search_fields = ('anio', 'plan_estrategico__titulo')
+    list_filter = ('estado', 'plan_estrategico')
+
+
+@admin.register(ObjetivoEspecifico)
+class ObjetivoEspecificoAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'texto_objetivo',
+        'plan_anual',
+        'objetivo_general',
+        'creado_por',
+        'fecha_creacion',
+    )
+    search_fields = ('texto_objetivo',)
+    list_filter = ('plan_anual',)

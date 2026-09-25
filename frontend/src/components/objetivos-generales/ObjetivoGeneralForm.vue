@@ -1,6 +1,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { obtenerPlanesEstrategicosParaObjetivo } from '../../services/objetivoGeneralService'
+import SelectorBuscable from '../common/SelectorBuscable.vue'
 
 const props = defineProps({
   objetivo: {
@@ -47,6 +48,10 @@ const planesDisponibles = computed(() => {
   }
 
   return props.planes
+})
+
+const opcionesPlanes = computed(() => {
+  return planesDisponibles.value.map((plan) => ({ id: plan.id, texto: plan.titulo }))
 })
 
 watch(
@@ -131,17 +136,13 @@ function cancelar() {
       <label class="field field-full">
         <span>Plan estratégico</span>
 
-        <select v-model="estado.plan_estrategico">
-          <option value="">Seleccionar plan estratégico</option>
-
-          <option
-            v-for="plan in planesDisponibles"
-            :key="plan.id"
-            :value="plan.id"
-          >
-            {{ plan.titulo }}
-          </option>
-        </select>
+        <SelectorBuscable
+          v-model="estado.plan_estrategico"
+          :opciones="opcionesPlanes"
+          placeholder="Seleccionar plan estratégico"
+          placeholder-busqueda="Escribí el título del plan..."
+          mensaje-vacio="No hay planes estratégicos En uso disponibles."
+        />
       </label>
 
       <label class="field field-full">

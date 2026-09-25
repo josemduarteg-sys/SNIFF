@@ -65,10 +65,10 @@ class FuenteDatoViewSet(viewsets.ModelViewSet):
 
 class IndicadorKPIViewSet(viewsets.ModelViewSet):
     queryset = IndicadorKPI.objects.select_related(
-        'objetivo',
+        'objetivo_especifico',
+        'objetivo_especifico__plan_anual',
+        'objetivo_especifico__plan_anual__plan_estrategico',
         'frecuencia',
-        'tipo_calculo',
-        'fuente_dato',
         'autorizado_por',
     ).all()
     serializer_class = IndicadorKPISerializer
@@ -97,7 +97,10 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             usuario=self.request.user,
             accion='crear',
             modulo='Indicadores KPI',
-            descripcion=f'Creó el KPI {indicador.nombre}.',
+            descripcion=(
+                f'Creó el KPI {indicador.nombre} en el {indicador.plan_anual.nombre} '
+                f'del Plan estratégico {indicador.plan_estrategico.titulo}.'
+            ),
             request=self.request,
         )
 
@@ -128,6 +131,12 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
 
         indicador = self.get_object()
 
+        if indicador.esta_bloqueado():
+            return Response(
+                {'detail': 'El Plan anual o el Plan estratégico de este KPI están Cerrados.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if indicador.estado == 'autorizado':
             return Response(
                 {'detail': 'El KPI ya se encuentra autorizado.'},
@@ -137,12 +146,6 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         if not indicador.valor_meta:
             return Response(
                 {'detail': 'No se puede autorizar un KPI sin meta configurada.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not indicador.fecha_inicio or not indicador.fecha_fin:
-            return Response(
-                {'detail': 'No se puede autorizar un KPI sin fechas de vigencia.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -182,6 +185,12 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         from apps.auditoria.services import crear_notificacion, registrar_bitacora_seguro
 
         indicador = self.get_object()
+
+        if indicador.esta_bloqueado():
+            return Response(
+                {'detail': 'El Plan anual o el Plan estratégico de este KPI están Cerrados.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         indicador.estado = 'anulado'
         indicador.save(update_fields=['estado'])
@@ -272,7 +281,12 @@ class MedicionViewSet(viewsets.ModelViewSet):
 
         indicador = (
             IndicadorKPI.objects
-            .select_related('frecuencia')
+            .select_related(
+                'frecuencia',
+                'objetivo_especifico',
+                'objetivo_especifico__plan_anual',
+                'objetivo_especifico__plan_anual__plan_estrategico',
+            )
             .filter(id=indicador_id)
             .first()
         )
@@ -285,7 +299,7 @@ class MedicionViewSet(viewsets.ModelViewSet):
 
         if indicador.estado != 'autorizado':
             return Response(
-                {'detail': 'Solo se pueden registrar mediciones para KPI activos.'},
+                {'detail': 'Solo se pueden registrar mediciones para KPI autorizados.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -295,17 +309,11 @@ class MedicionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not indicador.fecha_inicio or not indicador.fecha_fin:
-            return Response(
-                {'detail': 'El KPI seleccionado no tiene vigencia configurada.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         periodo_esperado = obtener_siguiente_periodo_esperado(indicador)
 
         fecha_fin_kpi = date(
-            indicador.fecha_fin.year,
-            indicador.fecha_fin.month,
+            indicador.fecha_fin_vigencia.year,
+            indicador.fecha_fin_vigencia.month,
             1,
         )
 

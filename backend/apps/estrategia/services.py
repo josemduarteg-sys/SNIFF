@@ -25,3 +25,27 @@ def plan_estrategico_esta_en_uso(plan_estrategico):
         return False
 
     return plan_estrategico.esta_en_uso()
+
+
+def plan_anual_esta_bloqueado(plan_anual):
+    """True si el PlanAnual (o None) no admite modificaciones: porque él
+    mismo está Cerrado, o porque su Plan estratégico padre está Cerrado
+    (este último tiene prioridad absoluta sobre su descendencia, incluso
+    si el propio PlanAnual quedó históricamente en otro estado)."""
+    if plan_anual is None:
+        return False
+
+    if plan_anual.esta_cerrado():
+        return True
+
+    return plan_estrategico_esta_cerrado(plan_anual.plan_estrategico)
+
+
+def objetivo_especifico_esta_bloqueado(objetivo_especifico):
+    """True si el ObjetivoEspecifico (o None) no admite modificaciones:
+    delega por completo en el bloqueo de su PlanAnual (que a su vez ya
+    contempla el estado del Plan estratégico)."""
+    if objetivo_especifico is None:
+        return False
+
+    return plan_anual_esta_bloqueado(objetivo_especifico.plan_anual)

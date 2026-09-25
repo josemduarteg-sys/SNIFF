@@ -39,17 +39,14 @@ const idResaltado = ref(null)
 let timeoutResaltado = null
 
 const indicadores = ref([])
-const estrategias = ref([])
-const objetivos = ref([])
+const planesAnuales = ref([])
+const objetivosEspecificos = ref([])
 const frecuencias = ref([])
-const tiposCalculo = ref([])
-const fuentesDato = ref([])
 const rangosKpi = ref([])
 
 const busqueda = ref('')
 const objetivoSeleccionado = ref('')
 const frecuenciaSeleccionada = ref('')
-const fuenteSeleccionada = ref('')
 const estadoSeleccionado = ref('')
 
 const cargando = ref(false)
@@ -67,6 +64,7 @@ const {
 const modalAbierto = ref(false)
 const indicadorSeleccionado = ref(null)
 const guardando = ref(false)
+const errorModalIndicador = ref('')
 
 const modalDetalleAbierto = ref(false)
 const indicadorDetalle = ref(null)
@@ -92,11 +90,9 @@ async function cargarDatos() {
     ])
 
     indicadores.value = indicadoresData
-    estrategias.value = datosFormulario.estrategias
-    objetivos.value = datosFormulario.objetivos
+    planesAnuales.value = datosFormulario.planesAnuales
+    objetivosEspecificos.value = datosFormulario.objetivosEspecificos
     frecuencias.value = datosFormulario.frecuencias
-    tiposCalculo.value = datosFormulario.tiposCalculo
-    fuentesDato.value = datosFormulario.fuentesDato
     rangosKpi.value = rangosData
   } catch (e) {
     error.value = 'No se pudieron cargar los indicadores KPI.'
@@ -151,23 +147,18 @@ const indicadoresFiltrados = computed(() => {
       !texto ||
       indicador.nombre?.toLowerCase().includes(texto) ||
       indicador.descripcion?.toLowerCase().includes(texto) ||
-      indicador.objetivo_nombre?.toLowerCase().includes(texto) ||
+      indicador.objetivo_especifico_texto?.toLowerCase().includes(texto) ||
+      indicador.plan_anual_nombre?.toLowerCase().includes(texto) ||
       indicador.frecuencia_nombre?.toLowerCase().includes(texto) ||
-      indicador.tipo_calculo_nombre?.toLowerCase().includes(texto) ||
-      indicador.fuente_dato_nombre?.toLowerCase().includes(texto) ||
       indicador.estado?.toLowerCase().includes(texto)
 
     const coincideObjetivo =
       !objetivoSeleccionado.value ||
-      Number(indicador.objetivo) === Number(objetivoSeleccionado.value)
+      Number(indicador.objetivo_especifico) === Number(objetivoSeleccionado.value)
 
     const coincideFrecuencia =
       !frecuenciaSeleccionada.value ||
       Number(indicador.frecuencia) === Number(frecuenciaSeleccionada.value)
-
-    const coincideFuente =
-      !fuenteSeleccionada.value ||
-      Number(indicador.fuente_dato) === Number(fuenteSeleccionada.value)
 
     const coincideEstado =
       !estadoSeleccionado.value ||
@@ -177,7 +168,6 @@ const indicadoresFiltrados = computed(() => {
       coincideBusqueda &&
       coincideObjetivo &&
       coincideFrecuencia &&
-      coincideFuente &&
       coincideEstado
     )
   })
@@ -195,15 +185,10 @@ const indicadoresAnulados = computed(() => {
   return indicadores.value.filter((indicador) => indicador.estado === 'anulado').length
 })
 
-const indicadoresInactivos = computed(() => {
-  return indicadores.value.filter((indicador) => indicador.estado === 'inactivo').length
-})
-
 function textoEstado(estado) {
   const estados = {
     borrador: 'Borrador',
     autorizado: 'Activo',
-    inactivo: 'Inactivo',
     anulado: 'Anulado',
   }
 
@@ -214,36 +199,10 @@ function estadoClase(estado) {
   const clases = {
     borrador: 'warning',
     autorizado: 'ok',
-    inactivo: 'neutral',
     anulado: 'danger',
   }
 
   return clases[estado] || 'neutral'
-}
-
-function fuenteClase(fuente) {
-  const nombre = fuente?.toLowerCase() || ''
-
-  if (nombre.includes('manual')) return 'manual'
-  if (nombre.includes('csv')) return 'csv'
-  if (nombre.includes('warehouse') || nombre.includes('data')) return 'dw'
-
-  return 'neutral'
-}
-
-function formatearFecha(fecha) {
-  if (!fecha) {
-    return 'No definida'
-  }
-
-  const soloFecha = fecha.split('T')[0]
-  const [anio, mes, dia] = soloFecha.split('-')
-
-  if (!anio || !mes || !dia) {
-    return fecha
-  }
-
-  return `${dia}/${mes}/${anio}`
 }
 
 function puedeAutorizar(indicador) {
@@ -274,7 +233,7 @@ async function manejarAutorizar(indicador) {
   } catch (e) {
     error.value =
       e.response?.data?.detail ||
-      'No se pudo autorizar el KPI. Verificá que tenga meta y fechas de vigencia.'
+      'No se pudo autorizar el KPI. Verificá que tenga una meta configurada.'
   } finally {
     procesandoId.value = null
   }
@@ -327,6 +286,7 @@ function abrirNuevoIndicador() {
   modalAbierto.value = true
   error.value = ''
   mensaje.value = ''
+  errorModalIndicador.value = ''
 }
 
 function abrirEditarIndicador(indicador) {
@@ -340,33 +300,15 @@ function abrirEditarIndicador(indicador) {
   modalAbierto.value = true
   error.value = ''
   mensaje.value = ''
+  errorModalIndicador.value = ''
 }
 
 function cerrarModal() {
   modalAbierto.value = false
   indicadorSeleccionado.value = null
   guardando.value = false
+  errorModalIndicador.value = ''
 }
-
-function obtenerEstrategiaNombreDeIndicador(indicador) {
-  const objetivo = objetivos.value.find((item) => Number(item.id) === Number(indicador?.objetivo))
-
-  if (!objetivo) {
-    return ''
-  }
-
-  const estrategia = estrategias.value.find((item) => Number(item.id) === Number(objetivo.plan_estrategico))
-
-  return estrategia?.titulo || ''
-}
-
-const estrategiaNombreDetalle = computed(() => {
-  if (!indicadorDetalle.value) {
-    return ''
-  }
-
-  return obtenerEstrategiaNombreDeIndicador(indicadorDetalle.value)
-})
 
 const rangosDelIndicadorDetalle = computed(() => {
   if (!indicadorDetalle.value) {
@@ -390,7 +332,7 @@ function cerrarModalDetalle() {
 
 async function guardarIndicador(payload) {
   guardando.value = true
-  error.value = ''
+  errorModalIndicador.value = ''
   mensaje.value = ''
 
   try {
@@ -405,20 +347,23 @@ async function guardarIndicador(payload) {
     cerrarModal()
     await cargarDatos()
   } catch (e) {
+    // El error se muestra DENTRO del modal (no en la vista principal) para
+    // que el usuario vea qué falló sin perder el modal ni lo ya escrito:
+    // el modal solo se cierra en el bloque de éxito de arriba.
     const data = e.response?.data
 
     if (data?.non_field_errors) {
-      error.value = data.non_field_errors.join(' ')
+      errorModalIndicador.value = data.non_field_errors.join(' ')
     } else if (data?.detail) {
-      error.value = data.detail
+      errorModalIndicador.value = data.detail
     } else if (typeof data === 'object' && data !== null) {
       const primerCampo = Object.keys(data)[0]
       const mensajeCampo = data[primerCampo]
-      error.value = Array.isArray(mensajeCampo)
+      errorModalIndicador.value = Array.isArray(mensajeCampo)
         ? mensajeCampo.join(' ')
         : String(mensajeCampo)
     } else {
-      error.value = indicadorSeleccionado.value?.id
+      errorModalIndicador.value = indicadorSeleccionado.value?.id
         ? 'No se pudo actualizar el KPI.'
         : 'No se pudo crear el KPI.'
     }
@@ -447,7 +392,7 @@ onBeforeUnmount(() => {
   <AppLayout
     :usuario="props.usuario"
     titulo="Gestión de Indicadores KPI"
-    subtitulo="Administra indicadores, metas, vigencia y estado de autorización."
+    subtitulo="Administra indicadores, fórmulas de medición, metas, frecuencia y estado de autorización."
     breadcrumb-actual="Indicadores KPI"
     @logout="cerrarSesion"
   >
@@ -563,8 +508,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="kpi-value">{{ indicadoresInactivos + indicadoresAnulados }}</div>
-        <div class="kpi-label">Inactivos/anulados</div>
+        <div class="kpi-value">{{ indicadoresAnulados }}</div>
+        <div class="kpi-label">Anulados</div>
         <div class="kpi-foot">Conservados para historial</div>
       </article>
     </section>
@@ -601,13 +546,13 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="toolbar-filter">
-        <span class="filter-label">Objetivo:</span>
+        <span class="filter-label">Objetivo específico:</span>
 
         <select v-model="objetivoSeleccionado">
           <option value="">Todos</option>
 
           <option
-            v-for="objetivo in objetivos"
+            v-for="objetivo in objetivosEspecificos"
             :key="objetivo.id"
             :value="objetivo.id"
           >
@@ -633,29 +578,12 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="toolbar-filter">
-        <span class="filter-label">Fuente:</span>
-
-        <select v-model="fuenteSeleccionada">
-          <option value="">Todas</option>
-
-          <option
-            v-for="fuente in fuentesDato"
-            :key="fuente.id"
-            :value="fuente.id"
-          >
-            {{ fuente.nombre }}
-          </option>
-        </select>
-      </div>
-
-      <div class="toolbar-filter">
         <span class="filter-label">Estado:</span>
 
         <select v-model="estadoSeleccionado">
           <option value="">Todos</option>
           <option value="borrador">Borrador</option>
           <option value="autorizado">Activo</option>
-          <option value="inactivo">Inactivo</option>
           <option value="anulado">Anulado</option>
         </select>
       </div>
@@ -678,11 +606,10 @@ onBeforeUnmount(() => {
         <thead>
           <tr>
             <th>Indicador KPI</th>
-            <th>Objetivo asociado</th>
+            <th>Objetivo específico</th>
             <th>Meta</th>
-            <th>Vigencia</th>
+            <th>Plan anual</th>
             <th>Frecuencia</th>
-            <th>Fuente</th>
             <th>Estado</th>
             <th style="text-align: right;">Acciones</th>
           </tr>
@@ -705,14 +632,13 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="cell-extra">
-                Tipo: {{ indicador.tipo_calculo_nombre || 'Sin tipo' }} · Unidad:
-                {{ indicador.unidad_medida || '-' }}
+                Unidad: {{ indicador.unidad_medida || '-' }}
               </div>
             </td>
 
             <td>
-              <span class="code-chip" :title="indicador.objetivo_nombre || 'Sin objetivo'">
-                {{ indicador.objetivo_nombre || 'Sin objetivo' }}
+              <span class="code-chip" :title="indicador.objetivo_especifico_texto || 'Sin objetivo'">
+                {{ indicador.objetivo_especifico_texto || 'Sin objetivo' }}
               </span>
             </td>
 
@@ -727,23 +653,13 @@ onBeforeUnmount(() => {
 
             <td>
               <div class="date-range">
-                <span>{{ formatearFecha(indicador.fecha_inicio) }}</span>
-                <small>al</small>
-                <span>{{ formatearFecha(indicador.fecha_fin) }}</span>
+                <span>{{ indicador.plan_anual_nombre || 'Sin plan anual' }}</span>
+                <small>{{ indicador.plan_estrategico_titulo || '' }}</small>
               </div>
             </td>
 
             <td>
               {{ indicador.frecuencia_nombre || 'Sin frecuencia' }}
-            </td>
-
-            <td>
-              <span
-                class="source-chip"
-                :class="fuenteClase(indicador.fuente_dato_nombre)"
-              >
-                {{ indicador.fuente_dato_nombre || 'Sin fuente' }}
-              </span>
             </td>
 
             <td>
@@ -863,17 +779,19 @@ onBeforeUnmount(() => {
       :subtitulo="
         indicadorSeleccionado
           ? 'Actualiza los datos principales del indicador mientras esté en borrador.'
-          : 'Registra un KPI con meta, vigencia, frecuencia y fuente de datos.'
+          : 'Registra un KPI con fórmula de medición, meta y frecuencia.'
       "
       @cerrar="cerrarModal"
     >
+      <div v-if="errorModalIndicador" class="alert error">
+        {{ errorModalIndicador }}
+      </div>
+
       <IndicadorForm
         :indicador="indicadorSeleccionado"
-        :estrategias="estrategias"
-        :objetivos="objetivos"
+        :planes-anuales="planesAnuales"
+        :objetivos-especificos="objetivosEspecificos"
         :frecuencias="frecuencias"
-        :tipos-calculo="tiposCalculo"
-        :fuentes-dato="fuentesDato"
         @guardar="guardarIndicador"
         @cancelar="cerrarModal"
       />
@@ -892,7 +810,6 @@ onBeforeUnmount(() => {
       <IndicadorDetalle
         v-if="indicadorDetalle"
         :indicador="indicadorDetalle"
-        :estrategia-nombre="estrategiaNombreDetalle"
         :rangos="rangosDelIndicadorDetalle"
       />
     </ModalBase>

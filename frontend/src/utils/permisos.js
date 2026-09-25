@@ -100,6 +100,14 @@ export function puedeGestionarObjetivosGenerales(usuario) {
   return puedeGestionarPlaneacion(usuario)
 }
 
+export function puedeGestionarPlanesAnuales(usuario) {
+  return puedeGestionarPlaneacion(usuario)
+}
+
+export function puedeGestionarObjetivosEspecificos(usuario) {
+  return puedeGestionarPlaneacion(usuario)
+}
+
 export function puedeVerAccionesLectura(usuario) {
   return true
 }

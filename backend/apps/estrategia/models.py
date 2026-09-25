@@ -111,3 +111,109 @@ class ObjetivoGeneral(models.Model):
 
     def __str__(self):
         return self.texto_objetivo[:80]
+
+
+class PlanAnual(models.Model):
+    """Cada año calendario cubierto por la vigencia de un Plan estratégico.
+
+    El nombre visible ("Plan 2027") se deriva de `anio`: no se almacena un
+    título redundante. Mismo flujo de estados que PlanEstrategico
+    (borrador -> en_uso -> cerrado, sin retorno). Ver apps/estrategia/services.py
+    para el bloqueo combinado con el estado del Plan estratégico padre.
+    """
+
+    ESTADO_BORRADOR = 'borrador'
+    ESTADO_EN_USO = 'en_uso'
+    ESTADO_CERRADO = 'cerrado'
+
+    ESTADO_CHOICES = [
+        (ESTADO_BORRADOR, 'Borrador'),
+        (ESTADO_EN_USO, 'En uso'),
+        (ESTADO_CERRADO, 'Cerrado'),
+    ]
+
+    plan_estrategico = models.ForeignKey(
+        PlanEstrategico,
+        on_delete=models.PROTECT,
+        related_name='planes_anuales'
+    )
+    anio = models.PositiveIntegerField()
+    estado = models.CharField(
+        max_length=20,
+        choices=ESTADO_CHOICES,
+        default=ESTADO_BORRADOR,
+    )
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='planes_anuales_creados'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'plan_anual'
+        verbose_name = 'Plan anual'
+        verbose_name_plural = 'Planes anuales'
+        ordering = ['-anio']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['plan_estrategico', 'anio'],
+                name='unique_plan_anual_por_anio',
+            )
+        ]
+
+    def esta_en_borrador(self):
+        return self.estado == self.ESTADO_BORRADOR
+
+    def esta_en_uso(self):
+        return self.estado == self.ESTADO_EN_USO
+
+    def esta_cerrado(self):
+        return self.estado == self.ESTADO_CERRADO
+
+    @property
+    def nombre(self):
+        return f'Plan {self.anio}'
+
+    def __str__(self):
+        return self.nombre
+
+
+class ObjetivoEspecifico(models.Model):
+    """Lo que se busca alcanzar durante el año de un Plan anual para
+    contribuir a un ObjetivoGeneral. Misma lógica de contenido que
+    ObjetivoGeneral: sin nombre/título/descripción/fechas/estado propios,
+    representado únicamente con `texto_objetivo`. Su vigencia se deriva
+    del Plan anual al que pertenece.
+
+    No tiene un campo `estado` propio: su disponibilidad para edición la
+    gobierna el estado del Plan anual (y, a través de él, el del Plan
+    estratégico). Ver apps/estrategia/services.py.
+    """
+
+    plan_anual = models.ForeignKey(
+        PlanAnual,
+        on_delete=models.PROTECT,
+        related_name='objetivos_especificos'
+    )
+    objetivo_general = models.ForeignKey(
+        ObjetivoGeneral,
+        on_delete=models.PROTECT,
+        related_name='objetivos_especificos'
+    )
+    texto_objetivo = models.TextField()
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='objetivos_especificos_creados'
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'objetivo_especifico'
+        verbose_name = 'Objetivo específico'
+        verbose_name_plural = 'Objetivos específicos'
+        ordering = ['-fecha_creacion']
+
+    def __str__(self):
+        return self.texto_objetivo[:80]
