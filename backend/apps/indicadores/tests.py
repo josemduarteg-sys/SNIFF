@@ -847,3 +847,652 @@ class EvidenciaTests(MedicionTestsBase):
         self.client.force_authenticate(user=None)
         response_anonimo = self.client.get(f'/api/mediciones/{medicion_id}/evidencia/')
         self.assertIn(response_anonimo.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+
+# ============================================================
+# BLOQUE 5 - Promedio acumulado, estado acumulado (RangoKPI) y
+# alertas de cumplimiento basadas en el promedio del KPI completo.
+# ============================================================
+
+from .models import Alerta
+from .services import (
+    calcular_promedio_acumulado_kpi,
+    generar_alertas_periodos_vencidos,
+    obtener_estado_acumulado_kpi,
+)
+
+
+def registrar_medicion(client, kpi, valor, fecha):
+    """Registra una medición vía la API real (mismo patrón de Bloque 4:
+    mockea `hoy()` para caer dentro de la ventana de registro del periodo
+    correspondiente a esa fecha)."""
+    with mock.patch('apps.indicadores.services.hoy', return_value=fecha):
+        return client.post('/api/mediciones/', {
+            'indicador': kpi.id,
+            'valor_resultado': str(valor),
+        })
+
+
+def alertas_cumplimiento_pendientes(indicador):
+    """Alertas 'pendiente' del KPI que NO son de tipo periodo vencido —
+    la familia que gestiona `actualizar_alerta_cumplimiento_kpi`."""
+    return Alerta.objects.filter(
+        indicador=indicador, estado_alerta='pendiente',
+    ).exclude(tipo_alerta='Periodo vencido sin medición')
+
+
+class PromedioAcumuladoTests(MedicionTestsBase):
+    """Bloque 5 - casos 1 a 11: REGLA DEFINITIVA del promedio acumulado
+    (promedio directo de valor_resultado, nunca de porcentaje_cumplimiento
+    ni de valor_resultado/meta)."""
+
+    NOMBRE_USUARIO = 'admin_promedio_acumulado'
+
+    # 1. Sin mediciones -> promedio_acumulado es None (nunca 0.00).
+    def test_sin_mediciones_promedio_none(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI sin mediciones')
+        self.assertIsNone(calcular_promedio_acumulado_kpi(kpi))
+
+    # 2. Una sola medición 80 -> promedio 80.00.
+    def test_una_medicion_80(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI una medicion')
+        registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('80.00'))
+
+    # 3. 80 + 60 -> promedio 70.00.
+    def test_dos_mediciones_80_60_setenta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI dos mediciones')
+        registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('70.00'))
+
+    # 4. 80 + 60 + 40 -> promedio 60.00 (nunca normalizado contra meta).
+    def test_tres_mediciones_80_60_40_sesenta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI tres mediciones', valor_meta='85.00')
+        registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+        registrar_medicion(self.client, kpi, '40', date(2027, 3, 31))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('60.00'))
+
+    # 5. 80 + 60 + 0 (cierre automático) -> promedio 46.67.
+    def test_incluye_cierre_automatico_en_cero(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI con cierre 0')
+        registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+
+        with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 4, 6)):
+            resultado = cerrar_mediciones_vencidas()
+
+        self.assertEqual(resultado['cierres_creados'], 1)
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('46.67'))
+
+    # 6. El cierre automático participa exactamente igual que uno manual
+    # (mismo resultado que si el usuario hubiera registrado 0 a mano).
+    def test_cierre_automatico_participa_igual_que_manual(self):
+        kpi_auto = self.crear_kpi('Mensual', nombre='KPI cierre auto')
+        registrar_medicion(self.client, kpi_auto, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi_auto, '60', date(2027, 2, 28))
+
+        with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 4, 6)):
+            cerrar_mediciones_vencidas()
+
+        kpi_manual = self.crear_kpi('Mensual', nombre='KPI cero manual')
+        registrar_medicion(self.client, kpi_manual, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi_manual, '60', date(2027, 2, 28))
+        registrar_medicion(self.client, kpi_manual, '0', date(2027, 3, 31))
+
+        self.assertEqual(
+            calcular_promedio_acumulado_kpi(kpi_auto),
+            calcular_promedio_acumulado_kpi(kpi_manual),
+        )
+
+    # 7. No mezcla mediciones de otro KPI.
+    def test_no_mezcla_con_otro_kpi(self):
+        kpi1 = self.crear_kpi('Mensual', nombre='KPI aislado 1')
+        kpi2 = self.crear_kpi('Mensual', nombre='KPI aislado 2')
+
+        registrar_medicion(self.client, kpi1, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi2, '20', date(2027, 1, 31))
+
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi1), Decimal('80.00'))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi2), Decimal('20.00'))
+
+    # 8. No mezcla mediciones de otro año / otro KPI (un KPI pertenece a un
+    # único PlanAnual, así que "otro año" implica siempre "otro KPI").
+    def test_no_mezcla_con_otro_anio(self):
+        kpi_2027 = self.crear_kpi('Mensual', nombre='KPI 2027')
+        registrar_medicion(self.client, kpi_2027, '80', date(2027, 1, 31))
+
+        plan_anual_2028 = PlanAnual.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            anio=2028,
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+        objetivo_2028 = ObjetivoEspecifico.objects.create(
+            plan_anual=plan_anual_2028,
+            objetivo_general=self.objetivo_general,
+            texto_objetivo='Objetivo especifico 2028',
+            creado_por=self.usuario,
+        )
+        kpi_2028 = IndicadorKPI.objects.create(
+            objetivo_especifico=objetivo_2028,
+            frecuencia=self.frecuencias['Mensual'],
+            nombre='KPI 2028',
+            formula_medicion='Resultado obtenido / Meta x 100',
+            unidad_medida='unidades',
+            valor_meta=Decimal('100.00'),
+            estado='autorizado',
+            creado_por=self.usuario,
+        )
+        crear_rangos_provisionales(kpi_2028)
+        registrar_medicion(self.client, kpi_2028, '20', date(2028, 1, 31))
+
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi_2027), Decimal('80.00'))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi_2028), Decimal('20.00'))
+
+    # 9, 10 y 11. Acumulado histórico "hasta cierta medición", ordenado por
+    # periodo (no por fecha_registro).
+    def test_historico_hasta_cada_medicion(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI historico')
+
+        respuesta_enero = registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        respuesta_febrero = registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+        respuesta_marzo = registrar_medicion(self.client, kpi, '40', date(2027, 3, 31))
+
+        self.assertEqual(
+            Decimal(str(respuesta_enero.data['promedio_acumulado_hasta_medicion'])),
+            Decimal('80.00'),
+        )
+        self.assertEqual(
+            Decimal(str(respuesta_febrero.data['promedio_acumulado_hasta_medicion'])),
+            Decimal('70.00'),
+        )
+        self.assertEqual(
+            Decimal(str(respuesta_marzo.data['promedio_acumulado_hasta_medicion'])),
+            Decimal('60.00'),
+        )
+
+
+class RangosAcumuladosTests(MedicionTestsBase):
+    """Bloque 5 - casos 12 a 16: el estado acumulado se clasifica
+    ÚNICAMENTE con los RangoKPI reales del indicador, nunca con umbrales
+    hardcodeados en el backend."""
+
+    NOMBRE_USUARIO = 'admin_rangos_acumulado'
+
+    # 12. Promedio >= 85 -> Favorable (rango provisional de la plantilla).
+    def test_promedio_favorable(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI favorable')
+        registrar_medicion(self.client, kpi, '90', date(2027, 1, 31))
+
+        promedio = calcular_promedio_acumulado_kpi(kpi)
+        estado = obtener_estado_acumulado_kpi(kpi, promedio)
+        self.assertEqual(estado.nombre, 'Favorable')
+
+    # 13. 70 <= promedio < 85 -> En riesgo.
+    def test_promedio_en_riesgo(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI en riesgo')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+
+        promedio = calcular_promedio_acumulado_kpi(kpi)
+        estado = obtener_estado_acumulado_kpi(kpi, promedio)
+        self.assertEqual(estado.nombre, 'En riesgo')
+
+    # 14. Promedio < 70 -> Incumplido.
+    def test_promedio_incumplido(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI incumplido')
+        registrar_medicion(self.client, kpi, '30', date(2027, 1, 31))
+
+        promedio = calcular_promedio_acumulado_kpi(kpi)
+        estado = obtener_estado_acumulado_kpi(kpi, promedio)
+        self.assertEqual(estado.nombre, 'Incumplido')
+
+    # 15. Ningún RangoKPI cubre el promedio -> 'Pendiente de actualización'
+    # (mismo fallback técnico que ya usan las Mediciones individuales).
+    def test_sin_rango_aplicable_pendiente_actualizacion(self):
+        EstadoCumplimiento.objects.get_or_create(
+            nombre='Pendiente de actualización',
+            defaults={'color': 'gris', 'estado': True},
+        )
+        kpi = self.crear_kpi('Mensual', nombre='KPI sin rango')
+        RangoKPI.objects.filter(indicador=kpi).delete()
+
+        estado_favorable = EstadoCumplimiento.objects.get(nombre='Favorable')
+        RangoKPI.objects.create(
+            indicador=kpi,
+            estado_cumplimiento=estado_favorable,
+            valor_minimo=Decimal('85'),
+            valor_maximo=None,
+            estado=True,
+        )
+
+        registrar_medicion(self.client, kpi, '50', date(2027, 1, 31))
+
+        promedio = calcular_promedio_acumulado_kpi(kpi)
+        estado = obtener_estado_acumulado_kpi(kpi, promedio)
+
+        self.assertEqual(promedio, Decimal('50.00'))
+        self.assertEqual(estado.nombre, 'Pendiente de actualización')
+
+    # 16. No usa umbrales hardcodeados (85/70): con un RangoKPI propio
+    # distinto de la plantilla, un promedio de 60 puede clasificar como
+    # Favorable si así lo define el RangoKPI real del indicador.
+    def test_no_usa_umbrales_hardcodeados(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI umbral propio')
+        RangoKPI.objects.filter(indicador=kpi).delete()
+
+        estado_incumplido = EstadoCumplimiento.objects.get(nombre='Incumplido')
+        estado_favorable = EstadoCumplimiento.objects.get(nombre='Favorable')
+        RangoKPI.objects.create(
+            indicador=kpi,
+            estado_cumplimiento=estado_incumplido,
+            valor_minimo=Decimal('0'),
+            valor_maximo=Decimal('50'),
+            estado=True,
+        )
+        RangoKPI.objects.create(
+            indicador=kpi,
+            estado_cumplimiento=estado_favorable,
+            valor_minimo=Decimal('50'),
+            valor_maximo=None,
+            estado=True,
+        )
+
+        registrar_medicion(self.client, kpi, '60', date(2027, 1, 31))
+
+        promedio = calcular_promedio_acumulado_kpi(kpi)
+        estado = obtener_estado_acumulado_kpi(kpi, promedio)
+
+        self.assertEqual(promedio, Decimal('60.00'))
+        self.assertEqual(estado.nombre, 'Favorable')
+
+
+class AlertasAcumuladasTests(MedicionTestsBase):
+    """Bloque 5 - casos 17 a 24: alerta de cumplimiento basada en el
+    promedio acumulado, con máximo una alerta 'pendiente' por KPI."""
+
+    NOMBRE_USUARIO = 'admin_alertas_acumuladas'
+
+    # 17. Favorable -> no genera alerta pendiente.
+    def test_favorable_no_genera_alerta_pendiente(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI alerta favorable')
+        registrar_medicion(self.client, kpi, '90', date(2027, 1, 31))
+
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 0)
+
+    # 18. En riesgo -> exactamente una alerta pendiente.
+    def test_en_riesgo_genera_una_alerta_pendiente(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI alerta riesgo')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+
+        alertas = alertas_cumplimiento_pendientes(kpi)
+        self.assertEqual(alertas.count(), 1)
+        self.assertEqual(alertas.first().tipo_alerta, 'KPI En riesgo')
+        self.assertIn('promedio acumulado', alertas.first().mensaje)
+
+    # 19. Otra medición que mantiene el mismo estado -> se actualiza la
+    # misma alerta, nunca se duplica.
+    def test_otra_medicion_mismo_estado_mantiene_una_sola_alerta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI alerta persistente')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '75', date(2027, 2, 28))
+
+        alertas = alertas_cumplimiento_pendientes(kpi)
+        self.assertEqual(alertas.count(), 1)
+        self.assertEqual(alertas.first().tipo_alerta, 'KPI En riesgo')
+
+    # 20. En riesgo -> Incumplido: descarta la alerta anterior y crea/deja
+    # la correcta para el nuevo estado (sigue habiendo solo una pendiente).
+    def test_transicion_en_riesgo_a_incumplido(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI transicion riesgo incumplido')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '20', date(2027, 2, 28))
+
+        pendientes = alertas_cumplimiento_pendientes(kpi)
+        self.assertEqual(pendientes.count(), 1)
+        self.assertEqual(pendientes.first().tipo_alerta, 'KPI Incumplido')
+
+        descartadas = Alerta.objects.filter(
+            indicador=kpi, estado_alerta='descartada', tipo_alerta='KPI En riesgo',
+        )
+        self.assertEqual(descartadas.count(), 1)
+
+    # 21. Incumplido -> Favorable: descarta la alerta pendiente sin crear
+    # una nueva.
+    def test_transicion_incumplido_a_favorable_descarta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI transicion incumplido favorable')
+        respuesta = registrar_medicion(self.client, kpi, '30', date(2027, 1, 31))
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 1)
+
+        medicion_id = respuesta.data['id']
+        respuesta_patch = self.client.patch(
+            f'/api/mediciones/{medicion_id}/', {'valor_resultado': '95'}
+        )
+        self.assertEqual(respuesta_patch.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 0)
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('95.00'))
+
+    # 22. Cierre automático en 0.00 recalcula promedio y alerta igual que
+    # una medición manual.
+    def test_cierre_automatico_recalcula_promedio_y_alerta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI cierre auto alerta')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).first().tipo_alerta, 'KPI En riesgo')
+
+        # Solo el periodo de febrero vence su ventana a esta fecha (el de
+        # marzo todavía no) para cerrar exactamente UN periodo automático.
+        with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 3, 6)):
+            cerrar_mediciones_vencidas()
+
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('37.50'))
+        pendientes = alertas_cumplimiento_pendientes(kpi)
+        self.assertEqual(pendientes.count(), 1)
+        self.assertEqual(pendientes.first().tipo_alerta, 'KPI Incumplido')
+
+        medicion_automatica = Medicion.objects.get(indicador=kpi, cierre_automatico=True)
+        self.assertEqual(pendientes.first().medicion_id, medicion_automatica.id)
+
+    # 23. La alerta de 'Periodo vencido sin medición' sigue siendo
+    # independiente de la alerta de cumplimiento acumulado.
+    def test_alerta_periodo_vencido_independiente(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI alerta vencido')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+
+        with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 4, 1)):
+            generar_alertas_periodos_vencidos()
+
+        alertas_vencido = Alerta.objects.filter(
+            indicador=kpi, tipo_alerta='Periodo vencido sin medición', estado_alerta='pendiente',
+        )
+        pendientes_cumplimiento = alertas_cumplimiento_pendientes(kpi)
+
+        self.assertTrue(alertas_vencido.exists())
+        self.assertEqual(pendientes_cumplimiento.count(), 1)
+        self.assertEqual(pendientes_cumplimiento.first().tipo_alerta, 'KPI En riesgo')
+
+    # 24. Editar el valor_resultado de una medición manual recalcula el
+    # promedio y la alerta de inmediato.
+    def test_edicion_medicion_recalcula_promedio_y_alerta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI edicion recalcula')
+        respuesta = registrar_medicion(self.client, kpi, '60', date(2027, 1, 31))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('60.00'))
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).first().tipo_alerta, 'KPI Incumplido')
+
+        medicion_id = respuesta.data['id']
+        respuesta_patch = self.client.patch(
+            f'/api/mediciones/{medicion_id}/', {'valor_resultado': '95'}
+        )
+
+        self.assertEqual(respuesta_patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('95.00'))
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 0)
+
+
+class SerializersAcumuladosTests(MedicionTestsBase):
+    """Bloque 5 - casos 25 a 27: campos calculados expuestos por los
+    serializers, de solo lectura."""
+
+    NOMBRE_USUARIO = 'admin_serializers_acumulado'
+
+    # 25. IndicadorKPISerializer expone promedio, cantidad y estado.
+    def test_indicador_kpi_serializer_expone_promedio_cantidad_estado(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI serializer acumulado')
+        registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+
+        response = self.client.get(f'/api/indicadores-kpi/{kpi.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(str(response.data['promedio_acumulado'])), Decimal('70.00'))
+        self.assertEqual(response.data['cantidad_mediciones'], 2)
+        self.assertEqual(response.data['estado_acumulado_nombre'], 'En riesgo')
+        self.assertIsNotNone(response.data['estado_acumulado_color'])
+        self.assertIsNotNone(response.data['estado_acumulado_id'])
+
+    # 26. MedicionSerializer expone el acumulado histórico hasta esa
+    # medición (distinto de valor_resultado y de porcentaje_cumplimiento).
+    def test_medicion_serializer_expone_acumulado_historico(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI serializer historico')
+        r1 = registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        r2 = registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+
+        self.assertEqual(
+            Decimal(str(r1.data['promedio_acumulado_hasta_medicion'])), Decimal('80.00')
+        )
+        self.assertEqual(
+            Decimal(str(r2.data['promedio_acumulado_hasta_medicion'])), Decimal('70.00')
+        )
+        self.assertEqual(Decimal(str(r1.data['valor_resultado'])), Decimal('80.0000'))
+        self.assertIsNotNone(r2.data['estado_acumulado_hasta_medicion_nombre'])
+
+    # 27. Los campos acumulados son de solo lectura: enviarlos en un PATCH
+    # no los sobrescribe, siguen siendo el valor calculado.
+    def test_campos_acumulados_son_solo_lectura(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI campos solo lectura')
+        registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi.id}/', {'promedio_acumulado': '999.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(str(response.data['promedio_acumulado'])), Decimal('80.00'))
+
+
+class CasoAisladoOchentaSesentaCuarentaTests(MedicionTestsBase):
+    """Bloque 5 - punto 37: caso aislado que el proyecto exige verificar
+    exactamente. Mediciones 80, 60, 40 (periodos 1, 2 y 3) NUNCA deben
+    producir un promedio "normalizado contra meta" (70.58/68.42/etc.), solo
+    el promedio directo de valor_resultado."""
+
+    NOMBRE_USUARIO = 'admin_caso_80_60_40'
+
+    def test_caso_80_60_40(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI caso 80-60-40', valor_meta='85.00')
+
+        r1 = registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
+        r2 = registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
+        r3 = registrar_medicion(self.client, kpi, '40', date(2027, 3, 31))
+
+        self.assertEqual(
+            Decimal(str(r1.data['promedio_acumulado_hasta_medicion'])), Decimal('80.00')
+        )
+        self.assertEqual(
+            Decimal(str(r2.data['promedio_acumulado_hasta_medicion'])), Decimal('70.00')
+        )
+        self.assertEqual(
+            Decimal(str(r3.data['promedio_acumulado_hasta_medicion'])), Decimal('60.00')
+        )
+
+        promedio_actual = calcular_promedio_acumulado_kpi(kpi)
+        self.assertEqual(promedio_actual, Decimal('60.00'))
+        self.assertNotEqual(promedio_actual, Decimal('70.58'))
+        self.assertNotEqual(promedio_actual, Decimal('68.42'))
+
+        estado = obtener_estado_acumulado_kpi(kpi, promedio_actual)
+        self.assertEqual(estado.nombre, 'Incumplido')
+
+
+class UnidadNoPorcentualTests(MedicionTestsBase):
+    """Bloque 5 - punto 38: el promedio acumulado no asume que todos los
+    KPI midan un porcentaje. KPI en 'días', resultados 5, 4, 6 -> promedio
+    5.00 días (nunca con símbolo de %)."""
+
+    NOMBRE_USUARIO = 'admin_dias'
+
+    def test_promedio_en_dias_no_asume_porcentaje(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI dias', valor_meta='5.00', unidad='días')
+
+        registrar_medicion(self.client, kpi, '5', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi, '4', date(2027, 2, 28))
+        r3 = registrar_medicion(self.client, kpi, '6', date(2027, 3, 31))
+
+        promedio = calcular_promedio_acumulado_kpi(kpi)
+        self.assertEqual(promedio, Decimal('5.00'))
+        self.assertEqual(kpi.unidad_medida, 'días')
+        self.assertEqual(
+            Decimal(str(r3.data['promedio_acumulado_hasta_medicion'])), Decimal('5.00')
+        )
+
+
+# ============================================================
+# BLOQUE 5.1 - UX de alertas: marcar una Alerta (cumplimiento o
+# periodo vencido) como revisada, individual y en bloque, desde
+# el Centro de notificaciones.
+# ============================================================
+
+from .services import marcar_alerta_revisada
+
+
+def crear_usuario_operativo(username):
+    rol, _ = Rol.objects.get_or_create(
+        nombre='Operativo',
+        defaults={'descripcion': 'Rol de prueba', 'estado': True},
+    )
+
+    usuario = Usuario.objects.create_user(username=username, password='clave-prueba-123')
+    usuario.rol = rol
+    usuario.correo = f'{username}@sniff.test'
+    usuario.save()
+
+    return usuario
+
+
+class MarcarAlertaRevisadaTests(MedicionTestsBase):
+    """Bloque 5.1 - casos A a D del plan de pruebas de alertas."""
+
+    NOMBRE_USUARIO = 'admin_marcar_revisada'
+
+    # A. Una alerta pendiente -> marcar revisada -> cambia de estado, queda
+    # en BD (no se borra), con fecha_revision y revisado_por.
+    def test_marcar_alerta_individual_revisada(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI marcar revisada')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+
+        alerta = alertas_cumplimiento_pendientes(kpi).first()
+        self.assertIsNotNone(alerta)
+
+        response = self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['estado_alerta'], 'revisada')
+
+        alerta.refresh_from_db()
+        self.assertEqual(alerta.estado_alerta, 'revisada')
+        self.assertIsNotNone(alerta.fecha_revision)
+        self.assertEqual(alerta.revisado_por_id, self.usuario.id)
+
+        # Ya no aparece entre las pendientes del centro de notificaciones,
+        # pero sigue existiendo en la base para trazabilidad.
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 0)
+        self.assertTrue(Alerta.objects.filter(id=alerta.id).exists())
+
+    # Idempotencia: marcar de nuevo una alerta ya revisada (o descartada)
+    # no falla y no cambia nada.
+    def test_marcar_revisada_es_idempotente(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI idempotente')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+        alerta = alertas_cumplimiento_pendientes(kpi).first()
+
+        self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
+        alerta.refresh_from_db()
+        fecha_revision_original = alerta.fecha_revision
+
+        response = self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        alerta.refresh_from_db()
+        self.assertEqual(alerta.estado_alerta, 'revisada')
+        self.assertEqual(alerta.fecha_revision, fecha_revision_original)
+
+    # B. Marcar todas las alertas pendientes en bloque.
+    def test_marcar_todas_alertas_revisadas(self):
+        kpi1 = self.crear_kpi('Mensual', nombre='KPI bloque 1')
+        kpi2 = self.crear_kpi('Mensual', nombre='KPI bloque 2')
+        registrar_medicion(self.client, kpi1, '75', date(2027, 1, 31))
+        registrar_medicion(self.client, kpi2, '30', date(2027, 1, 31))
+
+        self.assertEqual(Alerta.objects.filter(estado_alerta='pendiente').count(), 2)
+
+        response = self.client.post('/api/alertas/marcar-todas-revisadas/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(Alerta.objects.filter(estado_alerta='pendiente').count(), 0)
+        self.assertEqual(Alerta.objects.filter(estado_alerta='revisada').count(), 2)
+
+    # "Marcar todas" sin ninguna alerta pendiente no debe producir error.
+    def test_marcar_todas_sin_alertas_no_falla(self):
+        response = self.client.post('/api/alertas/marcar-todas-revisadas/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    # C. Revisar una alerta y luego registrar una nueva medición: si el KPI
+    # sigue En riesgo/Incumplido, debe generarse una NUEVA alerta pendiente
+    # y la anterior permanece 'revisada' en BD (no se reutiliza).
+    def test_nueva_medicion_tras_revisar_genera_nueva_alerta(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI nueva alerta tras revisar')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+
+        alerta_original = alertas_cumplimiento_pendientes(kpi).first()
+        marcar_alerta_revisada(alerta_original, usuario=self.usuario)
+
+        # Sigue en riesgo/incumplido tras la segunda medición.
+        registrar_medicion(self.client, kpi, '20', date(2027, 2, 28))
+
+        pendientes = alertas_cumplimiento_pendientes(kpi)
+        self.assertEqual(pendientes.count(), 1)
+        self.assertNotEqual(pendientes.first().id, alerta_original.id)
+
+        alerta_original.refresh_from_db()
+        self.assertEqual(alerta_original.estado_alerta, 'revisada')
+
+    # D. Si el KPI pasa a Favorable, no debe quedar alerta pendiente de
+    # cumplimiento (ni una reutilizada ni una nueva).
+    def test_favorable_tras_revisar_no_deja_pendiente(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI favorable tras revisar')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+
+        alerta_original = alertas_cumplimiento_pendientes(kpi).first()
+        marcar_alerta_revisada(alerta_original, usuario=self.usuario)
+
+        registrar_medicion(self.client, kpi, '95', date(2027, 2, 28))
+
+        self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 0)
+        alerta_original.refresh_from_db()
+        self.assertEqual(alerta_original.estado_alerta, 'revisada')
+
+    # 'Periodo vencido sin medición' también puede marcarse revisada desde
+    # el mismo endpoint (no es exclusivo de las alertas de cumplimiento).
+    def test_periodo_vencido_tambien_puede_marcarse_revisada(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI periodo vencido revisar')
+
+        with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 4, 1)):
+            generar_alertas_periodos_vencidos()
+
+        alerta = Alerta.objects.filter(
+            indicador=kpi, tipo_alerta='Periodo vencido sin medición',
+        ).first()
+        self.assertIsNotNone(alerta)
+
+        response = self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        alerta.refresh_from_db()
+        self.assertEqual(alerta.estado_alerta, 'revisada')
+
+    # No amplía roles: un usuario no administrador sigue sin poder marcar
+    # alertas como revisadas (mismo permiso ya existente en AlertaViewSet).
+    def test_usuario_no_admin_no_puede_marcar_revisada(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI permiso operativo')
+        registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
+        alerta = alertas_cumplimiento_pendientes(kpi).first()
+
+        usuario_operativo = crear_usuario_operativo('operativo_marcar_revisada')
+        self.client.force_authenticate(user=usuario_operativo)
+
+        response = self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        alerta.refresh_from_db()
+        self.assertEqual(alerta.estado_alerta, 'pendiente')

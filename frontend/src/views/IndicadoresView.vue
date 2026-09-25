@@ -16,6 +16,7 @@ import {
   obtenerRangosKpi,
 } from '../services/indicadorService'
 import { formatearNumero } from '../utils/formato'
+import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
 import { useConfirmacion } from '../composables/useConfirmacion'
 import {
   puedeAnularKpi,
@@ -184,6 +185,14 @@ const indicadoresAutorizados = computed(() => {
 const indicadoresAnulados = computed(() => {
   return indicadores.value.filter((indicador) => indicador.estado === 'anulado').length
 })
+
+function textoPromedioAcumulado(indicador) {
+  if (indicador.promedio_acumulado === null || indicador.promedio_acumulado === undefined) {
+    return 'Sin mediciones'
+  }
+
+  return formatearNumero(indicador.promedio_acumulado, { unidad: indicador.unidad_medida })
+}
 
 function textoEstado(estado) {
   const estados = {
@@ -602,7 +611,18 @@ onBeforeUnmount(() => {
         No hay indicadores KPI para mostrar.
       </div>
 
-      <table v-else>
+      <div v-else class="table-scroll">
+      <table>
+        <colgroup>
+          <col style="width: 18%">
+          <col style="width: 13%">
+          <col style="width: 9%">
+          <col style="width: 11%">
+          <col style="width: 8%">
+          <col style="width: 10%">
+          <col style="width: 9%">
+          <col style="width: 22%">
+        </colgroup>
         <thead>
           <tr>
             <th>Indicador KPI</th>
@@ -610,8 +630,9 @@ onBeforeUnmount(() => {
             <th>Meta</th>
             <th>Plan anual</th>
             <th>Frecuencia</th>
+            <th title="Promedio directo de los resultados registrados de este KPI, con su estado según sus propios rangos de cumplimiento.">Promedio acumulado</th>
             <th>Estado</th>
-            <th style="text-align: right;">Acciones</th>
+            <th class="th-acciones" style="text-align: right;">Acciones</th>
           </tr>
         </thead>
 
@@ -663,9 +684,29 @@ onBeforeUnmount(() => {
             </td>
 
             <td>
-              <span class="badge" :class="estadoClase(indicador.estado)">
+              <div class="meta-value">
+                {{ textoPromedioAcumulado(indicador) }}
+              </div>
+
+              <span
+                v-if="indicador.promedio_acumulado !== null && indicador.promedio_acumulado !== undefined"
+                class="badge"
+                :class="claseColorCumplimiento(indicador.estado_acumulado_color)"
+                :title="textoEstadoCumplimiento(indicador.estado_acumulado_nombre)"
+              >
                 <span class="badge-dot"></span>
-                {{ textoEstado(indicador.estado) }}
+                <span class="badge-text">{{ textoEstadoCumplimiento(indicador.estado_acumulado_nombre) }}</span>
+              </span>
+
+              <div v-else class="cell-sub">
+                {{ indicador.cantidad_mediciones }} mediciones
+              </div>
+            </td>
+
+            <td>
+              <span class="badge" :class="estadoClase(indicador.estado)" :title="textoEstado(indicador.estado)">
+                <span class="badge-dot"></span>
+                <span class="badge-text">{{ textoEstado(indicador.estado) }}</span>
               </span>
 
               <div v-if="indicador.autorizado_por_username" class="cell-sub">
@@ -673,7 +714,7 @@ onBeforeUnmount(() => {
               </div>
             </td>
 
-            <td>
+            <td class="td-acciones">
               <div class="actions-cell">
                 <button
                   class="action-icon-btn"
@@ -765,6 +806,7 @@ onBeforeUnmount(() => {
           </tr>
         </tbody>
       </table>
+      </div>
 
       <div class="table-footer">
         <div class="showing">
@@ -1054,9 +1096,28 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
+.table-scroll {
+  /* Red de seguridad: table-layout:fixed + colgroup ya reparte el 100%
+     del ancho disponible entre columnas (Acciones incluida) sin que la
+     tabla se salga del card en anchos normales (>=1366px). Este scroll
+     solo se activa si min-width fuerza a la tabla a ser más angosta que
+     el contenedor (ventanas muy angostas), en vez de cortar botones. */
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
+  min-width: 860px;
   border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.th-acciones,
+.td-acciones {
+  /* El ancho real lo define el <colgroup> (22%, calculado para alcanzar
+     siempre a Ver + Autorizar + Editar + Anular sin cortarse). white-space
+     evita que los botones bajen a una segunda línea y deformen la fila. */
+  white-space: nowrap;
 }
 
 thead th {
@@ -1076,6 +1137,10 @@ tbody td {
   color: #1d3557;
   border-bottom: 1px solid #f1f4f7;
   vertical-align: middle;
+  /* table-layout:fixed no recorta por sí solo el contenido más ancho que
+     su columna: sin esto, un valor que no entra se dibuja encima de la
+     columna vecina en vez de truncarse dentro de la suya. */
+  overflow: hidden;
 }
 
 tbody tr:last-child td {
@@ -1199,11 +1264,19 @@ tbody tr:hover {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 100%;
+  min-width: 0;
   font-size: 11px;
   font-weight: 800;
   padding: 4px 10px;
   border-radius: 20px;
   white-space: nowrap;
+}
+
+.badge-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .badge.ok {
@@ -1227,6 +1300,7 @@ tbody tr:hover {
 }
 
 .badge-dot {
+  flex-shrink: 0;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1237,6 +1311,7 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 
@@ -1322,13 +1397,6 @@ tbody tr:hover {
   color: #457b9d;
   font-size: 12.5px;
   font-weight: 800;
-}
-
-@media (max-width: 1200px) {
-  table {
-    display: block;
-    overflow-x: auto;
-  }
 }
 
 @media (max-width: 1100px) {

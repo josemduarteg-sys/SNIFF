@@ -342,3 +342,23 @@ class AlertaViewSet(viewsets.ModelViewSet):
     serializer_class = AlertaSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
 
+    @action(detail=True, methods=['post'], url_path='marcar-revisada')
+    def marcar_revisada(self, request, pk=None):
+        from .services import marcar_alerta_revisada
+
+        alerta = self.get_object()
+        marcar_alerta_revisada(alerta, usuario=request.user)
+
+        serializer = self.get_serializer(alerta)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='marcar-todas-revisadas')
+    def marcar_todas_revisadas(self, request):
+        from .services import marcar_todas_alertas_revisadas
+
+        actualizadas = marcar_todas_alertas_revisadas(usuario=request.user)
+
+        return Response({
+            'detail': f'{actualizadas} alerta(s) marcada(s) como revisada(s).'
+        })
+

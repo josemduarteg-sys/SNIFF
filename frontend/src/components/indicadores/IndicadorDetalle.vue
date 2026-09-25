@@ -1,7 +1,9 @@
 <script setup>
+import { computed } from 'vue'
 import { formatearNumero } from '../../utils/formato'
+import { claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
 
-defineProps({
+const props = defineProps({
   indicador: {
     type: Object,
     required: true,
@@ -12,6 +14,20 @@ defineProps({
     default: () => [],
   },
 })
+
+const tieneMediciones = computed(() => {
+  return props.indicador.promedio_acumulado !== null && props.indicador.promedio_acumulado !== undefined
+})
+
+const textoPromedioAcumulado = computed(() => {
+  if (!tieneMediciones.value) {
+    return 'Sin mediciones'
+  }
+
+  return formatearNumero(props.indicador.promedio_acumulado, { unidad: props.indicador.unidad_medida })
+})
+
+const claseEstadoAcumulado = computed(() => claseColorCumplimiento(props.indicador.estado_acumulado_color))
 
 function textoEstado(estado) {
   const estados = {
@@ -102,6 +118,36 @@ function formatearCriterio(rango) {
       <div class="detail-item detail-full">
         <span>Fórmula de medición</span>
         <strong>{{ indicador.formula_medicion || 'Sin fórmula registrada' }}</strong>
+      </div>
+    </div>
+
+    <div class="criterios-block">
+      <div class="criterios-head">
+        <span>Seguimiento acumulado</span>
+        <p>Promedio directo de los resultados registrados de este KPI y su estado según sus propios rangos de cumplimiento.</p>
+      </div>
+
+      <div class="seguimiento-grid">
+        <div class="detail-item">
+          <span>Promedio acumulado</span>
+          <strong>{{ textoPromedioAcumulado }}</strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Cantidad de mediciones</span>
+          <strong>{{ indicador.cantidad_mediciones ?? 0 }}</strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Estado actual acumulado</span>
+          <strong v-if="tieneMediciones">
+            <span class="badge" :class="claseEstadoAcumulado">
+              <span class="badge-dot"></span>
+              {{ textoEstadoCumplimiento(indicador.estado_acumulado_nombre) }}
+            </span>
+          </strong>
+          <strong v-else>Sin mediciones</strong>
+        </div>
       </div>
     </div>
 
@@ -201,6 +247,50 @@ p {
   padding: 14px;
 }
 
+.seguimiento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.badge.ok {
+  background: rgba(42, 157, 143, 0.12);
+  color: #2a9d8f;
+}
+
+.badge.warning {
+  background: rgba(244, 162, 97, 0.16);
+  color: #b9701e;
+}
+
+.badge.danger {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
+}
+
+.badge.neutral {
+  background: rgba(154, 168, 184, 0.16);
+  color: #5e6e82;
+}
+
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .criterios-head span {
   display: block;
   color: #1d3557;
@@ -258,6 +348,10 @@ p {
 
 @media (max-width: 640px) {
   .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .seguimiento-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -74,6 +74,14 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
     autorizado_por_username = serializers.CharField(source='autorizado_por.username', read_only=True)
     creado_por_username = serializers.CharField(source='creado_por.username', read_only=True)
     puede_modificarse = serializers.SerializerMethodField()
+    # Bloque 5 — seguimiento acumulado del KPI: calculados en cada
+    # serialización a partir de las Mediciones reales (nunca almacenados
+    # en el modelo, ver services.calcular_promedio_acumulado_kpi).
+    promedio_acumulado = serializers.SerializerMethodField()
+    cantidad_mediciones = serializers.SerializerMethodField()
+    estado_acumulado_id = serializers.SerializerMethodField()
+    estado_acumulado_nombre = serializers.SerializerMethodField()
+    estado_acumulado_color = serializers.SerializerMethodField()
 
     class Meta:
         model = IndicadorKPI
@@ -104,6 +112,11 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'creado_por',
             'creado_por_username',
             'puede_modificarse',
+            'promedio_acumulado',
+            'cantidad_mediciones',
+            'estado_acumulado_id',
+            'estado_acumulado_nombre',
+            'estado_acumulado_color',
             'fecha_creacion',
         ]
         read_only_fields = [
@@ -116,6 +129,11 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'creado_por',
             'creado_por_username',
             'puede_modificarse',
+            'promedio_acumulado',
+            'cantidad_mediciones',
+            'estado_acumulado_id',
+            'estado_acumulado_nombre',
+            'estado_acumulado_color',
         ]
         # DRF genera automáticamente un UniqueTogetherValidator a partir de
         # la UniqueConstraint del modelo (objetivo_especifico, nombre), que
@@ -146,6 +164,47 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
 
     def get_puede_modificarse(self, obj):
         return obj.puede_modificarse()
+
+    def _promedio_acumulado_cacheado(self, obj):
+        # Los 5 campos acumulados de abajo comparten el mismo promedio y el
+        # mismo estado calculados; se cachean en la instancia para no
+        # repetir las mismas consultas varias veces por cada KPI serializado.
+        if not hasattr(obj, '_promedio_acumulado_cache'):
+            from .services import calcular_promedio_acumulado_kpi
+
+            obj._promedio_acumulado_cache = calcular_promedio_acumulado_kpi(obj)
+
+        return obj._promedio_acumulado_cache
+
+    def _estado_acumulado_cacheado(self, obj):
+        if not hasattr(obj, '_estado_acumulado_cache'):
+            from .services import obtener_estado_acumulado_kpi
+
+            obj._estado_acumulado_cache = obtener_estado_acumulado_kpi(
+                obj, self._promedio_acumulado_cacheado(obj),
+            )
+
+        return obj._estado_acumulado_cache
+
+    def get_promedio_acumulado(self, obj):
+        return self._promedio_acumulado_cacheado(obj)
+
+    def get_cantidad_mediciones(self, obj):
+        from .services import contar_mediciones_kpi
+
+        return contar_mediciones_kpi(obj)
+
+    def get_estado_acumulado_id(self, obj):
+        estado = self._estado_acumulado_cacheado(obj)
+        return estado.id if estado else None
+
+    def get_estado_acumulado_nombre(self, obj):
+        estado = self._estado_acumulado_cacheado(obj)
+        return estado.nombre if estado else None
+
+    def get_estado_acumulado_color(self, obj):
+        estado = self._estado_acumulado_cacheado(obj)
+        return estado.color if estado else None
 
     def validate(self, attrs):
         from apps.estrategia.services import plan_anual_esta_bloqueado
@@ -417,6 +476,12 @@ class MedicionSerializer(serializers.ModelSerializer):
     evidencia_nombre = serializers.SerializerMethodField()
     tiene_evidencia = serializers.SerializerMethodField()
     puede_modificarse = serializers.SerializerMethodField()
+    # Bloque 5: promedio acumulado del KPI HASTA esta medición (ordenado por
+    # PeriodoMedicion, no por fecha_registro) — distinto del resultado del
+    # propio periodo (valor_resultado) y del porcentaje_cumplimiento legacy.
+    promedio_acumulado_hasta_medicion = serializers.SerializerMethodField()
+    estado_acumulado_hasta_medicion_nombre = serializers.SerializerMethodField()
+    estado_acumulado_hasta_medicion_color = serializers.SerializerMethodField()
 
     class Meta:
         model = Medicion
@@ -443,6 +508,9 @@ class MedicionSerializer(serializers.ModelSerializer):
             'fecha_medicion',
             'valor_resultado',
             'porcentaje_cumplimiento',
+            'promedio_acumulado_hasta_medicion',
+            'estado_acumulado_hasta_medicion_nombre',
+            'estado_acumulado_hasta_medicion_color',
             'observacion',
             'observaciones',
             'evidencia',
@@ -460,6 +528,9 @@ class MedicionSerializer(serializers.ModelSerializer):
             'fecha_medicion',
             'fecha_registro',
             'porcentaje_cumplimiento',
+            'promedio_acumulado_hasta_medicion',
+            'estado_acumulado_hasta_medicion_nombre',
+            'estado_acumulado_hasta_medicion_color',
             'periodo_nombre',
             'valor_meta',
             'observaciones',
@@ -501,6 +572,30 @@ class MedicionSerializer(serializers.ModelSerializer):
 
     def get_porcentaje_cumplimiento(self, obj):
         return round(obj.calcular_cumplimiento(), 2)
+
+    def _estado_acumulado_hasta_medicion_cacheado(self, obj):
+        # Comparte el cálculo entre los 3 campos "..._hasta_medicion" de
+        # abajo para no repetir la misma consulta por cada uno.
+        if not hasattr(obj, '_estado_acumulado_hasta_medicion_cache'):
+            from .services import calcular_promedio_acumulado_kpi, obtener_estado_acumulado_kpi
+
+            promedio = calcular_promedio_acumulado_kpi(obj.indicador, hasta_periodo=obj.periodo)
+            estado = obtener_estado_acumulado_kpi(obj.indicador, promedio)
+            obj._estado_acumulado_hasta_medicion_cache = (promedio, estado)
+
+        return obj._estado_acumulado_hasta_medicion_cache
+
+    def get_promedio_acumulado_hasta_medicion(self, obj):
+        promedio, _ = self._estado_acumulado_hasta_medicion_cacheado(obj)
+        return promedio
+
+    def get_estado_acumulado_hasta_medicion_nombre(self, obj):
+        _, estado = self._estado_acumulado_hasta_medicion_cacheado(obj)
+        return estado.nombre if estado else None
+
+    def get_estado_acumulado_hasta_medicion_color(self, obj):
+        _, estado = self._estado_acumulado_hasta_medicion_cacheado(obj)
+        return estado.color if estado else None
 
     def get_evidencia_nombre(self, obj):
         if not obj.evidencia:
@@ -588,7 +683,7 @@ class MedicionSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         from apps.auditoria.services import registrar_bitacora
         from .services import (
-            generar_alerta_para_medicion,
+            actualizar_alerta_cumplimiento_kpi,
             obtener_estado_para_medicion,
             obtener_o_crear_meta_vigente,
             obtener_o_crear_periodo,
@@ -628,7 +723,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             else medicion.registrado_por
         )
 
-        alerta = generar_alerta_para_medicion(medicion)
+        alerta = actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
         resolver_alertas_periodo_vencido(medicion, usuario=usuario)
 
         registrar_bitacora(
@@ -660,7 +755,7 @@ class MedicionSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         from apps.auditoria.services import registrar_bitacora
         from .services import (
-            generar_alerta_para_medicion,
+            actualizar_alerta_cumplimiento_kpi,
             obtener_estado_para_medicion,
             resolver_alertas_periodo_vencido,
         )
@@ -693,7 +788,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         usuario = request.user if request and request.user.is_authenticated else medicion.registrado_por
 
-        alerta = generar_alerta_para_medicion(medicion)
+        alerta = actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
         resolver_alertas_periodo_vencido(medicion, usuario=usuario)
 
         registrar_bitacora(

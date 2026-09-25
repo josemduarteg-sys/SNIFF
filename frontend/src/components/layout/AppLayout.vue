@@ -3,7 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import SidebarMenu from './SidebarMenu.vue'
 import ProfileDropdown from './ProfileDropdown.vue'
-import { obtenerAlertasPendientes } from '../../services/alertaService'
+import {
+  marcarAlertaRevisada,
+  marcarTodasAlertasRevisadas,
+  obtenerAlertasPendientes,
+} from '../../services/alertaService'
 import {
   obtenerNotificacionesNoLeidas,
   marcarNotificacionLeida,
@@ -175,6 +179,21 @@ async function marcarLeida(item) {
   }
 }
 
+// Bloque 5.1: acción individual de una Alerta KPI dentro del centro de
+// notificaciones. Retira la alerta de la lista (recargando desde el
+// backend, que ya deja de traerla al dejar de estar 'pendiente') y
+// actualiza el contador de la campanita, sin necesidad de F5.
+async function marcarAlertaComoRevisada(item) {
+  if (item.tipoElemento !== 'alerta') return
+
+  try {
+    await marcarAlertaRevisada(item.idOriginal)
+    await cargarCentroNotificaciones()
+  } catch (e) {
+    console.error('No se pudo marcar la alerta como revisada:', e)
+  }
+}
+
 async function abrirElementoNotificacion(item) {
   const enlace = item.enlace || '/dashboard'
 
@@ -193,12 +212,28 @@ async function abrirElementoNotificacion(item) {
   }
 }
 
+// Bloque 5.1: "Marcar todas" ahora procesa TODO lo pendiente del centro,
+// no solo Notificacion — Notificacion pasa a leída y Alerta KPI pendiente
+// pasa a revisada. Cada tarea solo se dispara si hay algo de ese tipo, así
+// que funciona igual si solo hay alertas, solo notificaciones, o ninguna.
 async function marcarTodasLeidas() {
+  const tareas = []
+
+  if (notificacionesNoLeidas.value.length > 0) {
+    tareas.push(marcarTodasNotificacionesLeidas())
+  }
+
+  if (puedeVerAlertasKpi.value && alertasParaHeader.value.length > 0) {
+    tareas.push(marcarTodasAlertasRevisadas())
+  }
+
+  if (!tareas.length) return
+
   try {
-    await marcarTodasNotificacionesLeidas()
+    await Promise.all(tareas)
     await cargarCentroNotificaciones()
   } catch (e) {
-    console.error('No se pudieron marcar todas las notificaciones como leídas:', e)
+    console.error('No se pudieron marcar todos los elementos pendientes:', e)
   }
 }
 
@@ -285,20 +320,13 @@ onBeforeUnmount(() => {
                   </span>
 
                   <button
-                    v-if="notificacionesNoLeidas.length > 0"
+                    v-if="notificacionesNoLeidas.length > 0 || alertasParaHeader.length > 0"
                     class="notifications-mark-all"
                     type="button"
                     @click="marcarTodasLeidas"
                   >
                     Marcar todas
                   </button>
-
-                  <p
-                    v-else-if="alertasParaHeader.length > 0"
-                    class="notifications-helper-text"
-                  >
-                    Las alertas KPI se revisan desde el dashboard.
-                  </p>
                 </div>
 
                 <button
@@ -350,6 +378,17 @@ onBeforeUnmount(() => {
                         @click.stop="marcarLeida(item)"
                       >
                         Marcar leída
+                      </button>
+                    </div>
+
+                    <div v-else-if="item.tipoElemento === 'alerta'" class="notification-actions">
+                      <button
+                        class="notification-mark-read"
+                        type="button"
+                        title="Marcar esta alerta como revisada"
+                        @click.stop="marcarAlertaComoRevisada(item)"
+                      >
+                        Marcar revisada
                       </button>
                     </div>
                   </div>
@@ -610,13 +649,6 @@ onBeforeUnmount(() => {
 
 .notifications-mark-all:hover {
   text-decoration: underline;
-}
-
-.notifications-helper-text {
-  margin: 6px 0 0;
-  color: #8a9bb0;
-  font-size: 11px;
-  font-weight: 700;
 }
 
 .notifications-close {

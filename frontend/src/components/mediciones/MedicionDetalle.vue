@@ -18,6 +18,21 @@ const porcentaje = computed(() => {
 
 const claseCumplimiento = computed(() => claseColorCumplimiento(props.medicion.estado_cumplimiento_color))
 
+const tienePromedioAcumulado = computed(() => {
+  return props.medicion.promedio_acumulado_hasta_medicion !== null
+    && props.medicion.promedio_acumulado_hasta_medicion !== undefined
+})
+
+const textoPromedioAcumulado = computed(() => {
+  if (!tienePromedioAcumulado.value) {
+    return 'Sin mediciones'
+  }
+
+  return formatearNumero(props.medicion.promedio_acumulado_hasta_medicion, { unidad: props.medicion.unidad_medida })
+})
+
+const claseEstadoAcumulado = computed(() => claseColorCumplimiento(props.medicion.estado_acumulado_hasta_medicion_color))
+
 const diferencia = computed(() => {
   return formatearDiferencia(props.medicion.valor_resultado, props.medicion.valor_meta, {
     unidad: props.medicion.unidad_medida,
@@ -78,10 +93,13 @@ function formatearFecha(fecha) {
         <p>{{ medicion.observacion || medicion.observaciones || 'Sin observaciones registradas.' }}</p>
       </div>
 
-      <span class="badge" :class="claseCumplimiento">
-        <span class="badge-dot"></span>
-        {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
-      </span>
+      <div class="estado-periodo-resumen">
+        <span class="mini-label">Estado del periodo</span>
+        <span class="badge" :class="claseCumplimiento">
+          <span class="badge-dot"></span>
+          {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
+        </span>
+      </div>
     </div>
 
     <div class="progress-block">
@@ -155,7 +173,7 @@ function formatearFecha(fecha) {
       </div>
 
       <div class="detail-item">
-        <span>Estado</span>
+        <span title="Estado individual de esta medición, según su propio cumplimiento de meta.">Estado del periodo</span>
         <strong>{{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}</strong>
       </div>
 
@@ -178,6 +196,33 @@ function formatearFecha(fecha) {
         <span>Fecha de registro</span>
         <strong>{{ formatearFecha(medicion.fecha_registro) }}</strong>
       </div>
+    </div>
+
+    <div class="observation-box">
+      <span>Seguimiento acumulado del KPI hasta este periodo</span>
+
+      <div class="acumulado-grid">
+        <div class="detail-item">
+          <span>Promedio acumulado hasta este periodo</span>
+          <strong>{{ textoPromedioAcumulado }}</strong>
+        </div>
+
+        <div class="detail-item">
+          <span>Estado acumulado hasta este periodo</span>
+          <strong v-if="tienePromedioAcumulado">
+            <span class="badge" :class="claseEstadoAcumulado">
+              <span class="badge-dot"></span>
+              {{ textoEstadoCumplimiento(medicion.estado_acumulado_hasta_medicion_nombre) }}
+            </span>
+          </strong>
+          <strong v-else>Sin mediciones</strong>
+        </div>
+      </div>
+
+      <p class="acumulado-nota">
+        Es el promedio directo de todos los resultados de este KPI hasta este periodo — no es el
+        resultado de este periodo en particular (ver "Resultado" arriba) ni el "Estado del periodo".
+      </p>
     </div>
 
     <div class="observation-box">
@@ -251,6 +296,21 @@ p {
   font-size: 13px;
   font-weight: 500;
   line-height: 1.45;
+}
+
+.estado-periodo-resumen {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.mini-label {
+  color: #9aa8b8;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
 }
 
 .progress-block {
@@ -383,6 +443,24 @@ p {
   line-height: 1.5;
 }
 
+.acumulado-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.acumulado-grid strong {
+  font-size: 16px;
+}
+
+.acumulado-nota {
+  margin-top: 8px !important;
+  color: #9aa8b8 !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+}
+
 .btn-evidencia {
   display: inline-flex;
   align-items: center;
@@ -433,7 +511,15 @@ p {
     flex-direction: column;
   }
 
+  .estado-periodo-resumen {
+    align-items: flex-start;
+  }
+
   .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .acumulado-grid {
     grid-template-columns: 1fr;
   }
 }

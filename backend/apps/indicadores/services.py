@@ -1,11 +1,17 @@
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from .models import Alerta, EstadoCumplimiento, IndicadorKPI, Medicion, MetaKPI, PeriodoMedicion, RangoKPI
+
+TIPO_ALERTA_PERIODO_VENCIDO = 'Periodo vencido sin medición'
+"""Único lugar donde vive este literal (Bloque 5): lo usan tanto las
+alertas de periodo vencido (Bloque 4) como el nuevo cálculo de alerta de
+cumplimiento acumulado, para que este último pueda ignorar sin ambigüedad
+las alertas de la otra familia al buscar la alerta pendiente del KPI."""
 
 
 def hoy():
@@ -297,48 +303,217 @@ def recalcular_mediciones_pendientes():
     }
 
 
-def generar_alerta_para_medicion(medicion):
-    estado_nombre = medicion.estado_cumplimiento.nombre.lower()
-    porcentaje = calcular_porcentaje_cumplimiento(
-        valor_resultado=medicion.valor_resultado,
-        valor_meta=medicion.meta.valor_meta,
-    )
+def calcular_promedio_acumulado_kpi(indicador, hasta_periodo=None):
+    """REGLA DEFINITIVA del promedio acumulado (Bloque 5): promedio directo
+    de `Medicion.valor_resultado` de este KPI — NUNCA de
+    `valor_resultado / meta * 100` ni de `porcentaje_cumplimiento`, y NUNCA
+    mezclado con las mediciones de otro KPI (cada KPI tiene su propia
+    unidad, sus propios RangoKPI y su propio promedio). Ejemplo: mediciones
+    80, 60, 40 -> promedio = (80+60+40)/3 = 60.00 (nunca un valor derivado
+    de meta como 70.58/68.42).
 
-    if estado_nombre == 'favorable':
-        Alerta.objects.filter(
-            indicador=medicion.indicador,
-            medicion=medicion,
-            estado_alerta='pendiente',
-        ).update(
-            estado_alerta='descartada',
-            fecha_revision=timezone.now(),
-        )
+    Se aplica igual para todas las frecuencias (cada Medicion cuenta como
+    UNA observación, sin importar cuántos meses cubra su periodo) y las
+    mediciones de cierre automático en 0.00 participan como una más, sin
+    exclusión ni ponderación distinta.
+
+    No se persiste en base de datos (no existe un campo
+    `promedio_acumulado` en IndicadorKPI): se calcula al vuelo cada vez que
+    se necesita, siempre sobre las Mediciones reales de este KPI (que ya
+    pertenecen a un único año/PlanAnual).
+
+    `hasta_periodo` (un PeriodoMedicion) permite el acumulado histórico
+    "hasta cierta medición" (ej. hasta la de enero, hasta la de febrero...).
+    Se filtra por `PeriodoMedicion.fecha_inicio`, NUNCA por
+    `Medicion.fecha_registro` (una medición de enero registrada en febrero
+    sigue perteneciendo a enero).
+
+    Devuelve None cuando el KPI todavía no tiene ninguna medición (0.00
+    sería un resultado real y no puede usarse para representar "sin
+    datos"), o el promedio redondeado a 2 decimales en caso contrario.
+    """
+    mediciones = Medicion.objects.filter(indicador=indicador)
+
+    if hasta_periodo is not None:
+        mediciones = mediciones.filter(periodo__fecha_inicio__lte=hasta_periodo.fecha_inicio)
+
+    valores = list(mediciones.values_list('valor_resultado', flat=True))
+
+    if not valores:
         return None
 
-    tipo_alerta = f'Indicador {medicion.estado_cumplimiento.nombre}'
-    mensaje = (
-        f'El indicador "{medicion.indicador.nombre}" presenta un cumplimiento '
-        f'del {round(porcentaje, 2)}%, por lo que requiere seguimiento.'
+    total = sum((Decimal(valor) for valor in valores), Decimal('0'))
+    promedio = total / Decimal(len(valores))
+
+    return promedio.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def contar_mediciones_kpi(indicador):
+    return Medicion.objects.filter(indicador=indicador).count()
+
+
+def obtener_estado_acumulado_kpi(indicador, promedio_acumulado):
+    """Estado 'gerencial' actual del KPI (Bloque 5): clasifica el promedio
+    acumulado DIRECTAMENTE contra los RangoKPI reales del indicador,
+    reutilizando la misma función de clasificación que ya usa cada Medicion
+    individual (`obtener_estado_por_cumplimiento` — pese a su nombre de
+    parámetro, solo compara un número contra valor_minimo/valor_maximo, sin
+    asumir que sea un porcentaje). No hay umbrales hardcodeados acá.
+
+    Sin mediciones (promedio_acumulado=None) no hay nada que clasificar. Si
+    el promedio existe pero ningún RangoKPI lo cubre, se conserva el mismo
+    fallback técnico 'Pendiente de actualización' que ya usan las
+    Mediciones individuales."""
+    if promedio_acumulado is None:
+        return None
+
+    return obtener_estado_por_cumplimiento(
+        indicador=indicador,
+        porcentaje_cumplimiento=promedio_acumulado,
     )
 
-    alerta_existente = Alerta.objects.filter(
-        indicador=medicion.indicador,
-        medicion=medicion,
-        estado_alerta='pendiente',
-    ).first()
 
-    if alerta_existente:
-        alerta_existente.tipo_alerta = tipo_alerta
-        alerta_existente.mensaje = mensaje
-        alerta_existente.save()
-        return alerta_existente
+def formatear_valor_acumulado(valor, unidad):
+    """Texto del promedio acumulado con la unidad propia del KPI (nunca se
+    le agrega '%' si la unidad real es otra, punto 10 del Bloque 5)."""
+    texto = f'{valor:.2f}'
+
+    if not unidad:
+        return texto
+
+    if unidad == 'Q':
+        return f'Q {texto}'
+
+    return f'{texto} {unidad}'
+
+
+def actualizar_alerta_cumplimiento_kpi(indicador, medicion_actual=None):
+    """Alerta de cumplimiento del KPI basada en el PROMEDIO ACUMULADO
+    (Bloque 5) — reemplaza la lógica anterior de `generar_alerta_para_medicion`,
+    que clasificaba una sola Medicion aislada. Se llama después de crear o
+    editar cualquier Medicion (manual o de cierre automático).
+
+    Garantiza como máximo UNA alerta 'pendiente' de cumplimiento por KPI, y
+    es completamente independiente de las alertas de tipo
+    `TIPO_ALERTA_PERIODO_VENCIDO` (se excluyen explícitamente al buscar la
+    alerta pendiente existente, para no interferir con esa otra familia):
+
+    - Sin mediciones todavía: no genera ni mantiene ninguna alerta.
+    - Favorable: descarta la alerta pendiente existente (si la había) y no
+      crea una nueva.
+    - Sin RangoKPI aplicable ('Pendiente de actualización'): no se inventa
+      una alerta nueva; tampoco se descarta una alerta pendiente ya
+      existente solo por esta causa (puede seguir reflejando el último
+      estado real conocido).
+    - En riesgo / Incumplido: si ya hay una alerta pendiente para ese mismo
+      estado, se reutiliza (mensaje + medición asociada actualizados, sin
+      duplicar). Si el estado cambió respecto a la alerta pendiente
+      existente, esa alerta se descarta y se crea la correspondiente al
+      nuevo estado.
+    """
+    promedio = calcular_promedio_acumulado_kpi(indicador)
+    estado = obtener_estado_acumulado_kpi(indicador, promedio)
+
+    alerta_pendiente = Alerta.objects.filter(
+        indicador=indicador,
+        estado_alerta='pendiente',
+    ).exclude(tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO).first()
+
+    def descartar_pendiente():
+        alerta_pendiente.estado_alerta = 'descartada'
+        alerta_pendiente.fecha_revision = timezone.now()
+        alerta_pendiente.save(update_fields=['estado_alerta', 'fecha_revision'])
+
+    if promedio is None:
+        if alerta_pendiente:
+            descartar_pendiente()
+        return None
+
+    if estado is None or estado.nombre.lower() == 'pendiente de actualización':
+        return alerta_pendiente
+
+    if estado.nombre.lower() == 'favorable':
+        if alerta_pendiente:
+            descartar_pendiente()
+        return None
+
+    tipo_alerta = f'KPI {estado.nombre}'
+    cantidad = contar_mediciones_kpi(indicador)
+    mensaje = (
+        f'El KPI "{indicador.nombre}" tiene un promedio acumulado de '
+        f'{formatear_valor_acumulado(promedio, indicador.unidad_medida)} después de '
+        f'{cantidad} mediciones y se encuentra {estado.nombre}.'
+    )
+
+    if alerta_pendiente and alerta_pendiente.tipo_alerta == tipo_alerta:
+        alerta_pendiente.mensaje = mensaje
+
+        if medicion_actual is not None:
+            alerta_pendiente.medicion = medicion_actual
+
+        alerta_pendiente.save()
+        return alerta_pendiente
+
+    if alerta_pendiente:
+        descartar_pendiente()
 
     return Alerta.objects.create(
-        indicador=medicion.indicador,
-        medicion=medicion,
+        indicador=indicador,
+        medicion=medicion_actual,
         tipo_alerta=tipo_alerta,
         mensaje=mensaje,
         estado_alerta='pendiente',
+    )
+
+
+def generar_alerta_para_medicion(medicion):
+    """Wrapper de compatibilidad (Bloque 5): la alerta de cumplimiento del
+    KPI ya no se decide con el estado de una sola Medicion, sino con el
+    promedio acumulado del KPI completo. Ver `actualizar_alerta_cumplimiento_kpi`,
+    que es la implementación real usada por MedicionSerializer y por el
+    cierre automático de periodos vencidos."""
+    return actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
+
+
+def marcar_alerta_revisada(alerta, usuario=None):
+    """Marca una Alerta (de cualquier tipo: cumplimiento o 'Periodo vencido
+    sin medición') como revisada por un usuario. No la elimina ni reescribe
+    su mensaje: solo transiciona su estado, dejando trazabilidad completa
+    para auditoría (queda almacenada, con fecha_revision y revisado_por).
+
+    Idempotente: si la alerta ya no está 'pendiente' (ya es 'revisada' o
+    'descartada'), no hace nada y devuelve la alerta tal cual — evita
+    pisar, por ejemplo, una alerta ya 'descartada' por
+    `actualizar_alerta_cumplimiento_kpi`/`resolver_alertas_periodo_vencido`
+    con un estado 'revisada' contradictorio.
+
+    Una alerta ya revisada NUNCA vuelve a quedar 'pendiente' por este
+    camino: si más adelante se registra una nueva Medicion y el KPI sigue
+    En riesgo/Incumplido, es `actualizar_alerta_cumplimiento_kpi` quien
+    crea una alerta 'pendiente' nueva (ver esa función), no esta."""
+    if alerta.estado_alerta != 'pendiente':
+        return alerta
+
+    alerta.estado_alerta = 'revisada'
+    alerta.fecha_revision = timezone.now()
+    alerta.revisado_por = usuario
+    alerta.save(update_fields=['estado_alerta', 'fecha_revision', 'revisado_por'])
+
+    return alerta
+
+
+def marcar_todas_alertas_revisadas(usuario=None):
+    """Marca como revisadas TODAS las Alerta actualmente 'pendiente' (Bloque
+    5.1 — Centro de notificaciones). Alerta no está asociada a un usuario
+    destino (a diferencia de Notificacion): es información de KPI visible
+    para cualquiera con permiso de verla, así que "marcar todas" aplica al
+    total de alertas pendientes del sistema, sin distinguir tipo_alerta
+    (cumplimiento y 'Periodo vencido sin medición' comparten el mismo
+    ciclo de vida de estado_alerta)."""
+    return Alerta.objects.filter(estado_alerta='pendiente').update(
+        estado_alerta='revisada',
+        fecha_revision=timezone.now(),
+        revisado_por=usuario,
     )
 
 
@@ -369,7 +544,7 @@ def resolver_alertas_periodo_vencido(medicion, usuario=None):
 
     return Alerta.objects.filter(
         indicador=medicion.indicador,
-        tipo_alerta='Periodo vencido sin medición',
+        tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO,
         estado_alerta='pendiente',
         mensaje__icontains=periodo_nombre,
     ).update(
@@ -739,7 +914,7 @@ def cerrar_mediciones_vencidas(fecha_referencia=None):
                         cierre_automatico=True,
                     )
 
-                    generar_alerta_para_medicion(medicion)
+                    actualizar_alerta_cumplimiento_kpi(indicador, medicion_actual=medicion)
                     resolver_alertas_periodo_vencido(medicion, usuario=None)
             except Exception as error:
                 errores.append({
@@ -812,7 +987,7 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
 
         ya_existe = Alerta.objects.filter(
             indicador=indicador,
-            tipo_alerta='Periodo vencido sin medición',
+            tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO,
             mensaje__icontains=periodo_nombre,
         ).exists()
 
@@ -834,7 +1009,7 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
         Alerta.objects.create(
             indicador=indicador,
             medicion=None,
-            tipo_alerta='Periodo vencido sin medición',
+            tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO,
             mensaje=mensaje,
             estado_alerta='pendiente',
         )

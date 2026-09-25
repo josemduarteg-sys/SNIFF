@@ -91,28 +91,17 @@ const medicionesFiltradas = computed(() => {
 
 const totalMediciones = computed(() => mediciones.value.length)
 
-const promedioCumplimiento = computed(() => {
-  const porcentajes = mediciones.value
-    .map((medicion) => Number(medicion.porcentaje_cumplimiento))
-    .filter((valor) => !Number.isNaN(valor))
-
-  if (!porcentajes.length) return 0
-
-  const total = porcentajes.reduce((acumulado, valor) => acumulado + valor, 0)
-  return total / porcentajes.length
+// Bloque 5, punto 20: se elimina el promedio que mezclaba
+// porcentaje_cumplimiento de mediciones de distintos KPI (unidades, metas
+// y rangos distintos entre sí — un promedio así no significa nada). Se
+// reemplaza por conteos neutrales; el promedio acumulado real, por KPI, se
+// consulta en Indicadores KPI.
+const medicionesManuales = computed(() => {
+  return mediciones.value.filter((medicion) => !medicion.cierre_automatico).length
 })
 
-const medicionesFavorables = computed(() => {
-  return mediciones.value.filter((medicion) => {
-    return medicion.estado_cumplimiento_nombre?.toLowerCase().includes('favorable')
-  }).length
-})
-
-const medicionesRiesgo = computed(() => {
-  return mediciones.value.filter((medicion) => {
-    const estado = medicion.estado_cumplimiento_nombre?.toLowerCase() || ''
-    return estado.includes('riesgo') || estado.includes('incumplido')
-  }).length
+const medicionesAutomaticas = computed(() => {
+  return mediciones.value.filter((medicion) => medicion.cierre_automatico).length
 })
 
 async function cargarDatos() {
@@ -267,9 +256,9 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="kpi-value">{{ formatearNumero(promedioCumplimiento, { unidad: '%' }) }}</div>
-        <div class="kpi-label">Cumplimiento promedio</div>
-        <div class="kpi-foot">Promedio de mediciones registradas</div>
+        <div class="kpi-value">{{ medicionesManuales }}</div>
+        <div class="kpi-label">Registradas manualmente</div>
+        <div class="kpi-foot">Registradas por un usuario</div>
       </article>
 
       <article class="kpi-card">
@@ -282,27 +271,16 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="kpi-value">{{ medicionesFavorables }}</div>
-        <div class="kpi-label">En cumplimiento</div>
-        <div class="kpi-foot">Cumplen el rango esperado</div>
-      </article>
-
-      <article class="kpi-card">
-        <div class="kpi-top">
-          <div class="kpi-icon orange">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 8v5" />
-              <path d="M12 17h.01" />
-              <circle cx="12" cy="12" r="9" />
-            </svg>
-          </div>
-        </div>
-
-        <div class="kpi-value">{{ medicionesRiesgo }}</div>
-        <div class="kpi-label">Fuera de meta</div>
-        <div class="kpi-foot">Requieren atención o seguimiento</div>
+        <div class="kpi-value">{{ medicionesAutomaticas }}</div>
+        <div class="kpi-label">Cierres automáticos</div>
+        <div class="kpi-foot">Generados por vencimiento de periodo</div>
       </article>
     </section>
+
+    <p class="hint-acumulado">
+      El promedio acumulado y el estado de cumplimiento de cada KPI se consultan en
+      <router-link to="/indicadores">Indicadores KPI</router-link>.
+    </p>
 
     <div v-if="mensajeExito" class="alert success">
       {{ mensajeExito }}
@@ -368,7 +346,9 @@ onMounted(async () => {
             <th>Meta</th>
             <th>Resultado</th>
             <th title="Se calcula comparando el resultado obtenido con la meta establecida.">Cumplimiento de la meta</th>
-            <th>Estado</th>
+            <th title="Estado individual de esta medición, según su propio cumplimiento de meta.">Estado del periodo</th>
+            <th title="Promedio directo de los resultados del KPI hasta este periodo (no es el resultado de este periodo).">Promedio acumulado</th>
+            <th title="Estado del KPI según el promedio acumulado hasta este periodo (no es el estado de esta medición individual).">Estado acumulado</th>
             <th>Registrado por</th>
             <th>Tipo</th>
             <th style="text-align: right;">Acciones</th>
@@ -443,6 +423,25 @@ onMounted(async () => {
               <span class="badge" :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)">
                 <span class="badge-dot"></span>
                 {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
+              </span>
+            </td>
+
+            <td>
+              <div class="meta-value">
+                {{ formatearNumero(medicion.promedio_acumulado_hasta_medicion, { unidad: medicion.unidad_medida }) }}
+              </div>
+              <div class="cell-sub">
+                Hasta este periodo
+              </div>
+            </td>
+
+            <td>
+              <span
+                class="badge"
+                :class="claseColorCumplimiento(medicion.estado_acumulado_hasta_medicion_color)"
+              >
+                <span class="badge-dot"></span>
+                {{ textoEstadoCumplimiento(medicion.estado_acumulado_hasta_medicion_nombre) }}
               </span>
             </td>
 
@@ -527,9 +526,26 @@ onMounted(async () => {
 <style scoped>
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
   gap: 16px;
   margin-bottom: 24px;
+}
+
+.hint-acumulado {
+  margin: -10px 0 18px;
+  font-size: 12.5px;
+  color: #9aa8b8;
+  font-weight: 600;
+}
+
+.hint-acumulado a {
+  color: #457b9d;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.hint-acumulado a:hover {
+  text-decoration: underline;
 }
 
 .kpi-card,
