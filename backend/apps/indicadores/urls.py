@@ -3,8 +3,6 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     FrecuenciaViewSet,
-    TipoCalculoViewSet,
-    FuenteDatoViewSet,
     IndicadorKPIViewSet,
     MetaKPIViewSet,
     ResponsableKPIViewSet,
@@ -17,8 +15,6 @@ from .views import (
 
 router = DefaultRouter()
 router.register(r'frecuencias', FrecuenciaViewSet, basename='frecuencias')
-router.register(r'tipos-calculo', TipoCalculoViewSet, basename='tipos-calculo')
-router.register(r'fuentes-dato', FuenteDatoViewSet, basename='fuentes-dato')
 router.register(r'indicadores-kpi', IndicadorKPIViewSet, basename='indicadores-kpi')
 router.register(r'metas-kpi', MetaKPIViewSet, basename='metas-kpi')
 router.register(r'responsables-kpi', ResponsableKPIViewSet, basename='responsables-kpi')

@@ -20,6 +20,8 @@ import {
 } from '../services/solicitudRestablecimientoService'
 import { puedeGestionarUsuarios } from '../utils/permisos'
 import { useConfirmacion } from '../composables/useConfirmacion'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 
 const props = defineProps({
   usuario: {
@@ -104,6 +106,21 @@ const usuariosFiltrados = computed(() => {
   })
 })
 
+const {
+  paginaActual: paginaActualUsuarios,
+  porPagina: porPaginaUsuarios,
+  totalResultados: totalUsuariosFiltrados,
+  totalPaginas: totalPaginasUsuarios,
+  elementosVisibles: usuariosPagina,
+  rangoInicio: rangoInicioUsuarios,
+  rangoFin: rangoFinUsuarios,
+  irAPagina: irAPaginaUsuarios,
+} = usePaginacion(usuariosFiltrados)
+
+function cambiarPorPaginaUsuarios(valor) {
+  porPaginaUsuarios.value = valor
+}
+
 const solicitudesPendientes = computed(() => {
   return solicitudes.value.filter((s) => s.estado === 'pendiente').length
 })
@@ -145,6 +162,21 @@ const solicitudesFiltradas = computed(() => {
     )
   })
 })
+
+const {
+  paginaActual: paginaActualSolicitudes,
+  porPagina: porPaginaSolicitudes,
+  totalResultados: totalSolicitudesFiltradas,
+  totalPaginas: totalPaginasSolicitudes,
+  elementosVisibles: solicitudesPagina,
+  rangoInicio: rangoInicioSolicitudes,
+  rangoFin: rangoFinSolicitudes,
+  irAPagina: irAPaginaSolicitudes,
+} = usePaginacion(solicitudesFiltradas)
+
+function cambiarPorPaginaSolicitudes(valor) {
+  porPaginaSolicitudes.value = valor
+}
 
 async function cargarUsuariosYRoles() {
   if (!puedeGestionar.value) {
@@ -600,11 +632,25 @@ onBeforeUnmount(() => {
           Cargando usuarios...
         </div>
 
-        <div v-else-if="!usuariosFiltrados.length" class="empty-state">
+        <div v-else-if="!usuarios.length" class="empty-state">
           No hay usuarios para mostrar.
         </div>
 
-        <table v-else>
+        <div v-else-if="!usuariosFiltrados.length" class="empty-state">
+          No se encontraron resultados con los filtros aplicados.
+        </div>
+
+        <div v-else class="table-scroll">
+        <table>
+          <colgroup>
+            <col style="width: 16%">
+            <col style="width: 18%">
+            <col style="width: 12%">
+            <col style="width: 22%">
+            <col style="width: 12%">
+            <col style="width: 10%">
+            <col style="width: 20%">
+          </colgroup>
           <thead>
             <tr>
               <th>Usuario</th>
@@ -613,21 +659,21 @@ onBeforeUnmount(() => {
               <th>Correo</th>
               <th>Registrado</th>
               <th>Estado</th>
-              <th style="text-align: right;">Acciones</th>
+              <th class="th-acciones" style="text-align: right;">Acciones</th>
             </tr>
           </thead>
 
           <tbody>
             <tr
-              v-for="item in usuariosFiltrados"
+              v-for="item in usuariosPagina"
               :key="item.id"
             >
               <td>
-                <div class="cell-main">{{ item.username }}</div>
+                <div class="cell-main" :title="item.username">{{ item.username }}</div>
               </td>
 
               <td>
-                <div class="cell-main">
+                <div class="cell-main" :title="`${item.first_name || ''} ${item.last_name || ''}`.trim() || 'Sin nombre'">
                   {{ `${item.first_name || ''} ${item.last_name || ''}`.trim() || 'Sin nombre' }}
                 </div>
               </td>
@@ -639,7 +685,7 @@ onBeforeUnmount(() => {
               </td>
 
               <td>
-                <div class="cell-sub">{{ item.correo || item.email || 'Sin correo' }}</div>
+                <div class="cell-sub" :title="item.correo || item.email || 'Sin correo'">{{ item.correo || item.email || 'Sin correo' }}</div>
               </td>
 
               <td>{{ formatearFecha(item.date_joined) }}</td>
@@ -653,7 +699,7 @@ onBeforeUnmount(() => {
                 </span>
               </td>
 
-              <td>
+              <td class="td-acciones">
                 <div class="actions-cell">
                   <button
                     class="action-icon-btn"
@@ -695,6 +741,20 @@ onBeforeUnmount(() => {
             </tr>
           </tbody>
         </table>
+        </div>
+
+        <Paginacion
+          v-if="usuariosFiltrados.length"
+          :pagina-actual="paginaActualUsuarios"
+          :total-paginas="totalPaginasUsuarios"
+          :por-pagina="porPaginaUsuarios"
+          :rango-inicio="rangoInicioUsuarios"
+          :rango-fin="rangoFinUsuarios"
+          :total-resultados="totalUsuariosFiltrados"
+          etiqueta="usuarios"
+          @cambiar-pagina="irAPaginaUsuarios"
+          @cambiar-por-pagina="cambiarPorPaginaUsuarios"
+        />
       </section>
 
       <section v-if="tabActiva === 'solicitudes'" class="summary-grid">
@@ -756,11 +816,26 @@ onBeforeUnmount(() => {
           {{ errorSolicitudes }}
         </div>
 
-        <div v-else-if="!solicitudesFiltradas.length" class="empty-state">
+        <div v-else-if="!solicitudes.length" class="empty-state">
           No hay solicitudes de restablecimiento para mostrar.
         </div>
 
-        <table v-else>
+        <div v-else-if="!solicitudesFiltradas.length" class="empty-state">
+          No se encontraron resultados con los filtros aplicados.
+        </div>
+
+        <div v-else class="table-scroll">
+        <table>
+          <colgroup>
+            <col style="width: 17%">
+            <col style="width: 13%">
+            <col style="width: 15%">
+            <col style="width: 9%">
+            <col style="width: 10%">
+            <col style="width: 11%">
+            <col style="width: 11%">
+            <col style="width: 14%">
+          </colgroup>
           <thead>
             <tr>
               <th>Usuario</th>
@@ -770,29 +845,29 @@ onBeforeUnmount(() => {
               <th>Fecha solicitud</th>
               <th>Revisado por</th>
               <th>Atendido por</th>
-              <th style="text-align: right;">Acciones</th>
+              <th class="th-acciones" style="text-align: right;">Acciones</th>
             </tr>
           </thead>
 
           <tbody>
             <tr
-              v-for="solicitud in solicitudesFiltradas"
+              v-for="solicitud in solicitudesPagina"
               :key="solicitud.id"
               :id="`fila-solicitud-${solicitud.id}`"
               :class="{ 'highlight-row': solicitudResaltada === Number(solicitud.id) }"
             >
               <td>
-                <div class="cell-main">{{ solicitud.usuario_username }}</div>
-                <div class="cell-sub">{{ solicitud.usuario_nombre }}</div>
-                <div class="cell-sub">{{ solicitud.usuario_correo }}</div>
+                <div class="cell-main" :title="solicitud.usuario_username">{{ solicitud.usuario_username }}</div>
+                <div class="cell-sub cell-truncada" :title="solicitud.usuario_nombre">{{ solicitud.usuario_nombre }}</div>
+                <div class="cell-sub cell-truncada" :title="solicitud.usuario_correo">{{ solicitud.usuario_correo }}</div>
               </td>
 
               <td>
-                <div class="cell-sub">{{ solicitud.identificador_ingresado }}</div>
+                <div class="cell-sub cell-truncada" :title="solicitud.identificador_ingresado">{{ solicitud.identificador_ingresado }}</div>
               </td>
 
               <td>
-                <div class="cell-sub">{{ solicitud.motivo || 'Sin motivo' }}</div>
+                <div class="cell-sub cell-truncada" :title="solicitud.motivo || 'Sin motivo'">{{ solicitud.motivo || 'Sin motivo' }}</div>
               </td>
 
               <td>
@@ -804,14 +879,14 @@ onBeforeUnmount(() => {
               <td>{{ formatearFecha(solicitud.fecha_solicitud) }}</td>
 
               <td>
-                <div class="cell-sub">{{ solicitud.revisado_por_nombre || 'Sin revisar' }}</div>
+                <div class="cell-sub cell-truncada" :title="solicitud.revisado_por_nombre || 'Sin revisar'">{{ solicitud.revisado_por_nombre || 'Sin revisar' }}</div>
               </td>
 
               <td>
-                <div class="cell-sub">{{ solicitud.atendido_por_nombre || 'Sin atender' }}</div>
+                <div class="cell-sub cell-truncada" :title="solicitud.atendido_por_nombre || 'Sin atender'">{{ solicitud.atendido_por_nombre || 'Sin atender' }}</div>
               </td>
 
-              <td>
+              <td class="td-acciones">
                 <div class="actions-cell">
                   <template v-if="solicitud.estado === 'pendiente'">
                     <button
@@ -854,6 +929,20 @@ onBeforeUnmount(() => {
             </tr>
           </tbody>
         </table>
+        </div>
+
+        <Paginacion
+          v-if="solicitudesFiltradas.length"
+          :pagina-actual="paginaActualSolicitudes"
+          :total-paginas="totalPaginasSolicitudes"
+          :por-pagina="porPaginaSolicitudes"
+          :rango-inicio="rangoInicioSolicitudes"
+          :rango-fin="rangoFinSolicitudes"
+          :total-resultados="totalSolicitudesFiltradas"
+          etiqueta="solicitudes"
+          @cambiar-pagina="irAPaginaSolicitudes"
+          @cambiar-por-pagina="cambiarPorPaginaSolicitudes"
+        />
       </section>
 
       <ModalBase
@@ -1028,8 +1117,20 @@ onBeforeUnmount(() => {
 
 .actions-cell {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
+  row-gap: 6px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.th-acciones,
+.td-acciones {
+  white-space: normal;
 }
 
 .action-btn {
@@ -1093,6 +1194,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
+  max-width: 150px;
 }
 
 .current-user-chip {
@@ -1104,12 +1206,15 @@ onBeforeUnmount(() => {
   color: #457b9d;
   font-size: 10.5px;
   font-weight: 850;
+  white-space: nowrap;
 }
 
 .current-user-note {
   color: #9aa8b8;
   font-size: 10.5px;
   font-weight: 600;
+  text-align: right;
+  line-height: 1.35;
 }
 
 .saving-message {
@@ -1124,7 +1229,9 @@ onBeforeUnmount(() => {
 
 table {
   width: 100%;
+  min-width: 860px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th {
@@ -1136,6 +1243,9 @@ th {
   letter-spacing: 0.5px;
   padding: 12px 10px;
   border-bottom: 1px solid #e4eaef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 td {
@@ -1145,12 +1255,16 @@ td {
   font-size: 13px;
   font-weight: 600;
   vertical-align: top;
+  overflow: hidden;
 }
 
 .cell-main {
   color: #1d3557;
   font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-sub {
@@ -1160,14 +1274,24 @@ td {
   max-width: 320px;
 }
 
+.cell-truncada {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .role-chip,
 .status-chip {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   padding: 5px 9px;
   border-radius: 999px;
   font-size: 11.5px;
   font-weight: 850;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .role-chip {
@@ -1288,11 +1412,6 @@ td {
 @media (max-width: 800px) {
   .summary-grid {
     grid-template-columns: 1fr;
-  }
-
-  table {
-    display: block;
-    overflow-x: auto;
   }
 }
 </style>

@@ -171,7 +171,7 @@ function cancelar() {
     </div>
 
     <div class="help-box">
-      Solo se muestran planes anuales En uso. El objetivo general disponible depende del plan estratégico al que pertenece el plan anual seleccionado.
+      Se muestran únicamente los planes anuales En uso.
     </div>
 
     <div class="form-actions">

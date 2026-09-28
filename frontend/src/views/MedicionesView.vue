@@ -13,9 +13,11 @@ import {
   puedeEditarMedicion,
   puedeRegistrarMedicion,
 } from '../utils/permisos'
-import { formatearNumero } from '../utils/formato'
+import { formatearNumero, formatearDiferencia } from '../utils/formato'
 import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
 import { useResaltado } from '../composables/useResaltado'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 
 const props = defineProps({
   usuario: {
@@ -88,6 +90,31 @@ const medicionesFiltradas = computed(() => {
     return coincideBusqueda && coincideIndicador && coincideEstado
   })
 })
+
+const hayFiltrosActivos = computed(() => {
+  return busqueda.value.trim() !== '' || indicadorSeleccionado.value !== '' || estadoSeleccionado.value !== ''
+})
+
+function limpiarFiltros() {
+  busqueda.value = ''
+  indicadorSeleccionado.value = ''
+  estadoSeleccionado.value = ''
+}
+
+const {
+  paginaActual,
+  porPagina,
+  totalResultados,
+  totalPaginas,
+  elementosVisibles: medicionesPagina,
+  rangoInicio,
+  rangoFin,
+  irAPagina,
+} = usePaginacion(medicionesFiltradas)
+
+function cambiarPorPagina(valor) {
+  porPagina.value = valor
+}
 
 const totalMediciones = computed(() => mediciones.value.length)
 
@@ -320,6 +347,15 @@ onMounted(async () => {
         </select>
       </div>
 
+      <button
+        v-if="hayFiltrosActivos"
+        class="btn-limpiar-filtros"
+        type="button"
+        @click="limpiarFiltros"
+      >
+        Limpiar filtros
+      </button>
+
       <div class="toolbar-count">
         {{ medicionesFiltradas.length }} mediciones
       </div>
@@ -334,30 +370,48 @@ onMounted(async () => {
         {{ error }}
       </div>
 
-      <div v-else-if="!medicionesFiltradas.length" class="empty-state">
+      <div v-else-if="!mediciones.length" class="empty-state">
         No hay mediciones para mostrar.
       </div>
 
-      <table v-else>
+      <div v-else-if="!medicionesFiltradas.length" class="empty-state">
+        No se encontraron resultados con los filtros aplicados.
+      </div>
+
+      <div v-else class="table-scroll">
+      <table>
+        <colgroup>
+          <col style="width: 14%">
+          <col style="width: 10%">
+          <col style="width: 7%">
+          <col style="width: 8%">
+          <col style="width: 9%">
+          <col style="width: 10%">
+          <col style="width: 9%">
+          <col style="width: 10%">
+          <col style="width: 9%">
+          <col style="width: 6%">
+          <col style="width: 8%">
+        </colgroup>
         <thead>
           <tr>
             <th>KPI</th>
             <th>Periodo evaluado</th>
             <th>Meta</th>
             <th>Resultado</th>
-            <th title="Se calcula comparando el resultado obtenido con la meta establecida.">Cumplimiento de la meta</th>
-            <th title="Estado individual de esta medición, según su propio cumplimiento de meta.">Estado del periodo</th>
+            <th title="Diferencia matemática entre el resultado obtenido y la meta del KPI.">Diferencia respecto a la meta</th>
+            <th title="Estado individual de esta medición, clasificado directamente contra los rangos configurados para este KPI.">Estado del periodo</th>
             <th title="Promedio directo de los resultados del KPI hasta este periodo (no es el resultado de este periodo).">Promedio acumulado</th>
             <th title="Estado del KPI según el promedio acumulado hasta este periodo (no es el estado de esta medición individual).">Estado acumulado</th>
             <th>Registrado por</th>
             <th>Tipo</th>
-            <th style="text-align: right;">Acciones</th>
+            <th class="th-acciones" style="text-align: right;">Acciones</th>
           </tr>
         </thead>
 
         <tbody>
           <tr
-            v-for="medicion in medicionesFiltradas"
+            v-for="medicion in medicionesPagina"
             :key="medicion.id"
             :id="`fila-${medicion.id}`"
             :class="{ 'highlight-row': idResaltado === Number(medicion.id) }"
@@ -395,34 +449,22 @@ onMounted(async () => {
             </td>
 
             <td>
-              <div class="progress-cell">
-                <div class="progress-info">
-                  <span
-                    class="progress-number"
-                    :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)"
-                  >
-                    {{ formatearNumero(medicion.porcentaje_cumplimiento, { unidad: '%' }) }}
-                  </span>
-                </div>
-
-                <div class="progress-track">
-                  <div
-                    class="progress-fill"
-                    :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)"
-                    :style="{ width: `${Math.min(Number(medicion.porcentaje_cumplimiento) || 0, 100)}%` }"
-                  ></div>
-                </div>
-
-                <div class="cell-sub">
-                  Avance contra meta
-                </div>
+              <div class="meta-value">
+                {{ formatearDiferencia(medicion.valor_resultado, medicion.valor_meta, { unidad: medicion.unidad_medida }) }}
+              </div>
+              <div class="cell-sub">
+                Resultado vs. meta
               </div>
             </td>
 
             <td>
-              <span class="badge" :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)">
+              <span
+                class="badge"
+                :class="claseColorCumplimiento(medicion.estado_cumplimiento_color)"
+                :title="textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre)"
+              >
                 <span class="badge-dot"></span>
-                {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
+                <span class="badge-text">{{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}</span>
               </span>
             </td>
 
@@ -439,9 +481,10 @@ onMounted(async () => {
               <span
                 class="badge"
                 :class="claseColorCumplimiento(medicion.estado_acumulado_hasta_medicion_color)"
+                :title="textoEstadoCumplimiento(medicion.estado_acumulado_hasta_medicion_nombre)"
               >
                 <span class="badge-dot"></span>
-                {{ textoEstadoCumplimiento(medicion.estado_acumulado_hasta_medicion_nombre) }}
+                <span class="badge-text">{{ textoEstadoCumplimiento(medicion.estado_acumulado_hasta_medicion_nombre) }}</span>
               </span>
             </td>
 
@@ -460,7 +503,7 @@ onMounted(async () => {
               </span>
             </td>
 
-            <td>
+            <td class="td-acciones">
               <div class="actions-cell">
                 <button class="action-icon-btn" type="button" title="Ver detalle" aria-label="Ver detalle" @click="abrirModalDetalle(medicion)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -480,18 +523,20 @@ onMounted(async () => {
           </tr>
         </tbody>
       </table>
-
-      <div class="table-footer">
-        <div class="showing">
-          Mostrando {{ medicionesFiltradas.length }} de {{ mediciones.length }} mediciones
-        </div>
-
-        <div class="pagination">
-          <button class="page-btn" type="button" disabled>‹</button>
-          <button class="page-btn active" type="button">1</button>
-          <button class="page-btn" type="button" disabled>›</button>
-        </div>
       </div>
+
+      <Paginacion
+        v-if="medicionesFiltradas.length"
+        :pagina-actual="paginaActual"
+        :total-paginas="totalPaginas"
+        :por-pagina="porPagina"
+        :rango-inicio="rangoInicio"
+        :rango-fin="rangoFin"
+        :total-resultados="totalResultados"
+        etiqueta="mediciones"
+        @cambiar-pagina="irAPagina"
+        @cambiar-por-pagina="cambiarPorPagina"
+      />
     </section>
 
     <ModalBase
@@ -714,6 +759,26 @@ onMounted(async () => {
   font-weight: 800;
 }
 
+.btn-limpiar-filtros {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #e76f51;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-limpiar-filtros:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
+}
+
 .card-panel { padding: 20px 22px 18px; }
 .table-card { margin-bottom: 20px; }
 
@@ -729,7 +794,8 @@ onMounted(async () => {
 
 .message.error { background: rgba(231, 111, 81, 0.12); color: #e76f51; }
 
-table { width: 100%; border-collapse: collapse; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; min-width: 1080px; border-collapse: collapse; table-layout: fixed; }
 
 thead th {
   text-align: left;
@@ -740,6 +806,14 @@ thead th {
   color: #9aa8b8;
   padding: 0 12px 10px;
   border-bottom: 1px solid #e4eaef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-acciones,
+.td-acciones {
+  white-space: nowrap;
 }
 
 tbody td {
@@ -748,6 +822,7 @@ tbody td {
   color: #1d3557;
   border-bottom: 1px solid #f1f4f7;
   vertical-align: middle;
+  overflow: hidden;
 }
 
 tbody tr:last-child td { border-bottom: none; }
@@ -769,41 +844,28 @@ tbody tr:hover { background: #fafcfd; }
   max-width: 260px;
 }
 
-.progress-cell { min-width: 120px; }
-.progress-info { display: flex; justify-content: space-between; margin-bottom: 6px; }
-.progress-number { font-size: 12px; font-weight: 800; }
-.progress-number.ok { color: #2a9d8f; }
-.progress-number.warning { color: #b9701e; }
-.progress-number.danger { color: #e76f51; }
-
-.progress-track {
-  width: 100%;
-  height: 7px;
-  border-radius: 999px;
-  background: #eef2f5;
-  overflow: hidden;
-}
-
-.progress-fill { height: 100%; border-radius: 999px; }
-.progress-fill.ok { background: #2a9d8f; }
-.progress-fill.warning { background: #f4a261; }
-.progress-fill.danger { background: #e76f51; }
-
 .badge {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 100%;
+  min-width: 0;
   font-size: 11px;
   font-weight: 800;
   padding: 4px 10px;
   border-radius: 20px;
   white-space: nowrap;
 }
+.badge-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .badge.ok { background: rgba(42, 157, 143, 0.12); color: #2a9d8f; }
 .badge.warning { background: rgba(244, 162, 97, 0.16); color: #b9701e; }
 .badge.danger { background: rgba(231, 111, 81, 0.12); color: #e76f51; }
 .badge.neutral { background: rgba(154, 168, 184, 0.16); color: #5e6e82; }
-.badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 .source-chip {
   display: inline-flex;
@@ -834,37 +896,9 @@ tbody tr:hover { background: #fafcfd; }
 .action-icon-btn svg { stroke: currentColor; }
 .action-icon-btn:hover { background: #eaf5f5; color: #457b9d; border-color: #a8dadc; }
 
-.table-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 14px;
-  border-top: 1px solid #f1f4f7;
-  margin-top: 4px;
-}
-.showing { font-size: 12px; color: #9aa8b8; font-weight: 600; }
-.pagination { display: flex; align-items: center; gap: 6px; }
-.page-btn {
-  min-width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  border: 1px solid #e4eaef;
-  background: #ffffff;
-  color: #5e6e82;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.page-btn.active { background: #1d3557; color: #ffffff; border-color: #1d3557; }
-.page-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 @media (max-width: 1100px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
-  table { display: block; overflow-x: auto; }
 }
 
 @media (max-width: 640px) {
@@ -872,8 +906,8 @@ tbody tr:hover { background: #fafcfd; }
   .toolbar { align-items: stretch; }
   .toolbar-search,
   .toolbar-filter,
-  .toolbar-count { width: 100%; max-width: none; }
-  .table-footer { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .toolbar-count { width: 100%; max-width: none; min-width: 0; }
+  .toolbar-filter select { flex: 1; min-width: 0; max-width: 100%; }
 }
 
 .highlight-row {

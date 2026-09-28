@@ -204,8 +204,7 @@ function cancelar() {
 
     <div class="help-box">
       <strong>Nota:</strong>
-      la contraseña solo se define al crear el usuario. Para edición se modifican datos generales y rol.
-      Para activar o inactivar el usuario, usá las acciones de la tabla.
+      La contraseña solo se define al crear el usuario. Para activar o inactivar, usá las acciones de la tabla.
     </div>
 
     <div class="form-actions">

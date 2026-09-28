@@ -92,7 +92,7 @@ function cancelar() {
     </div>
 
     <div class="help-box">
-      Las áreas permiten organizar las estrategias por unidad o departamento de la cooperativa.
+      Registra las áreas disponibles para la organización interna del sistema.
     </div>
 
     <div class="form-actions">

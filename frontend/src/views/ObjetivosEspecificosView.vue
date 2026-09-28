@@ -13,6 +13,8 @@ import {
 } from '../services/objetivoEspecificoService'
 import { esAdministrador, puedeGestionarObjetivosEspecificos } from '../utils/permisos'
 import { useResaltado } from '../composables/useResaltado'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 
 const props = defineProps({
   usuario: {
@@ -84,6 +86,30 @@ const objetivosFiltrados = computed(() => {
     return coincideBusqueda && coincidePlanAnual
   })
 })
+
+const hayFiltrosActivos = computed(() => {
+  return busqueda.value.trim() !== '' || planAnualSeleccionadoFiltro.value !== ''
+})
+
+function limpiarFiltros() {
+  busqueda.value = ''
+  planAnualSeleccionadoFiltro.value = ''
+}
+
+const {
+  paginaActual,
+  porPagina,
+  totalResultados,
+  totalPaginas,
+  elementosVisibles: objetivosPagina,
+  rangoInicio,
+  rangoFin,
+  irAPagina,
+} = usePaginacion(objetivosFiltrados)
+
+function cambiarPorPagina(valor) {
+  porPagina.value = valor
+}
 
 function formatearFecha(fecha) {
   if (!fecha) {
@@ -280,6 +306,15 @@ onMounted(async () => {
         </select>
       </div>
 
+      <button
+        v-if="hayFiltrosActivos"
+        class="btn-limpiar-filtros"
+        type="button"
+        @click="limpiarFiltros"
+      >
+        Limpiar filtros
+      </button>
+
       <div class="toolbar-count">
         {{ objetivosFiltrados.length }} objetivos
       </div>
@@ -290,11 +325,24 @@ onMounted(async () => {
         Cargando objetivos específicos...
       </div>
 
-      <div v-else-if="!objetivosFiltrados.length" class="empty-state">
+      <div v-else-if="!objetivos.length" class="empty-state">
         No hay objetivos específicos para mostrar.
       </div>
 
-      <table v-else>
+      <div v-else-if="!objetivosFiltrados.length" class="empty-state">
+        No se encontraron resultados con los filtros aplicados.
+      </div>
+
+      <div v-else class="table-scroll">
+      <table>
+        <colgroup>
+          <col style="width: 26%">
+          <col style="width: 14%">
+          <col style="width: 22%">
+          <col style="width: 14%">
+          <col style="width: 12%">
+          <col style="width: 12%">
+        </colgroup>
         <thead>
           <tr>
             <th>Texto del objetivo</th>
@@ -302,13 +350,13 @@ onMounted(async () => {
             <th>Objetivo general</th>
             <th>Creado por</th>
             <th>Fecha de creación</th>
-            <th style="text-align: right;">Acciones</th>
+            <th class="th-acciones" style="text-align: right;">Acciones</th>
           </tr>
         </thead>
 
         <tbody>
           <tr
-            v-for="objetivo in objetivosFiltrados"
+            v-for="objetivo in objetivosPagina"
             :key="objetivo.id"
             :id="`fila-${objetivo.id}`"
             :class="{ 'highlight-row': idResaltado === Number(objetivo.id) }"
@@ -343,7 +391,7 @@ onMounted(async () => {
 
             <td>{{ formatearFecha(objetivo.fecha_creacion) }}</td>
 
-            <td>
+            <td class="td-acciones">
               <div class="actions-cell">
                 <button
                   class="action-icon-btn"
@@ -376,12 +424,20 @@ onMounted(async () => {
           </tr>
         </tbody>
       </table>
-
-      <div class="table-footer">
-        <div class="showing">
-          Mostrando {{ objetivosFiltrados.length }} de {{ objetivos.length }} objetivos
-        </div>
       </div>
+
+      <Paginacion
+        v-if="objetivosFiltrados.length"
+        :pagina-actual="paginaActual"
+        :total-paginas="totalPaginas"
+        :por-pagina="porPagina"
+        :rango-inicio="rangoInicio"
+        :rango-fin="rangoFin"
+        :total-resultados="totalResultados"
+        etiqueta="objetivos"
+        @cambiar-pagina="irAPagina"
+        @cambiar-por-pagina="cambiarPorPagina"
+      />
     </section>
 
     <ModalBase
@@ -645,6 +701,30 @@ onMounted(async () => {
   font-weight: 800;
 }
 
+.btn-limpiar-filtros {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #e76f51;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-limpiar-filtros:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
 .card-panel {
   padding: 20px 22px 18px;
 }
@@ -665,7 +745,9 @@ onMounted(async () => {
 
 table {
   width: 100%;
+  min-width: 760px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 thead th {
@@ -677,6 +759,14 @@ thead th {
   color: #9aa8b8;
   padding: 0 12px 10px;
   border-bottom: 1px solid #e4eaef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-acciones,
+.td-acciones {
+  white-space: nowrap;
 }
 
 tbody td {
@@ -685,6 +775,7 @@ tbody td {
   color: #1d3557;
   border-bottom: 1px solid #f1f4f7;
   vertical-align: middle;
+  overflow: hidden;
 }
 
 tbody tr:last-child td {
@@ -845,11 +936,6 @@ tbody tr:hover {
   .summary-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-
-  table {
-    display: block;
-    overflow-x: auto;
-  }
 }
 
 @media (max-width: 640px) {
@@ -866,6 +952,13 @@ tbody tr:hover {
   .toolbar-count {
     width: 100%;
     max-width: none;
+    min-width: 0;
+  }
+
+  .toolbar-filter select {
+    flex: 1;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .table-footer {

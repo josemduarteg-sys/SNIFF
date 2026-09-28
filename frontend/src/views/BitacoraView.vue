@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { obtenerBitacora } from '../services/bitacoraService'
 import { puedeVerBitacora } from '../utils/permisos'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 
 const props = defineProps({
   usuario: {
@@ -112,6 +114,41 @@ const registrosFiltrados = computed(() => {
     )
   })
 })
+
+const hayFiltrosActivos = computed(() => {
+  return (
+    busqueda.value.trim() !== '' ||
+    filtroModulo.value !== '' ||
+    filtroAccion.value !== '' ||
+    filtroUsuario.value.trim() !== '' ||
+    fechaInicio.value !== '' ||
+    fechaFin.value !== ''
+  )
+})
+
+function limpiarFiltros() {
+  busqueda.value = ''
+  filtroModulo.value = ''
+  filtroAccion.value = ''
+  filtroUsuario.value = ''
+  fechaInicio.value = ''
+  fechaFin.value = ''
+}
+
+const {
+  paginaActual,
+  porPagina,
+  totalResultados,
+  totalPaginas,
+  elementosVisibles: registrosPagina,
+  rangoInicio,
+  rangoFin,
+  irAPagina,
+} = usePaginacion(registrosFiltrados)
+
+function cambiarPorPagina(valor) {
+  porPagina.value = valor
+}
 
 const totalRegistros = computed(() => registros.value.length)
 
@@ -325,17 +362,39 @@ onMounted(() => {
 
             <input v-model="fechaFin" type="date" />
           </label>
+
+          <button
+            v-if="hayFiltrosActivos"
+            class="btn-limpiar-filtros field-full"
+            type="button"
+            @click="limpiarFiltros"
+          >
+            Limpiar filtros
+          </button>
         </div>
 
         <div v-if="cargando" class="message">
           Cargando bitácora...
         </div>
 
-        <div v-else-if="!registrosFiltrados.length" class="empty-state">
+        <div v-else-if="!registros.length" class="empty-state">
           No hay registros de bitácora para mostrar.
         </div>
 
-        <table v-else>
+        <div v-else-if="!registrosFiltrados.length" class="empty-state">
+          No se encontraron resultados con los filtros aplicados.
+        </div>
+
+        <div v-else class="table-scroll">
+        <table>
+          <colgroup>
+            <col style="width: 14%">
+            <col style="width: 14%">
+            <col style="width: 12%">
+            <col style="width: 14%">
+            <col style="width: 34%">
+            <col style="width: 12%">
+          </colgroup>
           <thead>
             <tr>
               <th>Fecha y hora</th>
@@ -349,13 +408,13 @@ onMounted(() => {
 
           <tbody>
             <tr
-              v-for="item in registrosFiltrados"
+              v-for="item in registrosPagina"
               :key="item.id"
             >
               <td>{{ formatearFechaHora(item.fecha_hora) }}</td>
 
               <td>
-                <div class="cell-main">{{ item.usuario_username || 'Sin usuario' }}</div>
+                <div class="cell-main" :title="item.usuario_username || 'Sin usuario'">{{ item.usuario_username || 'Sin usuario' }}</div>
               </td>
 
               <td>
@@ -365,7 +424,7 @@ onMounted(() => {
               </td>
 
               <td>
-                <span class="role-chip">{{ item.modulo || 'Sin módulo' }}</span>
+                <span class="role-chip" :title="item.modulo || 'Sin módulo'">{{ item.modulo || 'Sin módulo' }}</span>
               </td>
 
               <td>
@@ -376,12 +435,20 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
-
-        <div v-if="!cargando && registros.length" class="table-footer">
-          <div class="showing">
-            Mostrando {{ registrosFiltrados.length }} de {{ registros.length }} registros
-          </div>
         </div>
+
+        <Paginacion
+          v-if="registrosFiltrados.length"
+          :pagina-actual="paginaActual"
+          :total-paginas="totalPaginas"
+          :por-pagina="porPagina"
+          :rango-inicio="rangoInicio"
+          :rango-fin="rangoFin"
+          :total-resultados="totalResultados"
+          etiqueta="registros"
+          @cambiar-pagina="irAPagina"
+          @cambiar-por-pagina="cambiarPorPagina"
+        />
       </section>
     </template>
   </AppLayout>
@@ -588,9 +655,15 @@ onMounted(() => {
   box-shadow: 0 0 0 4px rgba(168, 218, 220, 0.25);
 }
 
+.table-scroll {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
+  min-width: 900px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th {
@@ -602,6 +675,9 @@ th {
   letter-spacing: 0.5px;
   padding: 12px 10px;
   border-bottom: 1px solid #e4eaef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 td {
@@ -611,12 +687,16 @@ td {
   font-size: 13px;
   font-weight: 600;
   vertical-align: top;
+  overflow: hidden;
 }
 
 .cell-main {
   color: #1d3557;
   font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-sub {
@@ -636,12 +716,16 @@ td {
 .role-chip {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   padding: 5px 9px;
   border-radius: 999px;
   font-size: 11.5px;
   font-weight: 850;
   background: #eaf5f5;
   color: #457b9d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .action-chip {
@@ -673,16 +757,25 @@ td {
   color: #5e6e82;
 }
 
-.table-footer {
-  padding-top: 14px;
-  border-top: 1px solid #f1f4f7;
-  margin-top: 4px;
+.btn-limpiar-filtros {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #e76f51;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  justify-self: start;
 }
 
-.showing {
-  font-size: 12px;
-  color: #9aa8b8;
-  font-weight: 600;
+.btn-limpiar-filtros:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
 }
 
 @media (max-width: 1000px) {
@@ -692,11 +785,6 @@ td {
 
   .filtros-grid {
     grid-template-columns: 1fr;
-  }
-
-  table {
-    display: block;
-    overflow-x: auto;
   }
 }
 

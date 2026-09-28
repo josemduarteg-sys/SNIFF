@@ -14,6 +14,7 @@ import {
   marcarTodasNotificacionesLeidas,
 } from '../../services/notificacionService'
 import { puedeGestionarPlaneacion } from '../../utils/permisos'
+import { useClickFuera } from '../../composables/useClickFuera'
 
 const props = defineProps({
   usuario: {
@@ -131,6 +132,32 @@ function alternarMenuAlertas() {
 function cerrarMenuAlertas() {
   menuAlertasAbierto.value = false
 }
+
+// Bloque 7: click fuera del centro de notificaciones lo cierra, mismo
+// patrón ya usado en SelectorBuscable.vue (contenedor ref + click en
+// document + contains(evento.target)), extraído a useClickFuera para no
+// duplicar el listener a mano.
+const contenedorNotificaciones = ref(null)
+
+useClickFuera(contenedorNotificaciones, () => {
+  if (menuAlertasAbierto.value) {
+    cerrarMenuAlertas()
+  }
+})
+
+function manejarEscapeNotificaciones(evento) {
+  if (evento.key === 'Escape' && menuAlertasAbierto.value) {
+    cerrarMenuAlertas()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', manejarEscapeNotificaciones)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', manejarEscapeNotificaciones)
+})
 
 function formatearFechaAlerta(fecha) {
   if (!fecha) return 'Sin fecha'
@@ -287,7 +314,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="topbar-actions">
-          <div class="notification-wrapper">
+          <div class="notification-wrapper" ref="contenedorNotificaciones">
             <button
               class="icon-btn notification-button"
               type="button"

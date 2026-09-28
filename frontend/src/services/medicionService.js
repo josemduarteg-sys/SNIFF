@@ -57,8 +57,20 @@ export function obtenerUrlEvidencia(id) {
   return `mediciones/${id}/evidencia/`
 }
 
+export function obtenerUrlDescargaEvidencia(id) {
+  return `mediciones/${id}/evidencia/descargar/`
+}
+
 export async function descargarEvidencia(id) {
   const response = await api.get(obtenerUrlEvidencia(id), {
+    responseType: 'blob',
+  })
+
+  return response.data
+}
+
+export async function descargarArchivoEvidencia(id) {
+  const response = await api.get(obtenerUrlDescargaEvidencia(id), {
     responseType: 'blob',
   })
 

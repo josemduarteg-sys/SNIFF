@@ -138,10 +138,6 @@ function cancelar() {
 
     </div>
 
-    <div class="help-box">
-      Todo plan estratégico nuevo nace en Borrador. Desde el listado podés pasarlo a En uso cuando esté listo para ejecutarse.
-    </div>
-
     <div class="form-actions">
       <button class="btn-secondary" type="button" @click="cancelar">
         Cancelar

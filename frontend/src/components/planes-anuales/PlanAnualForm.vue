@@ -115,11 +115,9 @@ function cancelar() {
           placeholder="Ejemplo: 2027"
           :disabled="esEnUso"
         />
-      </label>
-    </div>
 
-    <div class="help-box">
-      Todo plan anual nuevo nace en Borrador. El año debe estar dentro de la vigencia del plan estratégico seleccionado.
+        <small class="field-hint">Debe estar dentro de la vigencia del plan estratégico seleccionado.</small>
+      </label>
     </div>
 
     <div class="form-actions">
@@ -205,6 +203,12 @@ function cancelar() {
   background: #f4f7f9;
   color: #9aa8b8;
   cursor: not-allowed;
+}
+
+.field-hint {
+  color: #9aa8b8;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .help-box {

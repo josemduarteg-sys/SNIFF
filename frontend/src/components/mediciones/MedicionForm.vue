@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import SelectorBuscable from '../common/SelectorBuscable.vue'
 import { actualizarMedicion, crearMedicion, obtenerSiguientePeriodo } from '../../services/medicionService'
 import { formatearNumero } from '../../utils/formato'
@@ -104,7 +104,13 @@ const contexto = computed(() => {
 
 const unidadMedida = computed(() => contexto.value?.unidad || 'unidad')
 
+// V2: la evidencia ya adjunta es inmutable (no se reemplaza ni se
+// elimina). El control de subida solo se muestra cuando esta Medicion
+// todavía NO tiene evidencia (creación, o edición de una medición sin
+// evidencia previa) — ver también la validación equivalente y
+// autoritativa en backend (MedicionSerializer.validate).
 const puedeEditarEvidencia = computed(() => {
+  if (esEdicion.value && props.medicionEditar?.tiene_evidencia) return false
   if (!esEdicion.value) return true
   return props.medicionEditar?.puede_modificarse !== false
 })
@@ -207,6 +213,26 @@ function manejarSeleccionArchivo(evento) {
 
   estado.error = ''
   form.evidencia = archivo
+}
+
+const inputArchivoRef = ref(null)
+
+const tamanoArchivoTexto = computed(() => {
+  if (!form.evidencia) return ''
+
+  const kb = form.evidencia.size / 1024
+
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+
+  return `${(kb / 1024).toFixed(2)} MB`
+})
+
+function quitarArchivo() {
+  form.evidencia = null
+
+  if (inputArchivoRef.value) {
+    inputArchivoRef.value.value = ''
+  }
 }
 
 function validarFormulario() {
@@ -384,23 +410,32 @@ async function guardar() {
       </div>
 
       <div class="form-group full">
-        <label>Evidencia (opcional)</label>
+        <label>Evidencia / respaldo (opcional)</label>
 
-        <input
-          v-if="puedeEditarEvidencia"
-          type="file"
-          accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"
-          @change="manejarSeleccionArchivo"
-        />
-
-        <p v-if="form.evidencia" class="field-hint ok">
-          Archivo seleccionado: {{ form.evidencia.name }}
-        </p>
-        <p v-else-if="esEdicion && medicionEditar?.tiene_evidencia" class="field-hint">
-          Ya existe una evidencia adjunta. Seleccioná un archivo nuevo únicamente si querés reemplazarla.
+        <p v-if="esEdicion && medicionEditar?.tiene_evidencia" class="field-hint">
+          Esta medición ya tiene una evidencia adjunta. No puede reemplazarse ni eliminarse: queda
+          como respaldo histórico.
         </p>
 
-        <small>Solo PDF, JPG o JPEG. Tamaño máximo 10 MB.</small>
+        <template v-else-if="puedeEditarEvidencia">
+          <input
+            ref="inputArchivoRef"
+            type="file"
+            accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"
+            @change="manejarSeleccionArchivo"
+          />
+
+          <div v-if="form.evidencia" class="archivo-seleccionado">
+            <p class="field-hint ok">
+              Archivo seleccionado: {{ form.evidencia.name }} ({{ tamanoArchivoTexto }})
+            </p>
+            <button type="button" class="btn-quitar-archivo" @click="quitarArchivo">
+              Quitar
+            </button>
+          </div>
+
+          <small>Solo PDF, JPG o JPEG. Tamaño máximo 10 MB.</small>
+        </template>
       </div>
     </template>
 
@@ -526,6 +561,35 @@ small {
 
 .field-hint.ok {
   color: #2a9d8f;
+}
+
+.archivo-seleccionado {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.archivo-seleccionado .field-hint {
+  margin: 0;
+}
+
+.btn-quitar-archivo {
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #e76f51;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.btn-quitar-archivo:hover {
+  background: rgba(231, 111, 81, 0.1);
+  border-color: #e76f51;
 }
 
 .kpi-context {

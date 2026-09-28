@@ -18,6 +18,8 @@ import {
 import { formatearNumero } from '../utils/formato'
 import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
 import { useConfirmacion } from '../composables/useConfirmacion'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 import {
   puedeAnularKpi,
   puedeAutorizarKpi,
@@ -174,6 +176,37 @@ const indicadoresFiltrados = computed(() => {
   })
 })
 
+const hayFiltrosActivos = computed(() => {
+  return (
+    busqueda.value.trim() !== '' ||
+    objetivoSeleccionado.value !== '' ||
+    frecuenciaSeleccionada.value !== '' ||
+    estadoSeleccionado.value !== ''
+  )
+})
+
+function limpiarFiltros() {
+  busqueda.value = ''
+  objetivoSeleccionado.value = ''
+  frecuenciaSeleccionada.value = ''
+  estadoSeleccionado.value = ''
+}
+
+const {
+  paginaActual,
+  porPagina,
+  totalResultados,
+  totalPaginas,
+  elementosVisibles: indicadoresPagina,
+  rangoInicio,
+  rangoFin,
+  irAPagina,
+} = usePaginacion(indicadoresFiltrados)
+
+function cambiarPorPagina(valor) {
+  porPagina.value = valor
+}
+
 const indicadoresBorrador = computed(() => {
   return indicadores.value.filter((indicador) => indicador.estado === 'borrador').length
 })
@@ -197,7 +230,7 @@ function textoPromedioAcumulado(indicador) {
 function textoEstado(estado) {
   const estados = {
     borrador: 'Borrador',
-    autorizado: 'Activo',
+    autorizado: 'Autorizado',
     anulado: 'Anulado',
   }
 
@@ -237,7 +270,7 @@ async function manejarAutorizar(indicador) {
 
   try {
     await autorizarIndicador(indicador.id)
-    mensaje.value = 'KPI autorizado correctamente. Ahora está activo.'
+    mensaje.value = 'KPI autorizado correctamente.'
     await cargarDatos()
   } catch (e) {
     error.value =
@@ -282,7 +315,7 @@ async function ejecutarAnular(indicador) {
 function manejarEditar(indicador) {
   if (!puedeEditar(indicador)) {
     mensaje.value = ''
-    error.value = 'Este KPI ya está activo y no permite modificar sus datos principales.'
+    error.value = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
     return
   }
 
@@ -301,7 +334,7 @@ function abrirNuevoIndicador() {
 function abrirEditarIndicador(indicador) {
   if (!puedeEditar(indicador)) {
     mensaje.value = ''
-    error.value = 'Este KPI ya está activo y no permite modificar sus datos principales.'
+    error.value = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
     return
   }
 
@@ -592,10 +625,19 @@ onBeforeUnmount(() => {
         <select v-model="estadoSeleccionado">
           <option value="">Todos</option>
           <option value="borrador">Borrador</option>
-          <option value="autorizado">Activo</option>
+          <option value="autorizado">Autorizado</option>
           <option value="anulado">Anulado</option>
         </select>
       </div>
+
+      <button
+        v-if="hayFiltrosActivos"
+        class="btn-limpiar-filtros"
+        type="button"
+        @click="limpiarFiltros"
+      >
+        Limpiar filtros
+      </button>
 
       <div class="toolbar-count">
         {{ indicadoresFiltrados.length }} KPI
@@ -607,8 +649,12 @@ onBeforeUnmount(() => {
         Cargando indicadores KPI...
       </div>
 
-      <div v-else-if="!indicadoresFiltrados.length" class="empty-state">
+      <div v-else-if="!indicadores.length" class="empty-state">
         No hay indicadores KPI para mostrar.
+      </div>
+
+      <div v-else-if="!indicadoresFiltrados.length" class="empty-state">
+        No se encontraron resultados con los filtros aplicados.
       </div>
 
       <div v-else class="table-scroll">
@@ -638,7 +684,7 @@ onBeforeUnmount(() => {
 
         <tbody>
           <tr
-            v-for="indicador in indicadoresFiltrados"
+            v-for="indicador in indicadoresPagina"
             :key="indicador.id"
             :id="`fila-${indicador.id}`"
             :class="{ 'highlight-row': idResaltado === Number(indicador.id) }"
@@ -808,11 +854,18 @@ onBeforeUnmount(() => {
       </table>
       </div>
 
-      <div class="table-footer">
-        <div class="showing">
-          Mostrando {{ indicadoresFiltrados.length }} de {{ indicadores.length }} KPI
-        </div>
-      </div>
+      <Paginacion
+        v-if="indicadoresFiltrados.length"
+        :pagina-actual="paginaActual"
+        :total-paginas="totalPaginas"
+        :por-pagina="porPagina"
+        :rango-inicio="rangoInicio"
+        :rango-fin="rangoFin"
+        :total-resultados="totalResultados"
+        etiqueta="KPI"
+        @cambiar-pagina="irAPagina"
+        @cambiar-por-pagina="cambiarPorPagina"
+      />
     </section>
 
     <ModalBase
@@ -1076,6 +1129,26 @@ onBeforeUnmount(() => {
   align-items: center;
   font-size: 12.5px;
   font-weight: 800;
+}
+
+.btn-limpiar-filtros {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #e76f51;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-limpiar-filtros:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
 }
 
 .card-panel {
@@ -1419,6 +1492,13 @@ tbody tr:hover {
   .toolbar-count {
     width: 100%;
     max-width: none;
+    min-width: 0;
+  }
+
+  .toolbar-filter select {
+    flex: 1;
+    min-width: 0;
+    max-width: 100%;
   }
 }
 

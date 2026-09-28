@@ -61,19 +61,22 @@ def obtener_estado_por_cumplimiento(indicador, porcentaje_cumplimiento):
 
 
 def obtener_estado_para_medicion(indicador, meta, valor_resultado):
-    porcentaje = calcular_porcentaje_cumplimiento(
-        valor_resultado=valor_resultado,
-        valor_meta=meta.valor_meta,
-    )
-
-    # Se clasifica sobre el mismo valor redondeado a 2 decimales que ve el
-    # usuario (porcentaje_cumplimiento en pantalla), para que el estado
-    # mostrado sea siempre coherente con el número mostrado.
-    porcentaje_para_clasificar = round(porcentaje, 2)
+    """REGLA V2 (corrección del 120 %): el Estado del periodo clasifica
+    `valor_resultado` DIRECTAMENTE contra los RangoKPI del indicador —
+    igual que ya hacía `obtener_estado_acumulado_kpi` con el promedio
+    acumulado. Antes de esta corrección se clasificaba
+    `valor_resultado / meta * 100` (lógica de VERSIÓN 1), lo que producía
+    valores engañosos como "120 %" en KPI cuya unidad no es un porcentaje
+    y donde un valor mayor puede ser peor (ej. días), y era inconsistente
+    con el estado acumulado (que nunca usó ese porcentaje). `meta` se
+    conserva en la firma por compatibilidad con los 3 llamadores
+    existentes (creación/edición de Medicion y cierre automático), aunque
+    ya no participa en la clasificación."""
+    valor_para_clasificar = round(Decimal(valor_resultado), 2)
 
     estado = obtener_estado_por_cumplimiento(
         indicador=indicador,
-        porcentaje_cumplimiento=porcentaje_para_clasificar,
+        porcentaje_cumplimiento=valor_para_clasificar,
     )
 
     return estado
@@ -248,10 +251,10 @@ def recalcular_mediciones_pendientes():
     correspondiente ya tiene RangoKPI válidos que permitan clasificarlas.
 
     No toca mediciones que ya estén en Favorable/En riesgo/Incumplido, no
-    modifica valor_resultado ni ningún otro campo, y no recalcula la
-    fórmula: usa el mismo cálculo existente (Medicion.calcular_cumplimiento)
-    únicamente para volver a consultar RangoKPI con el resultado ya
-    obtenido.
+    modifica valor_resultado ni ningún otro campo. REGLA V2: clasifica
+    `valor_resultado` DIRECTAMENTE contra RangoKPI (igual que
+    `obtener_estado_para_medicion`), no `Medicion.calcular_cumplimiento()`
+    (que sigue siendo el porcentaje legacy resultado/meta*100).
     """
     estado_pendiente = EstadoCumplimiento.objects.filter(
         nombre__iexact='Pendiente de actualización',
@@ -272,11 +275,11 @@ def recalcular_mediciones_pendientes():
         for medicion in mediciones:
             revisadas += 1
 
-            porcentaje = round(medicion.calcular_cumplimiento(), 2)
+            valor_clasificado = round(Decimal(medicion.valor_resultado), 2)
 
             nuevo_estado = obtener_estado_por_cumplimiento(
                 indicador=medicion.indicador,
-                porcentaje_cumplimiento=porcentaje,
+                porcentaje_cumplimiento=valor_clasificado,
             )
 
             if not nuevo_estado or nuevo_estado.id == estado_pendiente.id:
@@ -291,7 +294,7 @@ def recalcular_mediciones_pendientes():
             detalle.append({
                 'medicion_id': medicion.id,
                 'indicador': medicion.indicador.nombre,
-                'porcentaje_cumplimiento': str(porcentaje),
+                'valor_clasificado': str(valor_clasificado),
                 'estado_anterior': estado_pendiente.nombre,
                 'estado_nuevo': nuevo_estado.nombre,
             })
@@ -389,9 +392,9 @@ def formatear_valor_acumulado(valor, unidad):
 
 def actualizar_alerta_cumplimiento_kpi(indicador, medicion_actual=None):
     """Alerta de cumplimiento del KPI basada en el PROMEDIO ACUMULADO
-    (Bloque 5) — reemplaza la lógica anterior de `generar_alerta_para_medicion`,
-    que clasificaba una sola Medicion aislada. Se llama después de crear o
-    editar cualquier Medicion (manual o de cierre automático).
+    (Bloque 5) — reemplaza la lógica anterior (VERSIÓN 1) que clasificaba
+    una sola Medicion aislada. Se llama después de crear o editar
+    cualquier Medicion (manual o de cierre automático).
 
     Garantiza como máximo UNA alerta 'pendiente' de cumplimiento por KPI, y
     es completamente independiente de las alertas de tipo
@@ -464,15 +467,6 @@ def actualizar_alerta_cumplimiento_kpi(indicador, medicion_actual=None):
         mensaje=mensaje,
         estado_alerta='pendiente',
     )
-
-
-def generar_alerta_para_medicion(medicion):
-    """Wrapper de compatibilidad (Bloque 5): la alerta de cumplimiento del
-    KPI ya no se decide con el estado de una sola Medicion, sino con el
-    promedio acumulado del KPI completo. Ver `actualizar_alerta_cumplimiento_kpi`,
-    que es la implementación real usada por MedicionSerializer y por el
-    cierre automático de periodos vencidos."""
-    return actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
 
 
 def marcar_alerta_revisada(alerta, usuario=None):

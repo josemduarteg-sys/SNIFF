@@ -157,7 +157,7 @@ function cancelar() {
     </div>
 
     <div class="help-box">
-      Solo se muestran planes estratégicos En uso: el objetivo general debe cumplirse durante toda su vigencia.
+      Se muestran únicamente los planes estratégicos En uso.
     </div>
 
     <div class="form-actions">

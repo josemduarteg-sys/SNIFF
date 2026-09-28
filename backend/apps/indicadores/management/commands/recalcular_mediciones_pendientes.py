@@ -19,7 +19,7 @@ class Command(BaseCommand):
         for item in resultado['detalle']:
             self.stdout.write(self.style.SUCCESS(
                 f"  + Medición {item['medicion_id']} ({item['indicador']}): "
-                f"{item['porcentaje_cumplimiento']}% -> "
+                f"{item['valor_clasificado']} -> "
                 f"{item['estado_anterior']} => {item['estado_nuevo']}"
             ))
 

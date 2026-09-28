@@ -146,7 +146,7 @@ function validarFormulario() {
   estado.error = ''
 
   if (!puedeEditar.value) {
-    estado.error = 'Este KPI ya está activo y no permite modificar sus datos principales.'
+    estado.error = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
     return false
   }
 
@@ -227,7 +227,7 @@ function cancelar() {
 <template>
   <form class="indicador-form" @submit.prevent="guardar">
     <div v-if="!puedeEditar" class="alert warning">
-      Este KPI ya está activo. Sus datos principales no pueden modificarse.
+      Este KPI ya está autorizado. Sus datos principales no pueden modificarse.
     </div>
 
     <div v-if="estado.error" class="alert error">
@@ -353,8 +353,8 @@ function cancelar() {
     </div>
 
     <div class="help-box">
-      El KPI se guardará como borrador y quedará pendiente de autorización antes de
-      iniciar su seguimiento. Su vigencia se hereda automáticamente del año del plan anual seleccionado.
+      El KPI se crea como borrador y no inicia su seguimiento hasta ser autorizado.
+      Su vigencia es la del año del plan anual elegido.
     </div>
 
     <div class="form-actions">

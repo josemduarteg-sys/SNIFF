@@ -18,6 +18,8 @@ import {
 import { esAdministrador, puedeGestionarPlanesAnuales } from '../utils/permisos'
 import { useConfirmacion } from '../composables/useConfirmacion'
 import { useResaltado } from '../composables/useResaltado'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 
 const props = defineProps({
   usuario: {
@@ -42,7 +44,7 @@ const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
 
-const busquedaAnio = ref('')
+const busqueda = ref('')
 const planSeleccionadoFiltro = ref('')
 const estadoSeleccionadoFiltro = ref('')
 
@@ -66,10 +68,20 @@ const planesEnUso = computed(() => {
 })
 
 const planesFiltrados = computed(() => {
-  const anio = busquedaAnio.value.trim()
+  const texto = busqueda.value.trim().toLowerCase()
 
   return planesAnuales.value.filter((plan) => {
-    const coincideAnio = !anio || String(plan.anio).includes(anio)
+    // Bloque 7: la búsqueda ya no filtra solo por año — también busca en
+    // el nombre visible ("Plan 2026") y en el título del plan estratégico
+    // asociado, igual que las demás vistas del sistema.
+    const nombrePlan = (plan.nombre || `Plan ${plan.anio}`).toLowerCase()
+    const tituloPlanEstrategico = (plan.plan_estrategico_titulo || '').toLowerCase()
+
+    const coincideBusqueda =
+      !texto ||
+      String(plan.anio).includes(texto) ||
+      nombrePlan.includes(texto) ||
+      tituloPlanEstrategico.includes(texto)
 
     const coincidePlan =
       !planSeleccionadoFiltro.value ||
@@ -77,9 +89,34 @@ const planesFiltrados = computed(() => {
 
     const coincideEstado = !estadoSeleccionadoFiltro.value || plan.estado === estadoSeleccionadoFiltro.value
 
-    return coincideAnio && coincidePlan && coincideEstado
+    return coincideBusqueda && coincidePlan && coincideEstado
   })
 })
+
+const hayFiltrosActivos = computed(() => {
+  return busqueda.value.trim() !== '' || planSeleccionadoFiltro.value !== '' || estadoSeleccionadoFiltro.value !== ''
+})
+
+function limpiarFiltros() {
+  busqueda.value = ''
+  planSeleccionadoFiltro.value = ''
+  estadoSeleccionadoFiltro.value = ''
+}
+
+const {
+  paginaActual,
+  porPagina,
+  totalResultados,
+  totalPaginas,
+  elementosVisibles: planesPagina,
+  rangoInicio,
+  rangoFin,
+  irAPagina,
+} = usePaginacion(planesFiltrados)
+
+function cambiarPorPagina(valor) {
+  porPagina.value = valor
+}
 
 async function cargarDatos() {
   cargando.value = true
@@ -326,7 +363,7 @@ onMounted(async () => {
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
 
-        <input v-model="busquedaAnio" type="text" placeholder="Buscar por año..." />
+        <input v-model="busqueda" type="text" placeholder="Buscar por año o plan estratégico..." />
       </div>
 
       <div class="toolbar-filter">
@@ -352,6 +389,15 @@ onMounted(async () => {
         </select>
       </div>
 
+      <button
+        v-if="hayFiltrosActivos"
+        class="btn-limpiar-filtros"
+        type="button"
+        @click="limpiarFiltros"
+      >
+        Limpiar filtros
+      </button>
+
       <div class="toolbar-count">
         {{ planesFiltrados.length }} planes
       </div>
@@ -362,11 +408,24 @@ onMounted(async () => {
         Cargando planes anuales...
       </div>
 
-      <div v-else-if="!planesFiltrados.length" class="empty-state">
+      <div v-else-if="!planesAnuales.length" class="empty-state">
         No hay planes anuales para mostrar.
       </div>
 
-      <table v-else>
+      <div v-else-if="!planesFiltrados.length" class="empty-state">
+        No se encontraron resultados con los filtros aplicados.
+      </div>
+
+      <div v-else class="table-scroll">
+      <table>
+        <colgroup>
+          <col style="width: 16%">
+          <col style="width: 28%">
+          <col style="width: 12%">
+          <col style="width: 16%">
+          <col style="width: 14%">
+          <col style="width: 14%">
+        </colgroup>
         <thead>
           <tr>
             <th>Plan anual</th>
@@ -374,19 +433,19 @@ onMounted(async () => {
             <th>Estado</th>
             <th>Creado por</th>
             <th>Fecha de creación</th>
-            <th style="text-align: right;">Acciones</th>
+            <th class="th-acciones" style="text-align: right;">Acciones</th>
           </tr>
         </thead>
 
         <tbody>
           <tr
-            v-for="plan in planesFiltrados"
+            v-for="plan in planesPagina"
             :key="plan.id"
             :id="`fila-${plan.id}`"
             :class="{ 'highlight-row': idResaltado === Number(plan.id) }"
           >
             <td>
-              <div class="cell-main">{{ plan.nombre || `Plan ${plan.anio}` }}</div>
+              <div class="cell-main" :title="plan.nombre || `Plan ${plan.anio}`">{{ plan.nombre || `Plan ${plan.anio}` }}</div>
             </td>
 
             <td>
@@ -402,7 +461,7 @@ onMounted(async () => {
             <td>{{ plan.creado_por_username || 'Sin usuario' }}</td>
             <td>{{ formatearFecha(plan.fecha_creacion) }}</td>
 
-            <td>
+            <td class="td-acciones">
               <div class="actions-cell">
                 <button
                   class="action-icon-btn"
@@ -453,6 +512,20 @@ onMounted(async () => {
           </tr>
         </tbody>
       </table>
+      </div>
+
+      <Paginacion
+        v-if="planesFiltrados.length"
+        :pagina-actual="paginaActual"
+        :total-paginas="totalPaginas"
+        :por-pagina="porPagina"
+        :rango-inicio="rangoInicio"
+        :rango-fin="rangoFin"
+        :total-resultados="totalResultados"
+        etiqueta="planes"
+        @cambiar-pagina="irAPagina"
+        @cambiar-por-pagina="cambiarPorPagina"
+      />
     </section>
 
     <ModalBase
@@ -692,6 +765,31 @@ onMounted(async () => {
   font-size: 11.5px;
   font-weight: 800;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-limpiar-filtros {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #e76f51;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-limpiar-filtros:hover {
+  background: rgba(231, 111, 81, 0.10);
+  border-color: rgba(231, 111, 81, 0.25);
+}
+
+.table-scroll {
+  overflow-x: auto;
 }
 
 .action-btn:hover {
@@ -744,7 +842,9 @@ onMounted(async () => {
 
 table {
   width: 100%;
+  min-width: 760px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th {
@@ -756,6 +856,14 @@ th {
   letter-spacing: 0.5px;
   padding: 12px 10px;
   border-bottom: 1px solid #e4eaef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-acciones,
+.td-acciones {
+  white-space: nowrap;
 }
 
 td {
@@ -765,12 +873,16 @@ td {
   font-size: 13px;
   font-weight: 600;
   vertical-align: middle;
+  overflow: hidden;
 }
 
 .cell-main {
   color: #1d3557;
   font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .code-chip {
@@ -817,11 +929,6 @@ td {
   .summary-grid {
     grid-template-columns: 1fr;
   }
-
-  table {
-    display: block;
-    overflow-x: auto;
-  }
 }
 
 @media (max-width: 640px) {
@@ -834,6 +941,13 @@ td {
   .toolbar-count {
     width: 100%;
     max-width: none;
+    min-width: 0;
+  }
+
+  .toolbar-filter select {
+    flex: 1;
+    min-width: 0;
+    max-width: 100%;
   }
 }
 

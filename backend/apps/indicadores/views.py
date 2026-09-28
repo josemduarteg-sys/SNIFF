@@ -16,8 +16,6 @@ from apps.usuarios.permissions import (
 )
 from .models import (
     Frecuencia,
-    TipoCalculo,
-    FuenteDato,
     IndicadorKPI,
     MetaKPI,
     ResponsableKPI,
@@ -29,8 +27,6 @@ from .models import (
 )
 from .serializers import (
     FrecuenciaSerializer,
-    TipoCalculoSerializer,
-    FuenteDatoSerializer,
     IndicadorKPISerializer,
     MetaKPISerializer,
     ResponsableKPISerializer,
@@ -49,18 +45,6 @@ from .services import (
 class FrecuenciaViewSet(viewsets.ModelViewSet):
     queryset = Frecuencia.objects.filter(estado=True).order_by('nombre')
     serializer_class = FrecuenciaSerializer
-    permission_classes = [PermisoCatalogoSoloAdmin]
-
-
-class TipoCalculoViewSet(viewsets.ModelViewSet):
-    queryset = TipoCalculo.objects.filter(estado=True).order_by('nombre')
-    serializer_class = TipoCalculoSerializer
-    permission_classes = [PermisoCatalogoSoloAdmin]
-
-
-class FuenteDatoViewSet(viewsets.ModelViewSet):
-    queryset = FuenteDato.objects.filter(estado=True).order_by('nombre')
-    serializer_class = FuenteDatoSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
 
 
@@ -317,10 +301,12 @@ class MedicionViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='evidencia')
     def evidencia(self, request, pk=None):
-        # Descarga autenticada (punto 30): no se expone MEDIA_URL como ruta
-        # pública. get_object() ya aplica permission_classes + el queryset
-        # del propio ViewSet, así que respeta exactamente los mismos
-        # permisos de lectura que el resto de Medicion.
+        # Visualización autenticada (punto 30): no se expone MEDIA_URL como
+        # ruta pública. get_object() ya aplica permission_classes + el
+        # queryset del propio ViewSet, así que respeta exactamente los
+        # mismos permisos de lectura que el resto de Medicion. Disposición
+        # inline: para PDF, el navegador la abre en la misma pestaña/visor
+        # en vez de forzar la descarga (ver acción `descargar` para eso).
         medicion = self.get_object()
 
         if not medicion.evidencia:
@@ -329,6 +315,23 @@ class MedicionViewSet(viewsets.ModelViewSet):
         return FileResponse(
             medicion.evidencia.open('rb'),
             as_attachment=False,
+            filename=os.path.basename(medicion.evidencia.name),
+        )
+
+    @action(detail=True, methods=['get'], url_path='evidencia/descargar')
+    def evidencia_descargar(self, request, pk=None):
+        # Mismo archivo protegido que `evidencia`, pero forzando la
+        # descarga (Content-Disposition: attachment) en vez de abrirlo
+        # inline. Mismos permisos: get_object() aplica el mismo queryset y
+        # permission_classes del ViewSet.
+        medicion = self.get_object()
+
+        if not medicion.evidencia:
+            raise Http404('Esta medición no tiene evidencia adjunta.')
+
+        return FileResponse(
+            medicion.evidencia.open('rb'),
+            as_attachment=True,
             filename=os.path.basename(medicion.evidencia.name),
         )
 

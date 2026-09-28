@@ -4,8 +4,6 @@ from rest_framework import serializers
 
 from .models import (
     Frecuencia,
-    TipoCalculo,
-    FuenteDato,
     IndicadorKPI,
     MetaKPI,
     ResponsableKPI,
@@ -21,30 +19,6 @@ from .models import (
 class FrecuenciaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Frecuencia
-        fields = [
-            'id',
-            'nombre',
-            'descripcion',
-            'estado',
-        ]
-        read_only_fields = ['id']
-
-
-class TipoCalculoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TipoCalculo
-        fields = [
-            'id',
-            'nombre',
-            'descripcion',
-            'estado',
-        ]
-        read_only_fields = ['id']
-
-
-class FuenteDatoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = FuenteDato
         fields = [
             'id',
             'nombre',
@@ -636,6 +610,21 @@ class MedicionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     'Solo se pueden modificar el resultado, la observación y la '
                     'evidencia de una medición existente.'
+                )
+
+            # REGLA V2 (inmutabilidad de la evidencia): una vez que una
+            # Medicion ya tiene un archivo de evidencia, ese archivo queda
+            # fijo como respaldo histórico — no puede reemplazarse ni
+            # eliminarse. Se rechaza acá, en backend, en cuanto la clave
+            # 'evidencia' aparece en la petición (sea un archivo nuevo o un
+            # intento de vaciarla), sin depender de que el frontend oculte
+            # el control. Una Medicion que todavía NO tiene evidencia sigue
+            # pudiendo recibir una por esta vía (caso reportado aparte, no
+            # se inventa una regla nueva para ese otro caso en esta tarea).
+            if instance.evidencia and 'evidencia' in attrs:
+                raise serializers.ValidationError(
+                    'Esta medición ya tiene una evidencia adjunta. No puede reemplazarse '
+                    'ni eliminarse: queda como respaldo histórico.'
                 )
 
             indicador = instance.indicador

@@ -13,6 +13,8 @@ import {
 } from '../services/areaService'
 import { puedeGestionarAreas } from '../utils/permisos'
 import { useConfirmacion } from '../composables/useConfirmacion'
+import { usePaginacion } from '../composables/usePaginacion'
+import Paginacion from '../components/common/Paginacion.vue'
 
 const props = defineProps({
   usuario: {
@@ -52,6 +54,21 @@ const areasActivas = computed(() => {
 const areasInactivas = computed(() => {
   return areas.value.filter((area) => area.estado === false).length
 })
+
+const {
+  paginaActual,
+  porPagina,
+  totalResultados,
+  totalPaginas,
+  elementosVisibles: areasPagina,
+  rangoInicio,
+  rangoFin,
+  irAPagina,
+} = usePaginacion(areas)
+
+function cambiarPorPagina(valor) {
+  porPagina.value = valor
+}
 
 async function cargarAreas() {
   if (!puedeGestionar.value) {
@@ -259,28 +276,36 @@ onMounted(() => {
           No hay áreas registradas todavía.
         </div>
 
-        <table v-else>
+        <div v-else class="table-scroll">
+        <table>
+          <colgroup>
+            <col style="width: 22%">
+            <col style="width: 38%">
+            <col style="width: 14%">
+            <col style="width: 14%">
+            <col style="width: 12%">
+          </colgroup>
           <thead>
             <tr>
               <th>Nombre</th>
               <th>Descripción</th>
               <th>Estado</th>
               <th>Fecha creación</th>
-              <th style="text-align: right;">Acciones</th>
+              <th class="th-acciones" style="text-align: right;">Acciones</th>
             </tr>
           </thead>
 
           <tbody>
             <tr
-              v-for="area in areas"
+              v-for="area in areasPagina"
               :key="area.id"
             >
               <td>
-                <div class="cell-main">{{ area.nombre }}</div>
+                <div class="cell-main" :title="area.nombre">{{ area.nombre }}</div>
               </td>
 
               <td>
-                <div class="cell-sub">{{ area.descripcion || 'Sin descripción' }}</div>
+                <div class="cell-sub cell-truncada" :title="area.descripcion || 'Sin descripción'">{{ area.descripcion || 'Sin descripción' }}</div>
               </td>
 
               <td>
@@ -291,7 +316,7 @@ onMounted(() => {
 
               <td>{{ formatearFecha(area.fecha_creacion) }}</td>
 
-              <td>
+              <td class="td-acciones">
                 <div class="actions-cell">
                   <button
                     class="action-icon-btn"
@@ -328,6 +353,20 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+        </div>
+
+        <Paginacion
+          v-if="areas.length"
+          :pagina-actual="paginaActual"
+          :total-paginas="totalPaginas"
+          :por-pagina="porPagina"
+          :rango-inicio="rangoInicio"
+          :rango-fin="rangoFin"
+          :total-resultados="totalResultados"
+          etiqueta="áreas"
+          @cambiar-pagina="irAPagina"
+          @cambiar-por-pagina="cambiarPorPagina"
+        />
       </section>
 
       <ModalBase
@@ -566,9 +605,15 @@ onMounted(() => {
   font-weight: 800;
 }
 
+.table-scroll {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
+  min-width: 640px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th {
@@ -580,6 +625,14 @@ th {
   letter-spacing: 0.5px;
   padding: 12px 10px;
   border-bottom: 1px solid #e4eaef;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-acciones,
+.td-acciones {
+  white-space: nowrap;
 }
 
 td {
@@ -589,12 +642,16 @@ td {
   font-size: 13px;
   font-weight: 600;
   vertical-align: top;
+  overflow: hidden;
 }
 
 .cell-main {
   color: #1d3557;
   font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-sub {
@@ -602,6 +659,12 @@ td {
   font-size: 12px;
   font-weight: 500;
   max-width: 420px;
+}
+
+.cell-truncada {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .badge {
@@ -627,11 +690,6 @@ td {
 @media (max-width: 800px) {
   .summary-grid {
     grid-template-columns: 1fr;
-  }
-
-  table {
-    display: block;
-    overflow-x: auto;
   }
 }
 </style>

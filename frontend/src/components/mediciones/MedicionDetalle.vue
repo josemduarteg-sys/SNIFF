@@ -2,18 +2,13 @@
 import { computed, ref } from 'vue'
 import { formatearNumero, formatearDiferencia } from '../../utils/formato'
 import { claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
-import { descargarEvidencia } from '../../services/medicionService'
+import { descargarEvidencia, descargarArchivoEvidencia } from '../../services/medicionService'
 
 const props = defineProps({
   medicion: {
     type: Object,
     required: true,
   },
-})
-
-const porcentaje = computed(() => {
-  const valor = Number(props.medicion.porcentaje_cumplimiento)
-  return Number.isNaN(valor) ? 0 : valor
 })
 
 const claseCumplimiento = computed(() => claseColorCumplimiento(props.medicion.estado_cumplimiento_color))
@@ -55,9 +50,16 @@ const tipoRegistroTexto = computed(() => {
 })
 
 const descargando = ref(false)
+const abriendo = ref(false)
+
+const extensionEvidencia = computed(() => {
+  const nombre = props.medicion.evidencia_nombre || ''
+  const partes = nombre.split('.')
+  return partes.length > 1 ? partes.pop().toUpperCase() : ''
+})
 
 async function verEvidencia() {
-  descargando.value = true
+  abriendo.value = true
 
   try {
     const blob = await descargarEvidencia(props.medicion.id)
@@ -67,6 +69,26 @@ async function verEvidencia() {
   } catch {
     // Silencioso: la descarga es una acción secundaria del detalle: si
     // falla (por ejemplo, el archivo ya no existe), no rompe la vista.
+  } finally {
+    abriendo.value = false
+  }
+}
+
+async function descargarEvidenciaArchivo() {
+  descargando.value = true
+
+  try {
+    const blob = await descargarArchivoEvidencia(props.medicion.id)
+    const url = window.URL.createObjectURL(blob)
+    const enlace = document.createElement('a')
+    enlace.href = url
+    enlace.download = props.medicion.evidencia_nombre || 'evidencia'
+    document.body.appendChild(enlace)
+    enlace.click()
+    enlace.remove()
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60000)
+  } catch {
+    // Silencioso: mismo criterio que verEvidencia().
   } finally {
     descargando.value = false
   }
@@ -99,25 +121,6 @@ function formatearFecha(fecha) {
           <span class="badge-dot"></span>
           {{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}
         </span>
-      </div>
-    </div>
-
-    <div class="progress-block">
-      <div class="progress-head">
-        <span title="Se calcula comparando el resultado obtenido con la meta establecida.">
-          Cumplimiento de la meta
-        </span>
-        <strong :class="claseCumplimiento">
-          {{ formatearNumero(porcentaje, { unidad: '%' }) }}
-        </strong>
-      </div>
-
-      <div class="progress-track">
-        <div
-          class="progress-fill"
-          :class="claseCumplimiento"
-          :style="{ width: `${Math.min(porcentaje, 100)}%` }"
-        ></div>
       </div>
     </div>
 
@@ -168,12 +171,7 @@ function formatearFecha(fecha) {
       </div>
 
       <div class="detail-item">
-        <span title="Se calcula comparando el resultado obtenido con la meta establecida.">Cumplimiento de la meta</span>
-        <strong>{{ formatearNumero(medicion.porcentaje_cumplimiento, { unidad: '%' }) }}</strong>
-      </div>
-
-      <div class="detail-item">
-        <span title="Estado individual de esta medición, según su propio cumplimiento de meta.">Estado del periodo</span>
+        <span title="Estado individual de esta medición, clasificado directamente contra los rangos configurados para este KPI.">Estado del periodo</span>
         <strong>{{ textoEstadoCumplimiento(medicion.estado_cumplimiento_nombre) }}</strong>
       </div>
 
@@ -233,26 +231,47 @@ function formatearFecha(fecha) {
     <div class="observation-box">
       <span>Evidencia / respaldo de lo realizado</span>
 
-      <button
-        v-if="medicion.tiene_evidencia"
-        class="btn-evidencia"
-        type="button"
-        :disabled="descargando"
-        @click="verEvidencia"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        {{ descargando ? 'Abriendo...' : 'Ver evidencia' }}
-      </button>
+      <template v-if="medicion.tiene_evidencia">
+        <p class="evidencia-nombre">
+          {{ medicion.evidencia_nombre }}
+          <span v-if="extensionEvidencia" class="evidencia-tipo">{{ extensionEvidencia }}</span>
+        </p>
+
+        <div class="evidencia-acciones">
+          <button
+            class="btn-evidencia"
+            type="button"
+            :disabled="abriendo"
+            @click="verEvidencia"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            {{ abriendo ? 'Abriendo...' : 'Ver evidencia' }}
+          </button>
+
+          <button
+            class="btn-evidencia"
+            type="button"
+            :disabled="descargando"
+            @click="descargarEvidenciaArchivo"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            {{ descargando ? 'Descargando...' : 'Descargar' }}
+          </button>
+        </div>
+      </template>
       <p v-else>Sin evidencia adjunta.</p>
     </div>
 
     <div class="note-box">
       <strong>Nota:</strong>
-      El porcentaje y el estado de cumplimiento son calculados por el backend según la meta y vigencia configuradas en el KPI autorizado.
+      El estado de cumplimiento se calcula automáticamente comparando el resultado directamente contra los rangos configurados para este KPI.
     </div>
   </section>
 </template>
@@ -312,48 +331,6 @@ p {
   letter-spacing: 0.4px;
   text-transform: uppercase;
 }
-
-.progress-block {
-  background: #f6f9fa;
-  border: 1px solid #eef2f5;
-  border-radius: 14px;
-  padding: 16px;
-}
-
-.progress-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  color: #5e6e82;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.progress-head strong {
-  font-size: 20px;
-}
-
-.progress-head strong.ok { color: #2a9d8f; }
-.progress-head strong.warning { color: #b9701e; }
-.progress-head strong.danger { color: #e76f51; }
-
-.progress-track {
-  width: 100%;
-  height: 10px;
-  border-radius: 999px;
-  background: #e4eaef;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: 999px;
-}
-
-.progress-fill.ok { background: #2a9d8f; }
-.progress-fill.warning { background: #f4a261; }
-.progress-fill.danger { background: #e76f51; }
 
 .detail-grid {
   display: grid;
@@ -459,6 +436,34 @@ p {
   color: #9aa8b8 !important;
   font-size: 11.5px !important;
   font-weight: 500 !important;
+}
+
+.evidencia-nombre {
+  margin: 0 0 10px !important;
+  color: #1d3557 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.evidencia-tipo {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(69, 123, 157, 0.12);
+  color: #457b9d;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+.evidencia-acciones {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .btn-evidencia {
