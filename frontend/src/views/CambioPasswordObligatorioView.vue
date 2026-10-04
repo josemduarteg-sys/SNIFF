@@ -133,7 +133,7 @@ function cerrarSesion() {
         <form @submit.prevent="actualizarPassword">
           <div class="heading">
             <h2>Cambio obligatorio de contraseña</h2>
-            <p>Estás usando una contraseña temporal. Para continuar, debes crear una contraseña nueva.</p>
+            <p>La contraseña que te asignó el administrador debe reemplazarse. Para continuar, creá una contraseña nueva.</p>
           </div>
 
           <div class="field">
@@ -223,7 +223,7 @@ function cerrarSesion() {
       </div>
 
       <div class="footer-note">
-        Por seguridad, no podés continuar sin actualizar tu contraseña temporal.
+        Por seguridad, no podés continuar sin actualizar tu contraseña.
       </div>
     </div>
   </div>

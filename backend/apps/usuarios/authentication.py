@@ -29,7 +29,7 @@ class JWTAuthenticationConControlPasswordTemporal(JWTAuthentication):
             and request.path not in RUTAS_PERMITIDAS_CON_PASSWORD_TEMPORAL
         ):
             raise PermissionDenied(
-                'Debés cambiar tu contraseña temporal antes de usar el sistema.'
+                'Debés cambiar tu contraseña antes de continuar utilizando el sistema.'
             )
 
         return resultado

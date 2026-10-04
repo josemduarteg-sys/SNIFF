@@ -86,6 +86,11 @@ class UsuarioSerializer(serializers.ModelSerializer):
             validated_data['correo'] = validated_data['email']
 
         usuario = Usuario(**validated_data)
+        # Todo usuario creado desde el módulo de Usuarios debe reemplazar la
+        # contraseña inicial asignada por el administrador en su primer inicio
+        # de sesión. Se fija acá (no como default del modelo) para no afectar
+        # superusuarios de consola, seeds ni usuarios existentes.
+        usuario.debe_cambiar_password = True
 
         if password:
             usuario.set_password(password)
@@ -198,16 +203,16 @@ class CambiarPasswordSerializer(serializers.Serializer):
 
         request = self.context.get('request')
         usuario = request.user
-        venia_de_password_temporal = usuario.debe_cambiar_password
+        era_cambio_obligatorio = usuario.debe_cambiar_password
 
         usuario.set_password(self.validated_data['password_nuevo'])
         usuario.debe_cambiar_password = False
         usuario.save()
 
-        if venia_de_password_temporal:
+        if era_cambio_obligatorio:
             descripcion = (
                 f'El usuario {usuario.username} completó el cambio obligatorio '
-                f'de contraseña temporal.'
+                f'de la contraseña asignada.'
             )
         else:
             descripcion = f'El usuario {usuario.username} cambió su contraseña.'
