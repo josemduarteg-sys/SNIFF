@@ -55,6 +55,8 @@ class PlanAnualTests(APITestCase):
         response = self.client.post('/api/planes-anuales/', {
             'plan_estrategico': self.plan_en_uso.id,
             'anio': 2027,
+            'fecha_inicio': '2027-01-01',
+            'fecha_fin': '2027-12-31',
         })
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -82,6 +84,8 @@ class PlanAnualTests(APITestCase):
         response = self.client.post('/api/planes-anuales/', {
             'plan_estrategico': self.plan_en_uso.id,
             'anio': 2029,
+            'fecha_inicio': '2029-01-01',
+            'fecha_fin': '2029-12-31',
         })
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -97,14 +101,19 @@ class PlanAnualTests(APITestCase):
 
     # 5. Año duplicado mismo Plan → rechazado.
     def test_anio_duplicado_mismo_plan_rechazado(self):
-        self.client.post('/api/planes-anuales/', {
+        primera = self.client.post('/api/planes-anuales/', {
             'plan_estrategico': self.plan_en_uso.id,
             'anio': 2027,
+            'fecha_inicio': '2027-01-01',
+            'fecha_fin': '2027-12-31',
         })
+        self.assertEqual(primera.status_code, status.HTTP_201_CREATED)
 
         response = self.client.post('/api/planes-anuales/', {
             'plan_estrategico': self.plan_en_uso.id,
             'anio': 2027,
+            'fecha_inicio': '2027-01-01',
+            'fecha_fin': '2027-12-31',
         })
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -122,11 +131,15 @@ class PlanAnualTests(APITestCase):
         self.client.post('/api/planes-anuales/', {
             'plan_estrategico': self.plan_en_uso.id,
             'anio': 2027,
+            'fecha_inicio': '2027-01-01',
+            'fecha_fin': '2027-12-31',
         })
 
         response = self.client.post('/api/planes-anuales/', {
             'plan_estrategico': plan_en_uso_b.id,
             'anio': 2027,
+            'fecha_inicio': '2027-01-01',
+            'fecha_fin': '2027-12-31',
         })
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -212,6 +225,190 @@ class PlanAnualTests(APITestCase):
 
         response_patch = self.client.patch(f'/api/planes-anuales/{plan_anual.id}/', {'anio': 2028})
         self.assertEqual(response_patch.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # --- Corrección Hernán bloque 1: fechas de vigencia ---
+
+    # 13. Crear un plan anual con fechas válidas.
+    def test_crear_plan_anual_con_fechas_validas(self):
+        response = self.client.post('/api/planes-anuales/', {
+            'plan_estrategico': self.plan_en_uso.id,
+            'anio': 2028,
+            'fecha_inicio': '2028-01-01',
+            'fecha_fin': '2028-12-31',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['fecha_inicio'], '2028-01-01')
+        self.assertEqual(response.data['fecha_fin'], '2028-12-31')
+
+    # 14. Fechas obligatorias en creación.
+    def test_fechas_obligatorias_en_creacion(self):
+        response = self.client.post('/api/planes-anuales/', {
+            'plan_estrategico': self.plan_en_uso.id,
+            'anio': 2028,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('fecha_inicio', response.data)
+
+    # 15. Fecha de inicio posterior a la de finalización → rechazada.
+    def test_fecha_inicio_posterior_a_fin_rechazada(self):
+        response = self.client.post('/api/planes-anuales/', {
+            'plan_estrategico': self.plan_en_uso.id,
+            'anio': 2028,
+            'fecha_inicio': '2028-12-31',
+            'fecha_fin': '2028-01-01',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('fecha_fin', response.data)
+
+    # 16. Fechas fuera de la vigencia del Plan estratégico → rechazadas.
+    def test_fechas_fuera_de_vigencia_plan_estrategico_rechazadas(self):
+        # self.plan_en_uso tiene vigencia 2027-01-01 a 2030-12-31.
+        response = self.client.post('/api/planes-anuales/', {
+            'plan_estrategico': self.plan_en_uso.id,
+            'anio': 2027,
+            'fecha_inicio': '2026-06-01',
+            'fecha_fin': '2027-12-31',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('fecha_inicio', response.data)
+
+    # 17. Fechas que no corresponden al año seleccionado → rechazadas.
+    def test_fechas_no_coherentes_con_anio_rechazadas(self):
+        response = self.client.post('/api/planes-anuales/', {
+            'plan_estrategico': self.plan_en_uso.id,
+            'anio': 2028,
+            'fecha_inicio': '2027-01-01',
+            'fecha_fin': '2027-12-31',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('fecha_inicio', response.data)
+
+    # 18. Un registro existente sin fechas sigue disponible (transición segura).
+    def test_plan_anual_existente_sin_fechas_sigue_disponible(self):
+        plan_sin_fechas = PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso, anio=2027, creado_por=self.usuario,
+        )
+
+        response = self.client.get(f'/api/planes-anuales/{plan_sin_fechas.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data['fecha_inicio'])
+        self.assertIsNone(response.data['fecha_fin'])
+
+    # --- Corrección Hernán bloque 1: un solo Plan anual En uso ---
+
+    # 19. Activar un plan anual cuando no existe otro En uso.
+    def test_activar_plan_anual_sin_otro_en_uso(self):
+        plan_anual = PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso,
+            anio=2027,
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            creado_por=self.usuario,
+        )
+
+        response = self.client.post(f'/api/planes-anuales/{plan_anual.id}/poner-en-uso/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        plan_anual.refresh_from_db()
+        self.assertEqual(plan_anual.estado, PlanAnual.ESTADO_EN_USO)
+
+    # 20a. Dos Planes estratégicos DIFERENTES SÍ pueden tener, cada uno,
+    #      su propio Plan anual En uso al mismo tiempo (corrección: la
+    #      regla es POR plan estratégico, no global).
+    def test_dos_estrategias_diferentes_permiten_plan_anual_en_uso_simultaneo(self):
+        otro_plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Otro Plan En Uso',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2030-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso,
+            anio=2027,
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        plan_candidato = PlanAnual.objects.create(
+            plan_estrategico=otro_plan_estrategico,
+            anio=2027,
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            creado_por=self.usuario,
+        )
+
+        response = self.client.post(f'/api/planes-anuales/{plan_candidato.id}/poner-en-uso/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        plan_candidato.refresh_from_db()
+        self.assertEqual(plan_candidato.estado, PlanAnual.ESTADO_EN_USO)
+
+    # 20b. Impedir activar un segundo Plan anual si otro ya está En uso
+    #      DENTRO DE LA MISMA estrategia.
+    def test_impedir_segundo_plan_anual_en_uso_misma_estrategia(self):
+        plan_activo = PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso,
+            anio=2027,
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        plan_candidato = PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso,
+            anio=2028,
+            fecha_inicio='2028-01-01',
+            fecha_fin='2028-12-31',
+            creado_por=self.usuario,
+        )
+
+        response = self.client.post(f'/api/planes-anuales/{plan_candidato.id}/poner-en-uso/')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(plan_activo.nombre, response.data['detail'])
+        plan_candidato.refresh_from_db()
+        self.assertEqual(plan_candidato.estado, PlanAnual.ESTADO_BORRADOR)
+
+    # 21. Cerrar el Plan anual activo y luego activar otro.
+    def test_cerrar_activo_y_luego_activar_otro(self):
+        plan_activo = PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso,
+            anio=2027,
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        plan_candidato = PlanAnual.objects.create(
+            plan_estrategico=self.plan_en_uso,
+            anio=2028,
+            fecha_inicio='2028-01-01',
+            fecha_fin='2028-12-31',
+            creado_por=self.usuario,
+        )
+
+        respuesta_bloqueada = self.client.post(f'/api/planes-anuales/{plan_candidato.id}/poner-en-uso/')
+        self.assertEqual(respuesta_bloqueada.status_code, status.HTTP_400_BAD_REQUEST)
+
+        respuesta_cerrar = self.client.post(f'/api/planes-anuales/{plan_activo.id}/cerrar/')
+        self.assertEqual(respuesta_cerrar.status_code, status.HTTP_200_OK)
+
+        respuesta_activar = self.client.post(f'/api/planes-anuales/{plan_candidato.id}/poner-en-uso/')
+        self.assertEqual(respuesta_activar.status_code, status.HTTP_200_OK)
+        plan_candidato.refresh_from_db()
+        self.assertEqual(plan_candidato.estado, PlanAnual.ESTADO_EN_USO)
 
 
 class ObjetivoEspecificoTests(APITestCase):

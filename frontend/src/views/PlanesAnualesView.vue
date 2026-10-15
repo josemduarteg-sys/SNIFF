@@ -419,12 +419,12 @@ onMounted(async () => {
       <div v-else class="table-scroll">
       <table>
         <colgroup>
-          <col style="width: 16%">
-          <col style="width: 28%">
-          <col style="width: 12%">
-          <col style="width: 16%">
+          <col style="width: 15%">
+          <col style="width: 24%">
+          <col style="width: 11%">
           <col style="width: 14%">
-          <col style="width: 14%">
+          <col style="width: 20%">
+          <col style="width: 16%">
         </colgroup>
         <thead>
           <tr>
@@ -432,7 +432,7 @@ onMounted(async () => {
             <th>Plan estratégico</th>
             <th>Estado</th>
             <th>Creado por</th>
-            <th>Fecha de creación</th>
+            <th>Vigencia</th>
             <th class="th-acciones" style="text-align: right;">Acciones</th>
           </tr>
         </thead>
@@ -459,7 +459,12 @@ onMounted(async () => {
             </td>
 
             <td>{{ plan.creado_por_username || 'Sin usuario' }}</td>
-            <td>{{ formatearFecha(plan.fecha_creacion) }}</td>
+            <td>
+              <span v-if="plan.fecha_inicio && plan.fecha_fin">
+                {{ formatearFecha(plan.fecha_inicio) }} – {{ formatearFecha(plan.fecha_fin) }}
+              </span>
+              <span v-else>Sin definir</span>
+            </td>
 
             <td class="td-acciones">
               <div class="actions-cell">

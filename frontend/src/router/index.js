@@ -14,6 +14,7 @@ import AreasView from '../views/AreasView.vue'
 import UsuariosView from '../views/UsuariosView.vue'
 import CambioPasswordObligatorioView from '../views/CambioPasswordObligatorioView.vue'
 import BitacoraView from '../views/BitacoraView.vue'
+import MapaEstrategicoView from '../views/MapaEstrategicoView.vue'
 
 const routes = [
   {
@@ -123,6 +124,14 @@ const routes = [
     path: '/bitacora',
     name: 'bitacora',
     component: BitacoraView,
+    meta: {
+      requiresAuth: true,
+    },
+  },
+  {
+    path: '/mapa-estrategico',
+    name: 'mapa-estrategico',
+    component: MapaEstrategicoView,
     meta: {
       requiresAuth: true,
     },

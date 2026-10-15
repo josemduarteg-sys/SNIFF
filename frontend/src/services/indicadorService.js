@@ -54,6 +54,11 @@ export async function obtenerRangosKpi() {
   return normalizarRespuesta(response)
 }
 
+export async function obtenerEstadosCumplimiento() {
+  const response = await api.get('estados-cumplimiento/')
+  return normalizarRespuesta(response)
+}
+
 export async function autorizarIndicador(id) {
   const response = await api.post(`indicadores-kpi/${id}/autorizar/`)
   return response.data

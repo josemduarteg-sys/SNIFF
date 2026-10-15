@@ -5,6 +5,7 @@ import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
 import UserModal from '../components/configuracion/UserModal.vue'
+import AsignarPasswordTemporalForm from '../components/configuracion/AsignarPasswordTemporalForm.vue'
 import {
   actualizarUsuario,
   crearUsuario,
@@ -59,6 +60,11 @@ const modalUsuarioAbierto = ref(false)
 const usuarioSeleccionado = ref(null)
 const guardandoUsuario = ref(false)
 const errorModalUsuario = ref('')
+
+const modalPasswordTemporalAbierto = ref(false)
+const solicitudPasswordTemporal = ref(null)
+const guardandoPasswordTemporal = ref(false)
+const errorModalPasswordTemporal = ref('')
 
 const solicitudes = ref([])
 const cargandoSolicitudes = ref(false)
@@ -359,32 +365,37 @@ async function ejecutarRechazarSolicitud(solicitud) {
 }
 
 function manejarAsignarPasswordTemporal(solicitud) {
-  const passwordTemporal = window.prompt('Ingrese la contraseña temporal:', '')
-
-  if (!passwordTemporal || !passwordTemporal.trim()) {
-    return
-  }
-
-  solicitarConfirmacion({
-    titulo: 'Asignar contraseña temporal',
-    mensaje: '¿Confirmás asignar esta contraseña temporal?',
-    textoSecundario: 'El usuario deberá cambiarla al iniciar sesión.',
-    textoConfirmar: 'Asignar',
-    variante: 'advertencia',
-    accion: () => ejecutarAsignarPasswordTemporal(solicitud, passwordTemporal),
-  })
+  solicitudPasswordTemporal.value = solicitud
+  errorModalPasswordTemporal.value = ''
+  modalPasswordTemporalAbierto.value = true
 }
 
-async function ejecutarAsignarPasswordTemporal(solicitud, passwordTemporal) {
-  error.value = ''
-  mensaje.value = ''
+function cerrarModalPasswordTemporal() {
+  if (guardandoPasswordTemporal.value) return
+
+  modalPasswordTemporalAbierto.value = false
+  solicitudPasswordTemporal.value = null
+  errorModalPasswordTemporal.value = ''
+}
+
+async function confirmarAsignarPasswordTemporal(payload) {
+  const solicitud = solicitudPasswordTemporal.value
+  if (!solicitud) return
+
+  guardandoPasswordTemporal.value = true
+  errorModalPasswordTemporal.value = ''
 
   try {
-    await asignarPasswordTemporal(solicitud.id, { password_temporal: passwordTemporal })
+    await asignarPasswordTemporal(solicitud.id, payload)
+    modalPasswordTemporalAbierto.value = false
+    solicitudPasswordTemporal.value = null
+    error.value = ''
     mensaje.value = 'Contraseña temporal asignada correctamente.'
     await cargarSolicitudesRestablecimiento()
   } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo asignar la contraseña temporal.')
+    errorModalPasswordTemporal.value = obtenerMensajeError(e, 'No se pudo asignar la contraseña temporal.')
+  } finally {
+    guardandoPasswordTemporal.value = false
   }
 }
 
@@ -982,6 +993,24 @@ onBeforeUnmount(() => {
         @confirmar="confirmarAccionPendiente"
         @cancelar="cancelarConfirmacion"
       />
+
+      <ModalBase
+        :abierto="modalPasswordTemporalAbierto"
+        titulo="Asignar contraseña temporal"
+        ancho="460px"
+        @cerrar="cerrarModalPasswordTemporal"
+      >
+        <div v-if="errorModalPasswordTemporal" class="alert error">
+          {{ errorModalPasswordTemporal }}
+        </div>
+
+        <AsignarPasswordTemporalForm
+          :solicitud="solicitudPasswordTemporal"
+          :guardando="guardandoPasswordTemporal"
+          @asignar="confirmarAsignarPasswordTemporal"
+          @cancelar="cerrarModalPasswordTemporal"
+        />
+      </ModalBase>
     </template>
   </AppLayout>
 </template>

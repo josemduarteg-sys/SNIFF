@@ -178,6 +178,8 @@ class PlanAnualSerializer(serializers.ModelSerializer):
             'plan_estrategico_estado',
             'anio',
             'nombre',
+            'fecha_inicio',
+            'fecha_fin',
             'estado',
             'creado_por',
             'creado_por_username',
@@ -226,10 +228,12 @@ class PlanAnualSerializer(serializers.ModelSerializer):
                     'no permite modificaciones.'
                 )
 
-            if instance.esta_en_uso() and ('plan_estrategico' in data or 'anio' in data):
+            campos_bloqueados_en_uso = {'plan_estrategico', 'anio', 'fecha_inicio', 'fecha_fin'}
+
+            if instance.esta_en_uso() and campos_bloqueados_en_uso.intersection(data.keys()):
                 raise serializers.ValidationError(
-                    'El plan estratégico y el año no pueden modificarse mientras '
-                    'el Plan anual está En uso.'
+                    'El plan estratégico, el año y las fechas de vigencia no pueden '
+                    'modificarse mientras el Plan anual está En uso.'
                 )
 
         if anio is None:
@@ -254,6 +258,53 @@ class PlanAnualSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'anio': 'Ya existe un plan anual para ese año.'
             })
+
+        # Fechas de vigencia (corrección Hernán, bloque 1). Obligatorias
+        # SOLO para registros nuevos — los existentes pueden quedar sin
+        # fecha (ver nota en el modelo) hasta que se completen a mano.
+        fecha_inicio = data.get('fecha_inicio', getattr(instance, 'fecha_inicio', None))
+        fecha_fin = data.get('fecha_fin', getattr(instance, 'fecha_fin', None))
+
+        if instance is None:
+            if not fecha_inicio:
+                raise serializers.ValidationError({
+                    'fecha_inicio': 'Ingresá la fecha de inicio del plan anual.'
+                })
+
+            if not fecha_fin:
+                raise serializers.ValidationError({
+                    'fecha_fin': 'Ingresá la fecha de finalización del plan anual.'
+                })
+
+        if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
+            raise serializers.ValidationError({
+                'fecha_fin': 'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+            })
+
+        if fecha_inicio and plan_estrategico.fecha_inicio and fecha_inicio < plan_estrategico.fecha_inicio:
+            raise serializers.ValidationError({
+                'fecha_inicio': 'La fecha de inicio debe estar dentro de la vigencia del Plan estratégico.'
+            })
+
+        if fecha_fin and plan_estrategico.fecha_fin and fecha_fin > plan_estrategico.fecha_fin:
+            raise serializers.ValidationError({
+                'fecha_fin': 'La fecha de finalización debe estar dentro de la vigencia del Plan estratégico.'
+            })
+
+        # Coherencia fecha <-> año: solo se exige en registros nuevos (en
+        # edición, ni anio ni las fechas pueden tocarse por separado salvo
+        # que el plan siga en Borrador, en cuyo caso ambos se revalidan
+        # igual con los valores finales ya combinados arriba).
+        if instance is None or 'anio' in data or 'fecha_inicio' in data or 'fecha_fin' in data:
+            if fecha_inicio and fecha_inicio.year != anio:
+                raise serializers.ValidationError({
+                    'fecha_inicio': 'La fecha de inicio debe pertenecer al año seleccionado.'
+                })
+
+            if fecha_fin and fecha_fin.year != anio:
+                raise serializers.ValidationError({
+                    'fecha_fin': 'La fecha de finalización debe pertenecer al año seleccionado.'
+                })
 
         return data
 

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
-import { obtenerIndicadoresKpi } from '../services/indicadorService'
+import { obtenerIndicadoresKpi, obtenerEstadosCumplimiento } from '../services/indicadorService'
 import { obtenerMediciones } from '../services/medicionService'
 import { obtenerAlertasPendientes } from '../services/alertaService'
 import { obtenerPlanesEstrategicos } from '../services/planEstrategicoService'
@@ -38,6 +38,7 @@ const planesAnuales = ref([])
 const indicadores = ref([])
 const mediciones = ref([])
 const alertasPendientes = ref([])
+const estadosCumplimientoCatalogo = ref([])
 
 async function cargarDatosDashboard() {
   cargando.value = true
@@ -50,12 +51,14 @@ async function cargarDatosDashboard() {
       indicadoresData,
       medicionesData,
       alertasData,
+      estadosCumplimientoData,
     ] = await Promise.all([
       obtenerPlanesEstrategicos(),
       obtenerPlanesAnuales(),
       obtenerIndicadoresKpi(),
       obtenerMediciones(),
       obtenerAlertasPendientes(),
+      obtenerEstadosCumplimiento(),
     ])
 
     planesEstrategicos.value = planesEstrategicosData
@@ -63,6 +66,7 @@ async function cargarDatosDashboard() {
     indicadores.value = indicadoresData
     mediciones.value = medicionesData
     alertasPendientes.value = alertasData
+    estadosCumplimientoCatalogo.value = estadosCumplimientoData
   } catch (e) {
     error.value = 'No se pudieron cargar los datos del panel de control.'
   } finally {
@@ -118,27 +122,27 @@ const totalCierresAutomaticos = computed(() => {
 })
 
 // ============================================================
-// Colores: SIEMPRE derivados de estado_acumulado_color /
-// estado_acumulado_hasta_medicion_color reales (nunca thresholds). Como
-// los gráficos agregan por NOMBRE de estado (no por una fila puntual), se
-// arma un mapa nombre -> color real tomado de los propios datos cargados.
-// "Sin mediciones" es la única categoría sin equivalente backend (no hay
-// EstadoCumplimiento para "todavía no se midió"): usa la clase neutral ya
-// existente en cumplimiento.js, igual que el resto del sistema.
+// Colores: SIEMPRE derivados del catálogo real EstadoCumplimiento (fuente
+// única y central para TODO el panel — helper reutilizado por las 3
+// gráficas de estado y sus leyendas). Corrección: antes este mapa se
+// armaba escaneando únicamente los KPI/mediciones ya CARGADOS, así que un
+// estado real (ej. "Incumplido") que ningún KPI tuviera en ese momento
+// nunca entraba al mapa; "color de un Incumplido" entonces caía al
+// fallback neutral (gris) de claseColorCumplimiento(undefined),
+// mostrándose igual que "Sin mediciones" — el bug reportado. Ahora se lee
+// directamente del catálogo /api/estados-cumplimiento/ (ya existente, sin
+// endpoint nuevo), que tiene el color real de cada estado exista o no
+// actualmente un KPI en ese estado. "Sin mediciones" sigue siendo la
+// única categoría sin equivalente backend (no hay EstadoCumplimiento
+// para "todavía no se midió") y usa la clase neutral ya existente.
 // ============================================================
 
 const coloresPorNombreEstado = computed(() => {
   const mapa = new Map()
 
-  indicadores.value.forEach((kpi) => {
-    if (kpi.estado_acumulado_nombre && kpi.estado_acumulado_color) {
-      mapa.set(kpi.estado_acumulado_nombre, kpi.estado_acumulado_color)
-    }
-  })
-
-  mediciones.value.forEach((medicion) => {
-    if (medicion.estado_acumulado_hasta_medicion_nombre && medicion.estado_acumulado_hasta_medicion_color) {
-      mapa.set(medicion.estado_acumulado_hasta_medicion_nombre, medicion.estado_acumulado_hasta_medicion_color)
+  estadosCumplimientoCatalogo.value.forEach((estado) => {
+    if (estado.nombre && estado.color) {
+      mapa.set(estado.nombre, estado.color)
     }
   })
 
@@ -200,6 +204,67 @@ const distribucionPorPlan = computed(() => {
     // Punto 8: se muestran TODOS los planes en uso, incluidos los que
     // tienen 0 KPI o 0 mediciones — nunca se ocultan.
     .sort((a, b) => a.nombre.localeCompare(b.nombre))
+})
+
+// ============================================================
+// 2.1) Gráfico — Estado individual de KPI
+// ============================================================
+
+// Punto 3 de la tarea: estado SIEMPRE tomado de estado_acumulado_nombre/
+// estado_acumulado_color ya calculados por el backend (RangoKPI real del
+// KPI) — nunca un umbral global inventado acá. Como los KPI pueden tener
+// unidades distintas (%, días, Q...), la barra NO codifica magnitud: cada
+// barra tiene altura fija y el color es el único portador de estado; el
+// resultado real se conserva como etiqueta y en el tooltip (nunca se
+// mezclan unidades en una escala numérica común).
+const estadoIndividualKpis = computed(() => {
+  return indicadoresAutorizados.value
+    .map((kpi) => {
+      const categoria = categorizarKpi(kpi)
+      const valorTexto = formatearValorUnidad(kpi.promedio_acumulado, kpi.unidad_medida)
+
+      return {
+        id: kpi.id,
+        nombre: kpi.nombre,
+        categoria,
+        clase: claseEstadoNombre(categoria),
+        valorTexto,
+        tooltip: `${kpi.nombre} · ${categoria}${kpi.cantidad_mediciones ? ` · ${valorTexto}` : ''}`,
+      }
+    })
+    .sort((a, b) => a.nombre.localeCompare(b.nombre))
+})
+
+// ============================================================
+// 2.2) Gráfico — Evidencias de respaldo por KPI
+// ============================================================
+
+// Punto 4: cuenta ARCHIVOS reales (medicion.tiene_evidencia, que en
+// backend es bool(evidencia) sobre el FileField real) de mediciones de
+// cada KPI. Se excluyen explícitamente cierre_automatico (nunca tienen
+// evidencia por diseño, pero se filtra igual por claridad/defensa) y
+// nunca se inventa "evidencia múltiple": sigue siendo 1 archivo por
+// medición, esto solo las cuenta por KPI.
+const evidenciasPorKpi = computed(() => {
+  const conteos = new Map()
+
+  mediciones.value.forEach((medicion) => {
+    if (medicion.cierre_automatico || !medicion.tiene_evidencia) return
+
+    conteos.set(medicion.indicador, (conteos.get(medicion.indicador) || 0) + 1)
+  })
+
+  const filas = indicadoresAutorizados.value.map((kpi) => ({
+    id: kpi.id,
+    nombre: kpi.nombre,
+    conteo: conteos.get(kpi.id) || 0,
+  }))
+
+  const maximo = Math.max(1, ...filas.map((fila) => fila.conteo))
+
+  return filas
+    .map((fila) => ({ ...fila, porcentaje: (fila.conteo / maximo) * 100 }))
+    .sort((a, b) => b.conteo - a.conteo || a.nombre.localeCompare(b.nombre))
 })
 
 // ============================================================
@@ -516,6 +581,77 @@ onMounted(() => {
           <div class="kpi-foot">Periodos cerrados en 0.00</div>
         </div>
 
+      </section>
+
+      <!-- ================= ESTADO INDIVIDUAL DE KPI ================= -->
+      <section class="card-panel chart-individual-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Estado individual de KPI</h2>
+            <div class="desc">Estado acumulado y resultado real de cada KPI autorizado, uno por uno</div>
+          </div>
+        </div>
+
+        <div v-if="!estadoIndividualKpis.length" class="dashboard-message">
+          No hay KPI autorizados registrados.
+        </div>
+
+        <template v-else>
+          <div class="kpi-individual-scroll">
+            <div class="kpi-individual-columnas">
+              <div
+                v-for="kpi in estadoIndividualKpis"
+                :key="kpi.id"
+                class="kpi-individual-columna"
+                :title="kpi.tooltip"
+                @click="irAIndicador(kpi.id)"
+              >
+                <div class="kpi-individual-valor">{{ kpi.valorTexto }}</div>
+                <div class="kpi-individual-barra" :class="kpi.clase"></div>
+                <div class="kpi-individual-nombre">{{ kpi.nombre }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-legend">
+            <div v-for="categoria in CATEGORIAS_ESTADO" :key="categoria" class="legend-item">
+              <span class="legend-dot" :class="claseEstadoNombre(categoria)"></span>{{ categoria }}
+            </div>
+          </div>
+        </template>
+      </section>
+
+      <!-- ================= EVIDENCIAS POR KPI ================= -->
+      <section class="card-panel chart-individual-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Evidencias de respaldo por KPI</h2>
+            <div class="desc">Cantidad de archivos de evidencia reales adjuntos a las mediciones de cada KPI</div>
+          </div>
+        </div>
+
+        <div v-if="!evidenciasPorKpi.length" class="dashboard-message">
+          No hay KPI autorizados registrados.
+        </div>
+
+        <template v-else>
+          <div class="evidencias-rows">
+            <div
+              v-for="fila in evidenciasPorKpi"
+              :key="fila.id"
+              class="evidencias-row"
+              @click="irAIndicador(fila.id)"
+            >
+              <span class="evidencias-nombre" :title="fila.nombre">{{ fila.nombre }}</span>
+
+              <div class="evidencias-track" :title="`${fila.nombre} · ${fila.conteo} archivo(s) de evidencia`">
+                <div class="evidencias-fill" :style="{ width: `${fila.porcentaje}%` }"></div>
+              </div>
+
+              <span class="evidencias-conteo" :class="{ 'es-cero': !fila.conteo }">{{ fila.conteo }}</span>
+            </div>
+          </div>
+        </template>
       </section>
 
       <!-- ================= GRÁFICOS ================= -->
@@ -990,6 +1126,94 @@ onMounted(() => {
   .legend-dot.danger{ background:var(--danger); }
   .legend-dot.neutral{ background:#C7D0D9; }
 
+  /* ---- Estado individual de KPI (barras de estado, altura fija: el
+     color es el único portador de magnitud/estado; el valor real va como
+     etiqueta, nunca se mezclan unidades en una escala numérica) ---- */
+  .chart-individual-panel{ margin-bottom:20px; }
+  .kpi-individual-scroll{ overflow-x:auto; padding-bottom:4px; }
+  .kpi-individual-columnas{
+    display:flex;
+    align-items:flex-end;
+    gap:14px;
+    min-height:190px;
+    min-width:min-content;
+  }
+  .kpi-individual-columna{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    width:84px;
+    flex-shrink:0;
+    cursor:pointer;
+  }
+  .kpi-individual-valor{
+    font-size:12px;
+    font-weight:800;
+    color:var(--navy);
+    margin-bottom:6px;
+    white-space:nowrap;
+  }
+  .kpi-individual-barra{
+    width:100%;
+    height:100px;
+    border-radius:8px;
+    transition:opacity .15s ease;
+  }
+  .kpi-individual-columna:hover .kpi-individual-barra{ opacity:0.82; }
+  .kpi-individual-barra.ok{ background:var(--success); }
+  .kpi-individual-barra.warning{ background:var(--orange); }
+  .kpi-individual-barra.danger{ background:var(--danger); }
+  .kpi-individual-barra.neutral{ background:#C7D0D9; }
+  .kpi-individual-nombre{
+    font-size:10.5px;
+    font-weight:700;
+    color:var(--text-muted);
+    margin-top:8px;
+    text-align:center;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:84px;
+  }
+
+  /* ---- Evidencias por KPI (barras horizontales, SÍ magnitud: el
+     conteo de archivos es la misma unidad para todos los KPI) ---- */
+  .evidencias-rows{ display:flex; flex-direction:column; gap:12px; max-height:360px; overflow-y:auto; padding-right:4px; }
+  .evidencias-row{
+    display:grid;
+    grid-template-columns: 1fr 2.2fr 28px;
+    align-items:center;
+    gap:10px;
+    cursor:pointer;
+  }
+  .evidencias-nombre{
+    font-size:12px;
+    font-weight:700;
+    color:var(--navy);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .evidencias-track{
+    height:14px;
+    border-radius:7px;
+    background:var(--bg);
+    overflow:hidden;
+  }
+  .evidencias-fill{
+    height:100%;
+    min-width:2px;
+    border-radius:7px;
+    background:var(--steel);
+  }
+  .evidencias-conteo{
+    font-size:12px;
+    font-weight:800;
+    color:var(--navy);
+    text-align:right;
+  }
+  .evidencias-conteo.es-cero{ color:var(--text-muted); font-weight:700; }
+
   /* ---- tabla ---- */
   .table-card{ margin-bottom:20px; }
   .table-scroll{ overflow-x:auto; }
@@ -1161,5 +1385,7 @@ onMounted(() => {
   @media (max-width:640px){
     .summary-grid{ grid-template-columns:1fr; }
     .plan-row-name{ max-width:55%; }
+    .evidencias-row{ grid-template-columns: 90px 1fr 24px; }
+    .evidencias-nombre{ font-size:11px; }
   }
 </style>

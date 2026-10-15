@@ -41,6 +41,11 @@ const emit = defineEmits(['logout'])
 
 const router = useRouter()
 
+// Búsqueda global: implementación y marcado pendientes para una próxima
+// etapa, oculta temporalmente del encabezado sin quitar su lógica/markup.
+// Reactivar: cambiar esta constante a true.
+const busquedaGlobalHabilitada = false
+
 const sidebarContraido = ref(false)
 
 const alertasPendientes = ref([])
@@ -304,7 +309,7 @@ onBeforeUnmount(() => {
           <span class="current">{{ breadcrumbActual }}</span>
         </div>
 
-        <div class="topbar-search topbar-search--deshabilitado" title="Búsqueda global no disponible por el momento">
+        <div v-if="busquedaGlobalHabilitada" class="topbar-search topbar-search--deshabilitado" title="Búsqueda global no disponible por el momento">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />

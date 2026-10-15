@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 
 
 class Area(models.Model):
@@ -138,6 +139,15 @@ class PlanAnual(models.Model):
         related_name='planes_anuales'
     )
     anio = models.PositiveIntegerField()
+    # Fechas de vigencia específicas del Plan anual (corrección Hernán,
+    # bloque 1). Nullable a propósito, igual que PlanEstrategico.fecha_inicio/
+    # fecha_fin: así los registros existentes (creados antes de este campo)
+    # no quedan rotos ni requieren una fecha histórica inventada. Para
+    # registros NUEVOS, la obligatoriedad se exige en el serializer (ver
+    # PlanAnualSerializer.validate), no acá — ver services.py/tests.py sobre
+    # por qué no se backfillea ningún valor en la migración.
+    fecha_inicio = models.DateField(blank=True, null=True)
+    fecha_fin = models.DateField(blank=True, null=True)
     estado = models.CharField(
         max_length=20,
         choices=ESTADO_CHOICES,
@@ -159,8 +169,28 @@ class PlanAnual(models.Model):
             models.UniqueConstraint(
                 fields=['plan_estrategico', 'anio'],
                 name='unique_plan_anual_por_anio',
-            )
+            ),
+            # Corrección Hernán bloque 1: un único Plan anual "En uso" POR
+            # Plan estratégico (no global). Índice único parcial de
+            # Postgres sobre (plan_estrategico, estado), filtrado a las
+            # filas en 'en_uso' — el mismo valor literal que ESTADO_EN_USO
+            # arriba (no se puede referenciar la constante acá: el cuerpo
+            # de Meta no ve el namespace de la clase contenedora). Dos
+            # Planes estratégicos distintos SÍ pueden tener cada uno su
+            # propio Plan anual en_uso al mismo tiempo, porque la condición
+            # solo compara filas dentro del mismo plan_estrategico.
+            models.UniqueConstraint(
+                fields=['plan_estrategico', 'estado'],
+                condition=Q(estado='en_uso'),
+                name='unique_plan_anual_en_uso_por_estrategia',
+            ),
         ]
+
+    def clean(self):
+        if self.fecha_inicio and self.fecha_fin and self.fecha_fin < self.fecha_inicio:
+            raise ValidationError(
+                'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+            )
 
     def esta_en_borrador(self):
         return self.estado == self.ESTADO_BORRADOR

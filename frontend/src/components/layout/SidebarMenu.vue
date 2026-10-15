@@ -110,7 +110,7 @@ const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
         <span>Registro de Mediciones</span>
       </RouterLink>
 
-      <RouterLink to="/dashboard" class="nav-item">
+      <RouterLink to="/mapa-estrategico" class="nav-item" active-class="active">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
           <path d="M9 3v15M15 6v15" />

@@ -18,6 +18,8 @@ const emit = defineEmits(['guardar', 'cancelar'])
 const estado = reactive({
   plan_estrategico: '',
   anio: '',
+  fecha_inicio: '',
+  fecha_fin: '',
   error: '',
 })
 
@@ -47,6 +49,8 @@ watch(
 function cargarFormulario() {
   estado.plan_estrategico = props.planAnual?.plan_estrategico || ''
   estado.anio = props.planAnual?.anio || ''
+  estado.fecha_inicio = props.planAnual?.fecha_inicio || ''
+  estado.fecha_fin = props.planAnual?.fecha_fin || ''
   estado.error = ''
 }
 
@@ -63,6 +67,37 @@ function validarFormulario() {
     return false
   }
 
+  // Fechas de vigencia: obligatorias solo al crear (ver también la
+  // validación equivalente y autoritativa en backend:
+  // PlanAnualSerializer.validate). En edición, mientras el plan sigue en
+  // Borrador, también se revalidan si se tocan.
+  if (!esEdicion.value || !esEnUso.value) {
+    if (!estado.fecha_inicio) {
+      estado.error = 'Ingresá la fecha de inicio del plan anual.'
+      return false
+    }
+
+    if (!estado.fecha_fin) {
+      estado.error = 'Ingresá la fecha de finalización del plan anual.'
+      return false
+    }
+  }
+
+  if (estado.fecha_inicio && estado.fecha_fin && estado.fecha_fin < estado.fecha_inicio) {
+    estado.error = 'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+    return false
+  }
+
+  if (estado.fecha_inicio && Number(estado.fecha_inicio.slice(0, 4)) !== Number(estado.anio)) {
+    estado.error = 'La fecha de inicio debe pertenecer al año seleccionado.'
+    return false
+  }
+
+  if (estado.fecha_fin && Number(estado.fecha_fin.slice(0, 4)) !== Number(estado.anio)) {
+    estado.error = 'La fecha de finalización debe pertenecer al año seleccionado.'
+    return false
+  }
+
   return true
 }
 
@@ -71,10 +106,17 @@ function guardar() {
     return
   }
 
-  emit('guardar', {
+  const payload = {
     plan_estrategico: estado.plan_estrategico,
     anio: Number(estado.anio),
-  })
+  }
+
+  if (!esEnUso.value) {
+    payload.fecha_inicio = estado.fecha_inicio || null
+    payload.fecha_fin = estado.fecha_fin || null
+  }
+
+  emit('guardar', payload)
 }
 
 function cancelar() {
@@ -117,6 +159,28 @@ function cancelar() {
         />
 
         <small class="field-hint">Debe estar dentro de la vigencia del plan estratégico seleccionado.</small>
+      </label>
+
+      <label class="field">
+        <span>Fecha de inicio</span>
+
+        <input
+          v-model="estado.fecha_inicio"
+          type="date"
+          :disabled="esEnUso"
+        />
+      </label>
+
+      <label class="field">
+        <span>Fecha de finalización</span>
+
+        <input
+          v-model="estado.fecha_fin"
+          type="date"
+          :disabled="esEnUso"
+        />
+
+        <small class="field-hint">Ambas fechas deben pertenecer al año seleccionado.</small>
       </label>
     </div>
 

@@ -49,6 +49,16 @@ function textoEstado(estado) {
       </div>
 
       <div class="detail-item">
+        <span>Fecha de inicio</span>
+        <strong>{{ formatearFecha(planAnual.fecha_inicio) }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Fecha de finalización</span>
+        <strong>{{ formatearFecha(planAnual.fecha_fin) }}</strong>
+      </div>
+
+      <div class="detail-item">
         <span>Creado por</span>
         <strong>{{ planAnual.creado_por_username || 'Sistema' }}</strong>
       </div>

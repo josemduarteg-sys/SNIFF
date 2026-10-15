@@ -44,10 +44,20 @@ export async function cerrarPlanAnual(id) {
 }
 
 function limpiarPayloadPlanAnual(payload) {
-  return {
+  const limpio = {
     plan_estrategico: payload.plan_estrategico,
     anio: payload.anio,
   }
+
+  if ('fecha_inicio' in payload) {
+    limpio.fecha_inicio = payload.fecha_inicio
+  }
+
+  if ('fecha_fin' in payload) {
+    limpio.fecha_fin = payload.fecha_fin
+  }
+
+  return limpio
 }
 
 function normalizarRespuesta(response) {

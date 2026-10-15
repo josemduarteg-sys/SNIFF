@@ -228,6 +228,8 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='poner-en-uso')
     def poner_en_uso(self, request, pk=None):
+        from django.db import IntegrityError, transaction
+
         from apps.auditoria.services import registrar_bitacora_seguro
 
         plan_anual = self.get_object()
@@ -244,8 +246,58 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        plan_anual.estado = PlanAnual.ESTADO_EN_USO
-        plan_anual.save(update_fields=['estado'])
+        # Regla Hernán bloque 1 (corregida): un único Plan anual "En uso"
+        # POR Plan estratégico, no en todo SNIFF — dos Planes estratégicos
+        # distintos pueden tener cada uno su propio Plan anual activo al
+        # mismo tiempo. select_for_update() bloquea las filas ya existentes
+        # de ESTE plan_estrategico en estado En uso durante esta
+        # transacción, evitando que dos cierres/activaciones concurrentes
+        # dentro de la misma estrategia pisen la verificación entre sí. No
+        # cierra ningún plan automáticamente: si ya hay uno activo en esta
+        # misma estrategia, se rechaza y se identifica cuál es.
+        with transaction.atomic():
+            otro_en_uso = (
+                PlanAnual.objects
+                .select_for_update()
+                .select_related('plan_estrategico')
+                .filter(
+                    estado=PlanAnual.ESTADO_EN_USO,
+                    plan_estrategico_id=plan_anual.plan_estrategico_id,
+                )
+                .exclude(pk=plan_anual.pk)
+                .first()
+            )
+
+            if otro_en_uso is not None:
+                return Response(
+                    {
+                        'detail': (
+                            f'Ya existe un Plan anual En uso en el Plan estratégico '
+                            f'"{otro_en_uso.plan_estrategico.titulo}": "{otro_en_uso.nombre}". '
+                            'Cerralo antes de activar otro Plan anual de esta misma estrategia.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            plan_anual.estado = PlanAnual.ESTADO_EN_USO
+
+            try:
+                plan_anual.save(update_fields=['estado'])
+            except IntegrityError:
+                # Resguardo final a nivel de base de datos, por si el
+                # constraint de unicidad ya está aplicado (ver nota en la
+                # migración) y una carrera extrema lo dispara pese al lock
+                # anterior.
+                return Response(
+                    {
+                        'detail': (
+                            'Ya existe un Plan anual En uso en este Plan estratégico. '
+                            'Cerralo antes de activar otro.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         registrar_bitacora_seguro(
             usuario=request.user,

@@ -216,8 +216,19 @@ class IndicadorKPITests(APITestCase):
 
     # 14. Mismo nombre en diferente ObjetivoEspecifico permitido.
     def test_mismo_nombre_diferente_objetivo_especifico_permitido(self):
+        # Plan estratégico propio: desde la corrección Hernán bloque 1, un
+        # mismo Plan estratégico no puede tener dos Planes anuales En uso a
+        # la vez (self.plan_estrategico ya tiene a self.plan_anual_en_uso).
+        plan_estrategico_b = PlanEstrategico.objects.create(
+            titulo='Plan estratégico KPI B',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2030-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
         plan_anual_b = PlanAnual.objects.create(
-            plan_estrategico=self.plan_estrategico,
+            plan_estrategico=plan_estrategico_b,
             anio=2030,
             estado=PlanAnual.ESTADO_EN_USO,
             creado_por=self.usuario,
@@ -244,8 +255,29 @@ class IndicadorKPITests(APITestCase):
 
     # 15. Mismo nombre en Plan 2027 y Plan 2028 permitido.
     def test_mismo_nombre_plan_2027_y_plan_2028_permitido(self):
-        self.plan_anual_borrador.estado = PlanAnual.ESTADO_EN_USO
-        self.plan_anual_borrador.save(update_fields=['estado'])
+        # Plan estratégico propio para el "Plan 2028": self.plan_estrategico
+        # ya tiene a self.plan_anual_en_uso (2027) En uso, y desde la
+        # corrección Hernán bloque 1 un mismo Plan estratégico no admite
+        # dos Planes anuales En uso simultáneos.
+        plan_estrategico_2028 = PlanEstrategico.objects.create(
+            titulo='Plan estratégico KPI 2028',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2030-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+        plan_anual_2028 = PlanAnual.objects.create(
+            plan_estrategico=plan_estrategico_2028,
+            anio=2028,
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+        objetivo_especifico_2028 = ObjetivoEspecifico.objects.create(
+            plan_anual=plan_anual_2028,
+            objetivo_general=self.objetivo_general,
+            texto_objetivo='Objetivo específico 2028 B',
+            creado_por=self.usuario,
+        )
 
         self.client.post(
             '/api/indicadores-kpi/',
@@ -254,7 +286,7 @@ class IndicadorKPITests(APITestCase):
 
         response = self.client.post(
             '/api/indicadores-kpi/',
-            self.payload_base(self.objetivo_especifico_borrador.id, nombre='Recuperación de cartera'),
+            self.payload_base(objetivo_especifico_2028.id, nombre='Recuperación de cartera'),
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -963,10 +995,15 @@ class PromedioAcumuladoTests(MedicionTestsBase):
         kpi_2027 = self.crear_kpi('Mensual', nombre='KPI 2027')
         registrar_medicion(self.client, kpi_2027, '80', date(2027, 1, 31))
 
+        # Borrador a propósito (no en_uso): self.plan_estrategico ya tiene a
+        # self.plan_anual (2027) En uso, y desde la corrección Hernán
+        # bloque 1 un mismo Plan estratégico no admite dos Planes anuales
+        # En uso simultáneos. El estado del Plan anual no afecta a este
+        # test (KPI y Medicion se crean directo por ORM/servicio, sin pasar
+        # por la validación de "Plan anual En uso" del serializer).
         plan_anual_2028 = PlanAnual.objects.create(
             plan_estrategico=self.plan_estrategico,
             anio=2028,
-            estado=PlanAnual.ESTADO_EN_USO,
             creado_por=self.usuario,
         )
         objetivo_2028 = ObjetivoEspecifico.objects.create(

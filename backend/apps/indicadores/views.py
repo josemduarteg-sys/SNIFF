@@ -301,12 +301,7 @@ class MedicionViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='evidencia')
     def evidencia(self, request, pk=None):
-        # Visualización autenticada (punto 30): no se expone MEDIA_URL como
-        # ruta pública. get_object() ya aplica permission_classes + el
-        # queryset del propio ViewSet, así que respeta exactamente los
-        # mismos permisos de lectura que el resto de Medicion. Disposición
-        # inline: para PDF, el navegador la abre en la misma pestaña/visor
-        # en vez de forzar la descarga (ver acción `descargar` para eso).
+
         medicion = self.get_object()
 
         if not medicion.evidencia:
