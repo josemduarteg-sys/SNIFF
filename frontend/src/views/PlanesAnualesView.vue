@@ -15,7 +15,7 @@ import {
   obtenerPlanesEstrategicosParaPlanAnual,
   ponerEnUsoPlanAnual,
 } from '../services/planAnualService'
-import { esAdministrador, puedeGestionarPlanesAnuales } from '../utils/permisos'
+import { esAdministradorPlanificacion, puedeGestionarPlanesAnuales } from '../utils/permisos'
 import { useConfirmacion } from '../composables/useConfirmacion'
 import { useResaltado } from '../composables/useResaltado'
 import { usePaginacion } from '../composables/usePaginacion'
@@ -30,7 +30,7 @@ const props = defineProps({
 })
 
 const puedeGestionar = computed(() => puedeGestionarPlanesAnuales(props.usuario))
-const esAdmin = computed(() => esAdministrador(props.usuario))
+const esAdmin = computed(() => esAdministradorPlanificacion(props.usuario))
 
 const emit = defineEmits(['logout'])
 

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { debeCambiarPassword, estaAutenticado } from '../services/authService'
+import { debeCambiarPassword, estaAutenticado, obtenerRolAlmacenado } from '../services/authService'
+import { esAdministradorPlanificacion, esAdministradorSistema } from '../utils/permisos'
 
 import LoginView from '../views/LoginView.vue'
 import DashboardView from '../views/DashboardView.vue'
@@ -101,6 +102,7 @@ const routes = [
     component: AreasView,
     meta: {
       requiresAuth: true,
+      verificarAcceso: esAdministradorPlanificacion,
     },
   },
   {
@@ -109,6 +111,7 @@ const routes = [
     component: UsuariosView,
     meta: {
       requiresAuth: true,
+      verificarAcceso: esAdministradorSistema,
     },
   },
   {
@@ -126,6 +129,7 @@ const routes = [
     component: BitacoraView,
     meta: {
       requiresAuth: true,
+      verificarAcceso: esAdministradorSistema,
     },
   },
   {
@@ -164,6 +168,21 @@ router.beforeEach((to) => {
 
   if (to.path === '/cambio-password-obligatorio' && autenticado) {
     return '/dashboard'
+  }
+
+  // Bloque 2: protección de rutas por rol. Las páginas de navegación de
+  // planificación/KPI/mediciones quedan SIN restricción acá a propósito
+  // (el Usuario de consulta debe poder navegarlas, de solo lectura — los
+  // botones de escritura ya se ocultan por componente). Solo las páginas
+  // exclusivas de un rol (Áreas, Usuarios, Bitácora) usan
+  // meta.verificarAcceso. La autorización real y definitiva es la del
+  // backend; esto solo evita exponer la pantalla en la navegación.
+  if (autenticado && to.meta.verificarAcceso) {
+    const usuarioActual = { rol: obtenerRolAlmacenado() }
+
+    if (!to.meta.verificarAcceso(usuarioActual)) {
+      return '/dashboard'
+    }
   }
 
   return true

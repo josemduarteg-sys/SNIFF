@@ -7,8 +7,11 @@ from .models import ObjetivoEspecifico, ObjetivoGeneral, PlanAnual, PlanEstrateg
 
 
 def crear_usuario_admin(username):
+    # Bloque 2: estas pruebas ejercitan CRUD de Plan/Objetivo (vía API) —
+    # dominio exclusivo de Administrador de planificación bajo los 4 roles
+    # definitivos (Administrador del sistema ya no gestiona planificación).
     rol, _ = Rol.objects.get_or_create(
-        nombre='Administrador',
+        nombre='Administrador de planificación',
         defaults={'descripcion': 'Rol de prueba', 'estado': True},
     )
 

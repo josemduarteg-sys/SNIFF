@@ -11,7 +11,7 @@ import {
   obtenerObjetivosGenerales,
   obtenerPlanesEstrategicosParaObjetivo,
 } from '../services/objetivoGeneralService'
-import { esAdministrador, puedeGestionarObjetivosGenerales } from '../utils/permisos'
+import { esAdministradorPlanificacion, puedeGestionarObjetivosGenerales } from '../utils/permisos'
 import { useResaltado } from '../composables/useResaltado'
 import { usePaginacion } from '../composables/usePaginacion'
 import Paginacion from '../components/common/Paginacion.vue'
@@ -25,7 +25,7 @@ const props = defineProps({
 })
 
 const puedeGestionar = computed(() => puedeGestionarObjetivosGenerales(props.usuario))
-const esAdmin = computed(() => esAdministrador(props.usuario))
+const esAdmin = computed(() => esAdministradorPlanificacion(props.usuario))
 
 const emit = defineEmits(['logout'])
 

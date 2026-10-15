@@ -13,7 +13,7 @@ import {
   obtenerPlanesEstrategicos,
   ponerEnUsoPlanEstrategico,
 } from '../services/planEstrategicoService'
-import { esAdministrador, puedeGestionarPlanesEstrategicos } from '../utils/permisos'
+import { esAdministradorPlanificacion, puedeGestionarPlanesEstrategicos } from '../utils/permisos'
 import { useConfirmacion } from '../composables/useConfirmacion'
 import { useResaltado } from '../composables/useResaltado'
 import { usePaginacion } from '../composables/usePaginacion'
@@ -28,7 +28,7 @@ const props = defineProps({
 })
 
 const puedeGestionar = computed(() => puedeGestionarPlanesEstrategicos(props.usuario))
-const esAdmin = computed(() => esAdministrador(props.usuario))
+const esAdmin = computed(() => esAdministradorPlanificacion(props.usuario))
 
 const emit = defineEmits(['logout'])
 

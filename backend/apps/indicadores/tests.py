@@ -7,9 +7,14 @@ from apps.usuarios.models import Rol, Usuario
 from .models import EstadoCumplimiento, Frecuencia, IndicadorKPI, RangoKPI
 
 
-def crear_usuario_admin(username):
+def crear_usuario_admin(username, rol_nombre='Administrador de planificación'):
+    # Bloque 2: por defecto crea un Administrador de planificación (dueño
+    # de Plan/Objetivo/KPI bajo los 4 roles definitivos — la mayoría de
+    # las clases de este archivo prueban justamente eso). Las que
+    # necesitan registrar MEDICIONES vía API (dominio de Ejecutor
+    # operativo, ver MedicionTestsBase) pasan rol_nombre explícito.
     rol, _ = Rol.objects.get_or_create(
-        nombre='Administrador',
+        nombre=rol_nombre,
         defaults={'descripcion': 'Rol de prueba', 'estado': True},
     )
 
@@ -392,6 +397,12 @@ class IndicadorKPITests(APITestCase):
             self.assertEqual(siguiente.status_code, status.HTTP_200_OK)
             self.assertTrue(siguiente.data['disponible'])
 
+            # Bloque 2: registrar la medición es dominio de Ejecutor
+            # operativo, distinto del Administrador de planificación
+            # (self.usuario) que creó y autorizó el KPI arriba.
+            ejecutor = crear_usuario_admin('ejecutor_flujo_medicion', rol_nombre='Ejecutor operativo')
+            self.client.force_authenticate(user=ejecutor)
+
             response_medicion = self.client.post('/api/mediciones/', {
                 'indicador': kpi_id,
                 'valor_resultado': '90',
@@ -452,7 +463,12 @@ class MedicionTestsBase(APITestCase):
     NOMBRE_USUARIO = 'admin_mediciones_base'
 
     def setUp(self):
-        self.usuario = crear_usuario_admin(self.NOMBRE_USUARIO)
+        # Bloque 2: self.usuario es quien registra las mediciones vía API
+        # en todas las subclases (registrar_medicion) — dominio de
+        # Ejecutor operativo. La creación de Plan/Objetivo/KPI en este
+        # setUp es directa por ORM (creado_por=self.usuario), así que el
+        # rol de self.usuario no afecta esa parte.
+        self.usuario = crear_usuario_admin(self.NOMBRE_USUARIO, rol_nombre='Ejecutor operativo')
         self.client.force_authenticate(user=self.usuario)
         self.frecuencias = crear_catalogos_medicion()
 
@@ -1310,6 +1326,14 @@ class SerializersAcumuladosTests(MedicionTestsBase):
         kpi = self.crear_kpi('Mensual', nombre='KPI campos solo lectura')
         registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
 
+        # Bloque 2: editar un KPI (aunque sea un campo que termina
+        # ignorado por ser de solo lectura) es dominio de Administrador de
+        # planificación, no de Ejecutor operativo (self.usuario acá).
+        admin_planificacion = crear_usuario_admin(
+            'admin_planificacion_solo_lectura', rol_nombre='Administrador de planificación'
+        )
+        self.client.force_authenticate(user=admin_planificacion)
+
         response = self.client.patch(
             f'/api/indicadores-kpi/{kpi.id}/', {'promedio_acumulado': '999.00'}
         )
@@ -1402,6 +1426,16 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
 
     NOMBRE_USUARIO = 'admin_marcar_revisada'
 
+    def setUp(self):
+        super().setUp()
+        # Bloque 2: registrar mediciones (self.usuario, Ejecutor operativo)
+        # y marcar alertas revisadas (Administrador de planificación) son
+        # dominios distintos bajo los 4 roles definitivos — acá se
+        # necesitan los dos usuarios dentro del mismo test.
+        self.admin_planificacion = crear_usuario_admin(
+            'admin_planificacion_alertas', rol_nombre='Administrador de planificación'
+        )
+
     # A. Una alerta pendiente -> marcar revisada -> cambia de estado, queda
     # en BD (no se borra), con fecha_revision y revisado_por.
     def test_marcar_alerta_individual_revisada(self):
@@ -1411,6 +1445,7 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
         alerta = alertas_cumplimiento_pendientes(kpi).first()
         self.assertIsNotNone(alerta)
 
+        self.client.force_authenticate(user=self.admin_planificacion)
         response = self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -1419,7 +1454,7 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
         alerta.refresh_from_db()
         self.assertEqual(alerta.estado_alerta, 'revisada')
         self.assertIsNotNone(alerta.fecha_revision)
-        self.assertEqual(alerta.revisado_por_id, self.usuario.id)
+        self.assertEqual(alerta.revisado_por_id, self.admin_planificacion.id)
 
         # Ya no aparece entre las pendientes del centro de notificaciones,
         # pero sigue existiendo en la base para trazabilidad.
@@ -1433,6 +1468,7 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
         registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
         alerta = alertas_cumplimiento_pendientes(kpi).first()
 
+        self.client.force_authenticate(user=self.admin_planificacion)
         self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
         alerta.refresh_from_db()
         fecha_revision_original = alerta.fecha_revision
@@ -1453,6 +1489,7 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
 
         self.assertEqual(Alerta.objects.filter(estado_alerta='pendiente').count(), 2)
 
+        self.client.force_authenticate(user=self.admin_planificacion)
         response = self.client.post('/api/alertas/marcar-todas-revisadas/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -1461,6 +1498,7 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
 
     # "Marcar todas" sin ninguna alerta pendiente no debe producir error.
     def test_marcar_todas_sin_alertas_no_falla(self):
+        self.client.force_authenticate(user=self.admin_planificacion)
         response = self.client.post('/api/alertas/marcar-todas-revisadas/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -1512,6 +1550,7 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
         ).first()
         self.assertIsNotNone(alerta)
 
+        self.client.force_authenticate(user=self.admin_planificacion)
         response = self.client.post(f'/api/alertas/{alerta.id}/marcar-revisada/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 

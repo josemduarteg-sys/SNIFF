@@ -21,7 +21,7 @@ def obtener_rol(nombre):
 
 def crear_usuario_admin(username):
     usuario = Usuario.objects.create_user(username=username, password='clave-prueba-123')
-    usuario.rol = obtener_rol('Administrador')
+    usuario.rol = obtener_rol('Administrador del sistema')
     usuario.correo = f'{username}@sniff.test'
     usuario.save()
     return usuario
@@ -72,7 +72,12 @@ class CambioObligatorioPasswordTests(APITestCase):
         self.assertTrue(usuario.check_password(PASSWORD_INICIAL))
 
     def test_caso_1_aplica_a_todos_los_roles(self):
-        roles = ['Administrador', 'Supervisor', 'Usuario operativo', 'Usuario de consulta']
+        roles = [
+            'Administrador del sistema',
+            'Administrador de planificación',
+            'Ejecutor operativo',
+            'Usuario de consulta',
+        ]
         for i, rol in enumerate(roles):
             with self.subTest(rol=rol):
                 response = self.crear_usuario_desde_modulo(f'nuevo_rol_{i}', rol)

@@ -1,7 +1,5 @@
 import logging
 
-from django.db.models import Q
-
 from .models import Bitacora, Notificacion
 
 logger = logging.getLogger(__name__)
@@ -67,11 +65,22 @@ def crear_notificacion(usuario_destino, tipo, titulo, mensaje, enlace=None):
 
 def notificar_administradores(tipo, titulo, mensaje, enlace=None):
     from apps.usuarios.models import Usuario
+    from apps.usuarios.permissions import es_administrador_sistema
 
-    administradores = Usuario.objects.filter(
-        Q(rol__nombre__iexact='administrador') | Q(rol__nombre__iexact='admin'),
-        is_active=True,
-    )
+    # Bug detectado tras el Bloque 2: esta consulta seguía buscando
+    # literalmente rol__nombre 'administrador'/'admin', nombres que la
+    # migración usuarios.0003_adaptar_roles_bloque2_hernan ya había
+    # renombrado a 'Administrador del sistema'. Como resultado, dejó de
+    # coincidir con cualquier usuario real y las solicitudes de
+    # restablecimiento (el único llamador de esta función) quedaron sin
+    # notificar a nadie. Se reemplaza por el mismo helper centralizado que
+    # ya usa apps/usuarios/permissions.py, para que exista un único lugar
+    # que decida quién es "Administrador del sistema".
+    administradores = [
+        usuario
+        for usuario in Usuario.objects.filter(is_active=True).select_related('rol')
+        if es_administrador_sistema(usuario)
+    ]
 
     notificaciones = []
 
@@ -96,14 +105,18 @@ def generar_recordatorios_pendientes(fecha_referencia=None):
     from apps.estrategia.models import PlanEstrategico
     from apps.indicadores.models import IndicadorKPI
     from apps.usuarios.models import Usuario
-    from apps.usuarios.permissions import es_administrador, es_operativo_o_supervisor
+    from apps.usuarios.permissions import es_administrador_planificacion
 
     fecha_referencia = fecha_referencia or timezone.localdate()
 
+    # Bloque 2: "pendiente de formalizarse" (Plan estratégico en Borrador,
+    # KPI pendiente de autorización) es exclusivamente dominio de
+    # Administrador de planificación — Administrador del sistema ya no
+    # gestiona planificación, y Ejecutor operativo nunca lo hizo.
     destinatarios = [
         usuario
         for usuario in Usuario.objects.filter(is_active=True).select_related('rol')
-        if es_administrador(usuario) or es_operativo_o_supervisor(usuario)
+        if es_administrador_planificacion(usuario)
     ]
 
     elementos = []
@@ -184,17 +197,20 @@ def generar_recordatorios_pendientes(fecha_referencia=None):
 
 def notificar_usuarios_gestion(tipo, titulo, mensaje, enlace=None, excluir_usuario=None):
     from apps.usuarios.models import Usuario
-    from apps.usuarios.permissions import es_administrador, es_operativo_o_supervisor
+    from apps.usuarios.permissions import es_administrador_planificacion
 
     usuarios_activos = Usuario.objects.filter(is_active=True).select_related('rol')
 
     notificaciones = []
 
+    # Bloque 2: todos los llamadores de esta función notifican la creación
+    # de un Plan/Objetivo/KPI — dominio exclusivo de Administrador de
+    # planificación bajo los 4 roles definitivos.
     for usuario in usuarios_activos:
         if excluir_usuario and usuario.id == excluir_usuario.id:
             continue
 
-        if not (es_administrador(usuario) or es_operativo_o_supervisor(usuario)):
+        if not es_administrador_planificacion(usuario):
             continue
 
         notificacion = crear_notificacion(
