@@ -1,11 +1,19 @@
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
-from .models import Area, ObjetivoEspecifico, ObjetivoGeneral, PlanAnual, PlanEstrategico
+from .models import (
+    Area,
+    ObjetivoEspecifico,
+    ObjetivoGeneral,
+    PlanAnual,
+    PlanEstrategico,
+    PonderacionAnualObjetivoGeneral,
+)
 from .services import (
     objetivo_especifico_esta_bloqueado,
     plan_anual_esta_bloqueado,
     plan_estrategico_esta_cerrado,
+    resumen_ponderacion_anual,
 )
 
 
@@ -346,11 +354,12 @@ class ObjetivoEspecificoSerializer(serializers.ModelSerializer):
             'objetivo_general',
             'objetivo_general_texto',
             'texto_objetivo',
+            'es_generado_automaticamente',
             'creado_por',
             'creado_por_username',
             'fecha_creacion',
         ]
-        read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+        read_only_fields = ['id', 'fecha_creacion', 'creado_por', 'es_generado_automaticamente']
 
     def get_plan_anual_nombre(self, obj):
         return obj.plan_anual.nombre if obj.plan_anual_id else None
@@ -394,5 +403,126 @@ class ObjetivoEspecificoSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     'El objetivo específico está bloqueado y no permite modificaciones.'
                 )
+
+        return data
+
+
+class PonderacionAnualObjetivoGeneralSerializer(serializers.ModelSerializer):
+    """Bloque 3, segunda parte: solo registra el porcentaje configurado
+    (reglas 1/2/3 de Hernán). No calcula ningún cumplimiento — ver nota de
+    clase en el modelo."""
+
+    objetivo_general_texto = serializers.CharField(
+        source='objetivo_general.texto_objetivo', read_only=True
+    )
+    plan_anual_nombre = serializers.CharField(
+        source='plan_anual.nombre', read_only=True
+    )
+    plan_anual_anio = serializers.IntegerField(
+        source='plan_anual.anio', read_only=True
+    )
+    creado_por_username = serializers.CharField(
+        source='creado_por.username', read_only=True
+    )
+    # Expuestos para que el frontend muestre "total distribuido" /
+    # "pendiente" sin tener que traer y sumar él mismo el resto de filas
+    # del mismo objetivo general (Fase 3). Se calculan INCLUYENDO esta
+    # fila (a diferencia de resumen_ponderacion_anual(excluir_id=...), que
+    # se usa en validate() para el chequeo de "no superar el 100%").
+    total_asignado_objetivo_general = serializers.SerializerMethodField()
+    pendiente_objetivo_general = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PonderacionAnualObjetivoGeneral
+        fields = [
+            'id',
+            'objetivo_general',
+            'objetivo_general_texto',
+            'plan_anual',
+            'plan_anual_nombre',
+            'plan_anual_anio',
+            'porcentaje',
+            'total_asignado_objetivo_general',
+            'pendiente_objetivo_general',
+            'creado_por',
+            'creado_por_username',
+            'fecha_creacion',
+            'fecha_actualizacion',
+        ]
+        read_only_fields = ['id', 'creado_por', 'fecha_creacion', 'fecha_actualizacion']
+        # Mismo motivo que en los demás serializers de este proyecto: se
+        # desactiva el UniqueTogetherValidator automático de DRF (derivado
+        # de la UniqueConstraint del modelo) para que el único mensaje de
+        # duplicado sea el de validate(), en español natural.
+        validators = []
+
+    def get_total_asignado_objetivo_general(self, obj):
+        resumen = resumen_ponderacion_anual(obj.objetivo_general, excluir_id=obj.pk)
+        return resumen['total_asignado'] + obj.porcentaje
+
+    def get_pendiente_objetivo_general(self, obj):
+        resumen = resumen_ponderacion_anual(obj.objetivo_general, excluir_id=obj.pk)
+        return resumen['pendiente'] - obj.porcentaje
+
+    def validate(self, data):
+        instance = self.instance
+        objetivo_general = data.get('objetivo_general') or getattr(instance, 'objetivo_general', None)
+        plan_anual = data.get('plan_anual') or getattr(instance, 'plan_anual', None)
+        porcentaje = data.get('porcentaje', getattr(instance, 'porcentaje', None))
+
+        if not objetivo_general:
+            raise serializers.ValidationError({
+                'objetivo_general': 'Seleccioná un objetivo general.'
+            })
+
+        if not plan_anual:
+            raise serializers.ValidationError({
+                'plan_anual': 'Seleccioná un plan anual.'
+            })
+
+        if objetivo_general.plan_estrategico_id != plan_anual.plan_estrategico_id:
+            raise serializers.ValidationError({
+                'plan_anual': (
+                    'El plan anual debe pertenecer al mismo Plan estratégico que '
+                    'el objetivo general seleccionado.'
+                )
+            })
+
+        if plan_anual_esta_bloqueado(plan_anual):
+            raise serializers.ValidationError(
+                'El Plan anual está Cerrado (o su Plan estratégico lo está) y no '
+                'permite modificar sus ponderaciones.'
+            )
+
+        duplicados = PonderacionAnualObjetivoGeneral.objects.filter(
+            objetivo_general=objetivo_general, plan_anual=plan_anual,
+        )
+
+        if instance is not None:
+            duplicados = duplicados.exclude(pk=instance.pk)
+
+        if duplicados.exists():
+            raise serializers.ValidationError(
+                'Ya existe una ponderación para este objetivo general en ese año. '
+                'Editá la fila existente en lugar de crear una nueva.'
+            )
+
+        if porcentaje is None:
+            raise serializers.ValidationError({
+                'porcentaje': 'Ingresá el porcentaje de ponderación.'
+            })
+
+        resumen = resumen_ponderacion_anual(
+            objetivo_general, excluir_id=instance.pk if instance else None,
+        )
+
+        if resumen['total_asignado'] + porcentaje > 100:
+            raise serializers.ValidationError({
+                'porcentaje': (
+                    'La ponderación excede el 100% del objetivo general: ya hay '
+                    f'{resumen["total_asignado"]}% asignado en otros años, máximo '
+                    f'disponible {resumen["pendiente"]}%.'
+                )
+            })
 
         return data

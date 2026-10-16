@@ -50,10 +50,14 @@ const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar medición' : 'Guardar medición'
 })
 
+// Bloque 4 (periodos y plazos), regla 8: identifica en el propio selector
+// qué KPI tienen un periodo disponible para registrar ahora mismo, sin
+// ocultar los demás (el usuario puede seguir viendo por qué uno no está
+// disponible — pendiente o vencido — en vez de que simplemente desaparezca).
 const opcionesKpi = computed(() => {
   return props.indicadores.map((indicador) => ({
     id: indicador.id,
-    texto: `${indicador.nombre} — ${indicador.plan_anual_nombre || 'Sin plan anual'} — ${indicador.objetivo_especifico_texto || 'Sin objetivo'}`,
+    texto: `${indicador.nombre} — ${indicador.plan_anual_nombre || 'Sin plan anual'} — ${indicador.objetivo_especifico_texto || 'Sin objetivo'} ${indicador.periodo_disponible ? '(Disponible)' : '(No disponible)'}`,
   }))
 })
 

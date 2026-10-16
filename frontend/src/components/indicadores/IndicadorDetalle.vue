@@ -81,6 +81,11 @@ function formatearCriterio(rango) {
       </div>
 
       <div class="detail-item detail-full">
+        <span>Objetivo general</span>
+        <strong>{{ indicador.objetivo_general_texto || 'Sin objetivo general' }}</strong>
+      </div>
+
+      <div class="detail-item detail-full">
         <span>Objetivo específico</span>
         <strong>{{ indicador.objetivo_especifico_texto || 'Sin objetivo específico' }}</strong>
       </div>
@@ -98,6 +103,16 @@ function formatearCriterio(rango) {
       <div class="detail-item">
         <span>Frecuencia</span>
         <strong>{{ indicador.frecuencia_nombre || 'Sin frecuencia' }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Ponderación</span>
+        <strong>{{ indicador.ponderacion != null ? `${indicador.ponderacion}%` : 'Sin ponderar' }}</strong>
+      </div>
+
+      <div class="detail-item">
+        <span>Distribuido / pendiente en el ámbito</span>
+        <strong>{{ indicador.ponderacion_total_ambito }}% / {{ indicador.ponderacion_pendiente_ambito }}%</strong>
       </div>
 
       <div class="detail-item">

@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    ConfiguracionMedicionesView,
     FrecuenciaViewSet,
     IndicadorKPIViewSet,
     MetaKPIViewSet,
@@ -25,6 +26,7 @@ router.register(r'mediciones', MedicionViewSet, basename='mediciones')
 router.register(r'alertas', AlertaViewSet, basename='alertas')
 
 urlpatterns = [
+    path('configuracion-mediciones/', ConfiguracionMedicionesView.as_view(), name='configuracion-mediciones'),
     path('', include(router.urls)),
 ]
 

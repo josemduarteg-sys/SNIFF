@@ -3,7 +3,13 @@ from rest_framework.test import APITestCase
 
 from apps.usuarios.models import Rol, Usuario
 
-from .models import ObjetivoEspecifico, ObjetivoGeneral, PlanAnual, PlanEstrategico
+from .models import (
+    ObjetivoEspecifico,
+    ObjetivoGeneral,
+    PlanAnual,
+    PlanEstrategico,
+    PonderacionAnualObjetivoGeneral,
+)
 
 
 def crear_usuario_admin(username):
@@ -559,3 +565,194 @@ class ObjetivoEspecificoTests(APITestCase):
         response = self.client.delete(f'/api/objetivos-especificos/{objetivo.id}/')
 
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+def crear_usuario_ejecutor(username):
+    rol, _ = Rol.objects.get_or_create(
+        nombre='Ejecutor operativo',
+        defaults={'descripcion': 'Rol de prueba', 'estado': True},
+    )
+
+    usuario = Usuario.objects.create_user(username=username, password='clave-prueba-123')
+    usuario.rol = rol
+    usuario.correo = f'{username}@sniff.test'
+    usuario.save()
+
+    return usuario
+
+
+class PonderacionAnualObjetivoGeneralTests(APITestCase):
+    """Bloque 3, segunda parte: ponderación anual de un objetivo general
+    (reglas 1/2/3 confirmadas por Hernán, reunión del 6/10/2026)."""
+
+    def setUp(self):
+        self.usuario = crear_usuario_admin('admin_ponderacion_anual')
+        self.client.force_authenticate(user=self.usuario)
+
+        self.plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Plan estratégico ponderación',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2031-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        self.objetivo_general = ObjetivoGeneral.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            texto_objetivo='Objetivo general ponderación',
+            creado_por=self.usuario,
+        )
+
+        self.anios = {}
+        for anio in (2027, 2028, 2029, 2030, 2031):
+            self.anios[anio] = PlanAnual.objects.create(
+                plan_estrategico=self.plan_estrategico,
+                anio=anio,
+                creado_por=self.usuario,
+            )
+
+    def crear_ponderacion(self, anio, porcentaje, objetivo_general=None):
+        return self.client.post('/api/ponderaciones-anuales/', {
+            'objetivo_general': (objetivo_general or self.objetivo_general).id,
+            'plan_anual': self.anios[anio].id,
+            'porcentaje': porcentaje,
+        })
+
+    # 1. Registro de porcentajes válidos.
+    def test_registra_porcentaje_valido(self):
+        response = self.crear_ponderacion(2027, '10.00')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(response.data['porcentaje']), '10.00')
+
+    # 2. Rechazo de valores negativos o superiores a 100.
+    def test_rechaza_porcentaje_negativo(self):
+        response = self.crear_ponderacion(2027, '-5.00')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rechaza_porcentaje_mayor_a_100(self):
+        response = self.crear_ponderacion(2027, '150.00')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # 3. Rechazo de distribuciones que superen el 100%.
+    def test_rechaza_distribucion_que_supera_100(self):
+        self.crear_ponderacion(2027, '60.00')
+        response = self.crear_ponderacion(2028, '50.00')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # 4. Aceptación de distribuciones parciales durante su preparación.
+    def test_acepta_distribucion_parcial_en_preparacion(self):
+        response = self.crear_ponderacion(2027, '10.00')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(response.data['total_asignado_objetivo_general']), '10.00')
+        self.assertEqual(str(response.data['pendiente_objetivo_general']), '90.00')
+
+    # 5. Identificación de una distribución que alcance exactamente el 100%.
+    def test_identifica_distribucion_completa_al_100(self):
+        self.crear_ponderacion(2027, '10.00')
+        self.crear_ponderacion(2028, '30.00')
+        self.crear_ponderacion(2029, '20.00')
+        self.crear_ponderacion(2030, '30.00')
+        respuesta_final = self.crear_ponderacion(2031, '10.00')
+
+        self.assertEqual(respuesta_final.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(respuesta_final.data['total_asignado_objetivo_general']), '100.00')
+        self.assertEqual(str(respuesta_final.data['pendiente_objetivo_general']), '0.00')
+
+        from apps.estrategia.services import resumen_ponderacion_anual
+        resumen = resumen_ponderacion_anual(self.objetivo_general)
+        self.assertTrue(resumen['completo'])
+
+    # 6. Independencia entre planes estratégicos distintos.
+    def test_independencia_entre_planes_estrategicos_distintos(self):
+        otro_plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Otro plan estratégico ponderación',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+        otro_objetivo_general = ObjetivoGeneral.objects.create(
+            plan_estrategico=otro_plan_estrategico,
+            texto_objetivo='Objetivo general de otro plan',
+            creado_por=self.usuario,
+        )
+        otro_plan_anual = PlanAnual.objects.create(
+            plan_estrategico=otro_plan_estrategico,
+            anio=2027,
+            creado_por=self.usuario,
+        )
+
+        self.crear_ponderacion(2027, '90.00')
+
+        respuesta_otro = self.client.post('/api/ponderaciones-anuales/', {
+            'objetivo_general': otro_objetivo_general.id,
+            'plan_anual': otro_plan_anual.id,
+            'porcentaje': '90.00',
+        })
+
+        self.assertEqual(respuesta_otro.status_code, status.HTTP_201_CREATED)
+
+    # Validación de pertenencia: el plan anual debe ser del mismo plan
+    # estratégico que el objetivo general.
+    def test_rechaza_plan_anual_de_otro_plan_estrategico(self):
+        otro_plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Plan estratégico ajeno',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2027-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+        plan_anual_ajeno = PlanAnual.objects.create(
+            plan_estrategico=otro_plan_estrategico,
+            anio=2027,
+            creado_por=self.usuario,
+        )
+
+        response = self.client.post('/api/ponderaciones-anuales/', {
+            'objetivo_general': self.objetivo_general.id,
+            'plan_anual': plan_anual_ajeno.id,
+            'porcentaje': '10.00',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # No se duplica una fila para el mismo (objetivo_general, plan_anual).
+    def test_rechaza_fila_duplicada_para_mismo_objetivo_y_anio(self):
+        self.crear_ponderacion(2027, '10.00')
+        response = self.crear_ponderacion(2027, '20.00')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # Bloqueado si el Plan anual (o su Plan estratégico) está Cerrado —
+    # funcionamiento de las reglas del Bloque 1.
+    def test_bloqueado_si_plan_anual_cerrado(self):
+        self.anios[2027].estado = PlanAnual.ESTADO_CERRADO
+        self.anios[2027].save(update_fields=['estado'])
+
+        response = self.crear_ponderacion(2027, '10.00')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # 9. Restricción de edición al Administrador de planificación —
+    # funcionamiento de los permisos del Bloque 2.
+    def test_restringido_a_administrador_de_planificacion(self):
+        ejecutor = crear_usuario_ejecutor('ejecutor_ponderacion_anual')
+        self.client.force_authenticate(user=ejecutor)
+
+        response = self.crear_ponderacion(2027, '10.00')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # Consulta libre para cualquier autenticado (Bloque 2: PermisoEstrategiaObjetivo).
+    def test_consulta_libre_para_cualquier_autenticado(self):
+        self.crear_ponderacion(2027, '10.00')
+        ejecutor = crear_usuario_ejecutor('ejecutor_consulta_ponderacion')
+        self.client.force_authenticate(user=ejecutor)
+
+        response = self.client.get('/api/ponderaciones-anuales/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)

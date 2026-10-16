@@ -11,11 +11,24 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  objetivosGenerales: {
+    type: Array,
+    default: () => [],
+  },
   objetivosEspecificos: {
     type: Array,
     default: () => [],
   },
   frecuencias: {
+    type: Array,
+    default: () => [],
+  },
+  // Bloque 3, segunda parte (ponderaciones): listado completo de KPI ya
+  // cargado por la vista — se usa solo para mostrar en vivo, a título
+  // informativo, cuánto ya está asignado en el mismo ámbito (plan_anual,
+  // objetivo_general). El backend sigue siendo la única fuente de verdad
+  // que valida de verdad el límite de 100% (ver IndicadorKPISerializer.validate).
+  indicadores: {
     type: Array,
     default: () => [],
   },
@@ -36,6 +49,7 @@ const UNIDADES_MEDIDA = [
 
 const estado = reactive({
   plan_anual: '',
+  objetivo_general: '',
   objetivo_especifico: '',
   frecuencia: '',
   nombre: '',
@@ -44,6 +58,7 @@ const estado = reactive({
   unidad_medida: '',
   unidad_personalizada: '',
   valor_meta: '',
+  ponderacion: '',
   error: '',
 })
 
@@ -73,24 +88,76 @@ const opcionesPlanesAnuales = computed(() => {
   }))
 })
 
-const objetivoEspecificoSeleccionado = computed(() => {
+const planAnualSeleccionado = computed(() => {
   return (
-    props.objetivosEspecificos.find(
-      (objetivo) => Number(objetivo.id) === Number(estado.objetivo_especifico)
-    ) || null
+    props.planesAnuales.find((plan) => Number(plan.id) === Number(estado.plan_anual)) || null
   )
 })
 
-// Solo objetivos específicos que pertenecen al Plan anual elegido (ver
-// validación equivalente, y autoritativa, en backend).
-const opcionesObjetivosEspecificos = computed(() => {
-  if (!estado.plan_anual) {
+// Solo objetivos generales del mismo Plan estratégico que el Plan anual
+// elegido (ver validación equivalente, y autoritativa, en backend).
+const opcionesObjetivosGenerales = computed(() => {
+  if (!planAnualSeleccionado.value) {
     return []
   }
 
-  return props.objetivosEspecificos
-    .filter((objetivo) => Number(objetivo.plan_anual) === Number(estado.plan_anual))
+  return props.objetivosGenerales
+    .filter(
+      (objetivo) =>
+        Number(objetivo.plan_estrategico) === Number(planAnualSeleccionado.value.plan_estrategico)
+    )
     .map((objetivo) => ({ id: objetivo.id, texto: objetivo.texto_objetivo }))
+})
+
+// Bloque 3, segunda parte (ponderaciones): suma informativa de lo ya
+// asignado en el mismo ámbito (plan_anual, objetivo_general), EXCLUYENDO
+// este mismo KPI en edición. Solo a título de vista previa en vivo — el
+// backend vuelve a validar el límite de 100% de forma autoritativa.
+const ponderacionAsignadaAmbito = computed(() => {
+  if (!estado.plan_anual || !estado.objetivo_general) {
+    return 0
+  }
+
+  return props.indicadores
+    .filter(
+      (kpi) =>
+        Number(kpi.plan_anual) === Number(estado.plan_anual)
+        && Number(kpi.objetivo_general) === Number(estado.objetivo_general)
+        && !(esEdicion.value && Number(kpi.id) === Number(props.indicador.id))
+    )
+    .reduce((total, kpi) => total + (Number(kpi.ponderacion) || 0), 0)
+})
+
+const ponderacionPendienteAmbito = computed(() => {
+  return Math.max(0, 100 - ponderacionAsignadaAmbito.value)
+})
+
+// Objetivos específicos reales (el backend ya excluye los "KPI directo"
+// generados internamente) que pertenecen a la combinación elegida de
+// Plan anual + Objetivo general, más una opción explícita para no elegir
+// ninguno. Es opcional: si se deja en "Sin objetivo específico", el
+// backend crea/reutiliza el objetivo específico implícito de esa misma
+// combinación (Bloque 3) — esta opción también permite volver a un KPI
+// directo después de haber elegido uno real.
+const OPCION_SIN_OBJETIVO_ESPECIFICO = {
+  id: '',
+  texto: 'Sin objetivo específico (KPI directo del objetivo general)',
+}
+
+const opcionesObjetivosEspecificos = computed(() => {
+  if (!estado.plan_anual || !estado.objetivo_general) {
+    return []
+  }
+
+  const reales = props.objetivosEspecificos
+    .filter(
+      (objetivo) =>
+        Number(objetivo.plan_anual) === Number(estado.plan_anual)
+        && Number(objetivo.objetivo_general) === Number(estado.objetivo_general)
+    )
+    .map((objetivo) => ({ id: objetivo.id, texto: objetivo.texto_objetivo }))
+
+  return [OPCION_SIN_OBJETIVO_ESPECIFICO, ...reales]
 })
 
 watch(
@@ -104,6 +171,19 @@ watch(
 watch(
   () => estado.plan_anual,
   () => {
+    const siguePerteneciendo = opcionesObjetivosGenerales.value.some(
+      (opcion) => Number(opcion.id) === Number(estado.objetivo_general)
+    )
+
+    if (!siguePerteneciendo) {
+      estado.objetivo_general = ''
+    }
+  }
+)
+
+watch(
+  () => estado.objetivo_general,
+  () => {
     const siguePerteneciendo = opcionesObjetivosEspecificos.value.some(
       (opcion) => Number(opcion.id) === Number(estado.objetivo_especifico)
     )
@@ -115,19 +195,22 @@ watch(
 )
 
 function cargarFormulario() {
-  const objetivoActual = props.indicador?.objetivo_especifico
-    ? props.objetivosEspecificos.find(
-        (objetivo) => Number(objetivo.id) === Number(props.indicador.objetivo_especifico)
-      )
-    : null
-
-  estado.plan_anual = objetivoActual?.plan_anual || ''
-  estado.objetivo_especifico = props.indicador?.objetivo_especifico || ''
+  // Bloque 3 (KPI directo): plan_anual/objetivo_general ya llegan
+  // resueltos directamente desde el indicador (derivados en backend de su
+  // objetivo_especifico, real o implícito) — no hace falta buscarlos en
+  // objetivosEspecificos, que ya ni siquiera incluye los implícitos.
+  estado.plan_anual = props.indicador?.plan_anual || ''
+  estado.objetivo_general = props.indicador?.objetivo_general || ''
+  // Un KPI directo (es_directo) no tiene un objetivo específico real que
+  // mostrar seleccionado: el campo queda vacío (opcional) en el formulario.
+  estado.objetivo_especifico =
+    props.indicador && !props.indicador.es_directo ? props.indicador.objetivo_especifico || '' : ''
   estado.frecuencia = props.indicador?.frecuencia || ''
   estado.nombre = props.indicador?.nombre || ''
   estado.descripcion = props.indicador?.descripcion || ''
   estado.formula_medicion = props.indicador?.formula_medicion || ''
   estado.valor_meta = props.indicador?.valor_meta || ''
+  estado.ponderacion = props.indicador?.ponderacion ?? ''
   estado.error = ''
 
   const unidadExistente = props.indicador?.unidad_medida || ''
@@ -142,12 +225,28 @@ function cargarFormulario() {
   }
 }
 
+function ponderacionValida() {
+  if (estado.ponderacion === '' || estado.ponderacion === null) {
+    return true
+  }
+
+  return Number(estado.ponderacion) >= 0 && Number(estado.ponderacion) <= 100
+}
+
 function validarFormulario() {
   estado.error = ''
 
+  // Bloque 3, segunda parte: un KPI ya autorizado sigue bloqueado para
+  // sus campos principales, pero la ponderación es la única excepción
+  // (regla 7: es independiente de meta/resultado/promedio acumulado) —
+  // ver guardar(), que para este caso reenvía solo ese campo.
   if (!puedeEditar.value) {
-    estado.error = 'Este KPI ya está autorizado y no permite modificar sus datos principales.'
-    return false
+    if (!ponderacionValida()) {
+      estado.error = 'La ponderación debe estar entre 0 y 100.'
+      return false
+    }
+
+    return true
   }
 
   if (!estado.plan_anual) {
@@ -155,10 +254,13 @@ function validarFormulario() {
     return false
   }
 
-  if (!estado.objetivo_especifico) {
-    estado.error = 'Seleccioná un objetivo específico.'
+  if (!estado.objetivo_general) {
+    estado.error = 'Seleccioná un objetivo general.'
     return false
   }
+
+  // El objetivo específico es opcional (Bloque 3): sin él, el KPI queda
+  // como "directo" del objetivo general elegido.
 
   if (!estado.nombre.trim()) {
     estado.error = 'Ingresá el nombre del KPI.'
@@ -195,11 +297,25 @@ function validarFormulario() {
     return false
   }
 
+  if (!ponderacionValida()) {
+    estado.error = 'La ponderación debe estar entre 0 y 100.'
+    return false
+  }
+
   return true
 }
 
 function guardar() {
   if (!validarFormulario()) {
+    return
+  }
+
+  if (!puedeEditar.value) {
+    // KPI ya autorizado: solo se reenvía la ponderación (ver
+    // actualizarPonderacionIndicador en indicadorService.js — reenviar el
+    // resto de campos activaría el bloqueo de "KPI ya autorizado" aunque
+    // su valor no haya cambiado).
+    emit('guardar', { soloPonderacion: true, ponderacion: estado.ponderacion })
     return
   }
 
@@ -209,13 +325,16 @@ function guardar() {
       : estado.unidad_medida
 
   emit('guardar', {
-    objetivo_especifico: estado.objetivo_especifico,
+    plan_anual: estado.plan_anual,
+    objetivo_general: estado.objetivo_general,
+    objetivo_especifico: estado.objetivo_especifico || null,
     frecuencia: estado.frecuencia,
     nombre: estado.nombre.trim(),
     descripcion: estado.descripcion.trim(),
     formula_medicion: estado.formula_medicion.trim(),
     unidad_medida: unidadFinal,
     valor_meta: estado.valor_meta,
+    ponderacion: estado.ponderacion,
   })
 }
 
@@ -249,15 +368,28 @@ function cancelar() {
       </label>
 
       <label class="field field-full">
-        <span>Objetivo específico</span>
+        <span>Objetivo general</span>
+
+        <SelectorBuscable
+          v-model="estado.objetivo_general"
+          :opciones="opcionesObjetivosGenerales"
+          placeholder="Seleccionar objetivo general"
+          placeholder-busqueda="Escribí el texto del objetivo..."
+          mensaje-vacio="Seleccioná primero un plan anual."
+          :disabled="!puedeEditar || !estado.plan_anual"
+        />
+      </label>
+
+      <label class="field field-full">
+        <span>Objetivo específico (opcional)</span>
 
         <SelectorBuscable
           v-model="estado.objetivo_especifico"
           :opciones="opcionesObjetivosEspecificos"
-          placeholder="Seleccionar objetivo específico"
+          placeholder="Sin objetivo específico (KPI directo del objetivo general)"
           placeholder-busqueda="Escribí el texto del objetivo..."
-          mensaje-vacio="Seleccioná primero un plan anual."
-          :disabled="!puedeEditar || !estado.plan_anual"
+          mensaje-vacio="No se encontraron objetivos específicos con ese texto."
+          :disabled="!puedeEditar || !estado.objetivo_general"
         />
       </label>
 
@@ -350,6 +482,28 @@ function cancelar() {
           </option>
         </select>
       </label>
+
+      <label class="field">
+        <span>Ponderación (opcional)</span>
+
+        <input
+          v-model="estado.ponderacion"
+          type="number"
+          min="0"
+          max="100"
+          step="0.01"
+          placeholder="Ejemplo: 30.00"
+        />
+      </label>
+    </div>
+
+    <!-- La ponderación es la única excepción al bloqueo de "KPI ya
+         autorizado": por eso su input, arriba, nunca queda :disabled. -->
+    <div v-if="estado.plan_anual && estado.objetivo_general" class="help-box ponderacion-box">
+      Peso del KPI dentro del 100% de su año y objetivo general (independiente
+      de la meta, el resultado y el promedio acumulado).
+      Ya asignado en este ámbito: <strong>{{ ponderacionAsignadaAmbito.toFixed(2) }}%</strong> ·
+      Pendiente: <strong>{{ ponderacionPendienteAmbito.toFixed(2) }}%</strong>
     </div>
 
     <div class="help-box">

@@ -7,6 +7,7 @@ from .views import (
     ObjetivoGeneralViewSet,
     PlanAnualViewSet,
     PlanEstrategicoViewSet,
+    PonderacionAnualObjetivoGeneralViewSet,
 )
 
 router = DefaultRouter()
@@ -15,6 +16,11 @@ router.register(r'planes-estrategicos', PlanEstrategicoViewSet, basename='planes
 router.register(r'objetivos-generales', ObjetivoGeneralViewSet, basename='objetivos-generales')
 router.register(r'planes-anuales', PlanAnualViewSet, basename='planes-anuales')
 router.register(r'objetivos-especificos', ObjetivoEspecificoViewSet, basename='objetivos-especificos')
+router.register(
+    r'ponderaciones-anuales',
+    PonderacionAnualObjetivoGeneralViewSet,
+    basename='ponderaciones-anuales',
+)
 
 urlpatterns = [
     path('', include(router.urls)),

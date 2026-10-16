@@ -10,6 +10,11 @@ import {
   obtenerMediciones,
 } from '../services/medicionService'
 import {
+  actualizarConfiguracionMediciones,
+  obtenerConfiguracionMediciones,
+} from '../services/configuracionMedicionesService'
+import {
+  esAdministradorPlanificacion,
   puedeEditarMedicion,
   puedeRegistrarMedicion,
 } from '../utils/permisos'
@@ -49,6 +54,13 @@ const mostrarModalDetalle = ref(false)
 const medicionDetalle = ref(null)
 
 const puedeRegistrar = computed(() => puedeRegistrarMedicion(props.usuario))
+const esAdmin = computed(() => esAdministradorPlanificacion(props.usuario))
+
+// Bloque 4 (periodos y plazos): plazo de registro configurable, singleton.
+const configuracionMediciones = ref(null)
+const edicionPlazoRegistro = ref('')
+const guardandoPlazoRegistro = ref(false)
+const errorPlazoRegistro = ref('')
 
 function puedeEditar(medicion) {
   return puedeEditarMedicion(props.usuario, medicion)
@@ -136,18 +148,38 @@ async function cargarDatos() {
   error.value = ''
 
   try {
-    const [medicionesResponse, datosFormulario] = await Promise.all([
+    const [medicionesResponse, datosFormulario, configuracion] = await Promise.all([
       obtenerMediciones(),
       obtenerDatosFormularioMedicion(),
+      obtenerConfiguracionMediciones(),
     ])
 
     mediciones.value = medicionesResponse
     indicadores.value = datosFormulario.indicadores
     estadosCumplimiento.value = datosFormulario.estadosCumplimiento
+    configuracionMediciones.value = configuracion
+    edicionPlazoRegistro.value = configuracion.dias_plazo_registro
   } catch (e) {
     error.value = 'No se pudieron cargar las mediciones.'
   } finally {
     cargando.value = false
+  }
+}
+
+async function guardarPlazoRegistro() {
+  errorPlazoRegistro.value = ''
+  guardandoPlazoRegistro.value = true
+
+  try {
+    configuracionMediciones.value = await actualizarConfiguracionMediciones(edicionPlazoRegistro.value)
+    edicionPlazoRegistro.value = configuracionMediciones.value.dias_plazo_registro
+  } catch (e) {
+    const data = e.response?.data
+
+    errorPlazoRegistro.value =
+      data?.dias_plazo_registro?.join(' ') || data?.detail || 'No se pudo guardar el plazo.'
+  } finally {
+    guardandoPlazoRegistro.value = false
   }
 }
 
@@ -307,6 +339,35 @@ onMounted(async () => {
     <p class="hint-acumulado">
       El promedio acumulado y el estado de cumplimiento de cada KPI se consultan en
       <router-link to="/indicadores">Indicadores KPI</router-link>.
+    </p>
+
+    <div class="plazo-registro">
+      <span>
+        Plazo para registrar una medición después del cierre de su periodo:
+        <strong>{{ configuracionMediciones?.dias_plazo_registro ?? '—' }} día(s) calendario.</strong>
+      </span>
+
+      <template v-if="esAdmin">
+        <input
+          v-model="edicionPlazoRegistro"
+          type="number"
+          min="1"
+          step="1"
+          class="plazo-registro-input"
+        />
+        <button
+          type="button"
+          class="btn-secondary btn-small"
+          :disabled="guardandoPlazoRegistro"
+          @click="guardarPlazoRegistro"
+        >
+          {{ guardandoPlazoRegistro ? 'Guardando...' : 'Guardar' }}
+        </button>
+      </template>
+    </div>
+
+    <p v-if="errorPlazoRegistro" class="alert error plazo-registro-error">
+      {{ errorPlazoRegistro }}
     </p>
 
     <div v-if="mensajeExito" class="alert success">
@@ -591,6 +652,68 @@ onMounted(async () => {
 
 .hint-acumulado a:hover {
   text-decoration: underline;
+}
+
+.plazo-registro {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: -6px 0 18px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #f6f9fa;
+  border: 1px solid #e4eaef;
+  font-size: 12.5px;
+  color: #1d3557;
+}
+
+.plazo-registro-input {
+  width: 70px;
+  height: 32px;
+  border: 1.5px solid #e4eaef;
+  border-radius: 8px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 13px;
+  color: #1d3557;
+}
+
+.plazo-registro-error {
+  margin-top: -10px;
+}
+
+.btn-secondary {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #5e6e82;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #f4f7f9;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-small {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.alert.error {
+  background: rgba(231, 111, 81, 0.12);
+  color: #e76f51;
 }
 
 .kpi-card,

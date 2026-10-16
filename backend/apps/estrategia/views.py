@@ -6,13 +6,21 @@ from apps.usuarios.permissions import (
     PermisoCatalogoSoloAdmin,
     PermisoEstrategiaObjetivo,
 )
-from .models import Area, ObjetivoEspecifico, ObjetivoGeneral, PlanAnual, PlanEstrategico
+from .models import (
+    Area,
+    ObjetivoEspecifico,
+    ObjetivoGeneral,
+    PlanAnual,
+    PlanEstrategico,
+    PonderacionAnualObjetivoGeneral,
+)
 from .serializers import (
     AreaSerializer,
     ObjetivoEspecificoSerializer,
     ObjetivoGeneralSerializer,
     PlanAnualSerializer,
     PlanEstrategicoSerializer,
+    PonderacionAnualObjetivoGeneralSerializer,
 )
 from .services import plan_estrategico_esta_cerrado
 
@@ -344,7 +352,17 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
 
 
 class ObjetivoEspecificoViewSet(viewsets.ModelViewSet):
-    queryset = ObjetivoEspecifico.objects.select_related(
+    # Bloque 3 (KPI directo): excluye los objetivos específicos
+    # "implícitos" que el sistema crea/reutiliza para los KPI directos
+    # (ver apps/estrategia/services.obtener_o_crear_objetivo_especifico_directo).
+    # No son responsabilidad de este módulo: no deben aparecer como
+    # opción seleccionable en el formulario de KPI ni quedar editables o
+    # eliminables desde la administración de objetivos específicos, donde
+    # alguien podría romper por accidente la relación 1 a 1 que los KPI
+    # directos asumen con su combinación (plan_anual, objetivo_general).
+    queryset = ObjetivoEspecifico.objects.filter(
+        es_generado_automaticamente=False,
+    ).select_related(
         'plan_anual',
         'plan_anual__plan_estrategico',
         'objetivo_general',
@@ -392,6 +410,53 @@ class ObjetivoEspecificoViewSet(viewsets.ModelViewSet):
             modulo='Objetivos específicos',
             descripcion=(
                 f'Actualizó un objetivo específico del {objetivo.plan_anual.nombre}.'
+            ),
+            request=self.request,
+        )
+
+
+class PonderacionAnualObjetivoGeneralViewSet(viewsets.ModelViewSet):
+    # Bloque 3, segunda parte: sin DELETE, mismo criterio que el resto de
+    # este módulo (ver METODOS_SIN_BORRADO) — una ponderación mal
+    # ingresada se corrige con un PATCH, no se borra.
+    queryset = PonderacionAnualObjetivoGeneral.objects.select_related(
+        'objetivo_general',
+        'objetivo_general__plan_estrategico',
+        'plan_anual',
+        'creado_por',
+    ).all()
+    serializer_class = PonderacionAnualObjetivoGeneralSerializer
+    permission_classes = [PermisoEstrategiaObjetivo]
+    http_method_names = METODOS_SIN_BORRADO
+
+    def perform_create(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        ponderacion = serializer.save(creado_por=self.request.user)
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Ponderaciones anuales',
+            descripcion=(
+                f'Asignó {ponderacion.porcentaje}% de ponderación anual al objetivo '
+                f'general en {ponderacion.plan_anual.nombre}.'
+            ),
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_seguro
+
+        ponderacion = serializer.save()
+
+        registrar_bitacora_seguro(
+            usuario=self.request.user,
+            accion='actualizar',
+            modulo='Ponderaciones anuales',
+            descripcion=(
+                f'Actualizó a {ponderacion.porcentaje}% la ponderación anual del '
+                f'objetivo general en {ponderacion.plan_anual.nombre}.'
             ),
             request=self.request,
         )

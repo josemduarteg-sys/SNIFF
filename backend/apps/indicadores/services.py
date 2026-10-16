@@ -669,14 +669,17 @@ def calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo_meses):
     return obtener_ultimo_dia_mes(mes_final)
 
 
-VENTANA_REGISTRO_DIAS = 5
-"""Ventana oficial del proyecto (Bloque 4): la medición manual puede
-registrarse el mismo día del cierre del periodo y durante los 5 días
-calendario siguientes."""
-
-
 def calcular_fecha_limite_registro(fecha_cierre):
-    return fecha_cierre + timedelta(days=VENTANA_REGISTRO_DIAS)
+    """Última fecha en la que todavía se puede registrar manualmente la
+    medición de un periodo (Bloque 4, regla 6/7): el mismo día del cierre
+    del periodo y durante los N días calendario siguientes, donde N es el
+    plazo configurado por la administración (ver
+    ConfiguracionMediciones.obtener() — nunca un número fijo en código)."""
+    from .models import ConfiguracionMediciones
+
+    dias = ConfiguracionMediciones.obtener().dias_plazo_registro
+
+    return fecha_cierre + timedelta(days=dias)
 
 
 def obtener_o_crear_periodo(indicador, fecha_inicio_periodo):
@@ -821,8 +824,9 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
 def cerrar_mediciones_vencidas(fecha_referencia=None):
     """Servicio central del management command `cerrar_mediciones_vencidas`
     (Bloque 4). Por cada KPI autorizado, cierra EN ORDEN todos los periodos
-    cuya ventana de 5 días ya venció sin medición manual, creando una
-    Medicion con valor_resultado=0.00 y cierre_automatico=True.
+    cuyo plazo de registro configurado (ver ConfiguracionMediciones) ya
+    venció sin medición manual, creando una Medicion con
+    valor_resultado=0.00 y cierre_automatico=True.
 
     Idempotente: se apoya en `obtener_info_siguiente_periodo`, que siempre
     calcula el siguiente periodo a partir de la última Medicion real ya
@@ -1021,5 +1025,38 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
         'creadas': total_alertas_creadas,
         'omitidas': total_omitidas,
         'detalle': detalle,
+    }
+
+
+def resumen_ponderacion_kpi_ambito(plan_anual, objetivo_general, excluir_id=None):
+    """Suma de IndicadorKPI.ponderacion ya configuradas dentro del ámbito
+    (plan_anual, objetivo_general) — regla 5/6 confirmada por Hernán: el
+    100% del cumplimiento anual de un Objetivo general se reparte entre
+    TODOS los KPI de ese año y ese objetivo general, sin distinguir si
+    llegan a él por un Objetivo específico real o por ser KPI directos
+    (ambos resuelven al mismo ámbito, ver IndicadorKPI.plan_anual/
+    .objetivo_general). `excluir_id` permite calcular "cuánto hay en los
+    DEMÁS KPI del ámbito" al validar un KPI nuevo o editado.
+
+    Un KPI sin ponderacion asignada (None) NO cuenta como 0%: queda fuera
+    de la suma, como "pendiente de ponderar" (distribución en
+    preparación), nunca como parte ya distribuida."""
+    from decimal import Decimal
+
+    kpis = IndicadorKPI.objects.filter(
+        objetivo_especifico__plan_anual=plan_anual,
+        objetivo_especifico__objetivo_general=objetivo_general,
+        ponderacion__isnull=False,
+    )
+
+    if excluir_id is not None:
+        kpis = kpis.exclude(id=excluir_id)
+
+    total_asignado = sum((kpi.ponderacion for kpi in kpis), Decimal('0'))
+
+    return {
+        'total_asignado': total_asignado,
+        'pendiente': Decimal('100') - total_asignado,
+        'completo': total_asignado == Decimal('100'),
     }
 

@@ -2,7 +2,7 @@ from datetime import date
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from apps.estrategia.models import ObjetivoEspecifico
@@ -52,6 +52,46 @@ class FuenteDato(models.Model):
         return self.nombre
 
 
+class ConfiguracionMediciones(models.Model):
+    """Bloque 4 (periodos y plazos): plazo adicional, en días calendario,
+    para registrar una medición después del cierre de su periodo (reglas
+    6/7 confirmadas por Hernán — "cinco o diez días" fueron ejemplos del
+    valor, no un número fijo del sistema).
+
+    Singleton: existe exactamente una fila (pk=1), sembrada por migración
+    con el valor que ya regía en código antes de esta corrección (5), para
+    no cambiar el comportamiento de nadie hasta que la administración lo
+    edite explícitamente. Ver obtener()."""
+
+    dias_plazo_registro = models.PositiveIntegerField(
+        default=5,
+        validators=[MinValueValidator(1)],
+        help_text=(
+            'Días calendario adicionales, contados desde el cierre del '
+            'periodo, durante los cuales todavía se puede registrar la '
+            'medición manualmente.'
+        ),
+    )
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'configuracion_mediciones'
+        verbose_name = 'Configuración de mediciones'
+        verbose_name_plural = 'Configuración de mediciones'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def obtener(cls):
+        configuracion, _ = cls.objects.get_or_create(pk=1)
+        return configuracion
+
+    def __str__(self):
+        return f'Plazo de registro: {self.dias_plazo_registro} día(s)'
+
+
 class IndicadorKPI(models.Model):
     """Bloque 3 del rediseño: el KPI pertenece a un ObjetivoEspecifico de un
     PlanAnual concreto (Opción A — un año, un registro de KPI). Por diseño
@@ -93,6 +133,21 @@ class IndicadorKPI(models.Model):
         decimal_places=4,
         validators=[MinValueValidator(0)],
         help_text='Meta del KPI para el año de su Plan anual.'
+    )
+
+    # Bloque 3, segunda parte (ponderaciones): importancia del KPI dentro
+    # del cumplimiento anual de su (plan_anual, objetivo_general) — regla
+    # 5/6 confirmada por Hernán. Nula por defecto ("sin ponderar todavía",
+    # nunca 0%, ver services.calcular_ponderacion_kpi_ambito) y
+    # deliberadamente independiente de valor_meta/estado/promedio
+    # acumulado (regla 7: no son lo mismo, no se derivan entre sí).
+    ponderacion = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text='Peso del KPI dentro del 100% de su año y objetivo general. Vacío = sin ponderar todavía.'
     )
 
     estado = models.CharField(
@@ -163,6 +218,22 @@ class IndicadorKPI(models.Model):
         return self.plan_anual.plan_estrategico
 
     @property
+    def objetivo_general(self):
+        """ObjetivoGeneral del KPI, derivado de objetivo_especifico (Bloque
+        3, KPI directo). Siempre disponible, incluso para un KPI directo:
+        su objetivo_especifico "implícito" también enlaza con un
+        ObjetivoGeneral real."""
+        return self.objetivo_especifico.objetivo_general
+
+    @property
+    def es_directo(self):
+        """True cuando este KPI no está asociado a un objetivo específico
+        creado por un usuario, sino al objetivo específico 'implícito' que
+        el sistema reutiliza para (plan_anual, objetivo_general) — ver
+        apps/estrategia/services.obtener_o_crear_objetivo_especifico_directo."""
+        return self.objetivo_especifico.es_generado_automaticamente
+
+    @property
     def anio(self):
         """Año del KPI: SIEMPRE derivado de PlanAnual.anio, nunca un campo
         propio (así una eventual Opción B futura, donde un KPI conceptual
@@ -172,11 +243,22 @@ class IndicadorKPI(models.Model):
 
     @property
     def fecha_inicio_vigencia(self):
-        """Compatibilidad técnica (Bloque 3): la vigencia real del KPI ya
-        no se almacena; se deriva del año de su PlanAnual, acotada por la
-        vigencia del PlanEstrategico. Existe únicamente para que la lógica
-        actual de Medicion/periodos (que se rediseñará en Bloque 4) tenga
-        fechas concretas con las que seguir funcionando."""
+        """Vigencia real del KPI para el cálculo de periodos (Bloque 4,
+        regla 4 confirmada por Hernán: la fecha de cierre de un periodo se
+        determina a partir de la frecuencia del KPI Y de la vigencia de su
+        PLAN ANUAL). Prioriza plan_anual.fecha_inicio (Bloque 1) cuando
+        existe.
+
+        Los Planes anuales anteriores al Bloque 1 tienen fecha_inicio/
+        fecha_fin NULL (no se les inventa una fecha histórica, ver nota de
+        PlanAnual.fecha_inicio) — para esos, se conserva el comportamiento
+        previo a esta corrección: año calendario acotado por la vigencia
+        del Plan estratégico."""
+        plan_anual = self.plan_anual
+
+        if plan_anual.fecha_inicio:
+            return plan_anual.fecha_inicio
+
         inicio_anio = date(self.anio, 1, 1)
         inicio_plan = self.plan_estrategico.fecha_inicio
 
@@ -188,6 +270,11 @@ class IndicadorKPI(models.Model):
     @property
     def fecha_fin_vigencia(self):
         """Ver fecha_inicio_vigencia."""
+        plan_anual = self.plan_anual
+
+        if plan_anual.fecha_fin:
+            return plan_anual.fecha_fin
+
         fin_anio = date(self.anio, 12, 31)
         fin_plan = self.plan_estrategico.fecha_fin
 

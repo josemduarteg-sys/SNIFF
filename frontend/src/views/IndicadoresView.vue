@@ -8,6 +8,7 @@ import IndicadorForm from '../components/indicadores/IndicadorForm.vue'
 import IndicadorDetalle from '../components/indicadores/IndicadorDetalle.vue'
 import {
   actualizarIndicador,
+  actualizarPonderacionIndicador,
   anularIndicador,
   autorizarIndicador,
   crearIndicador,
@@ -43,6 +44,7 @@ let timeoutResaltado = null
 
 const indicadores = ref([])
 const planesAnuales = ref([])
+const objetivosGenerales = ref([])
 const objetivosEspecificos = ref([])
 const frecuencias = ref([])
 const rangosKpi = ref([])
@@ -94,6 +96,7 @@ async function cargarDatos() {
 
     indicadores.value = indicadoresData
     planesAnuales.value = datosFormulario.planesAnuales
+    objetivosGenerales.value = datosFormulario.objetivosGenerales
     objetivosEspecificos.value = datosFormulario.objetivosEspecificos
     frecuencias.value = datosFormulario.frecuencias
     rangosKpi.value = rangosData
@@ -378,7 +381,12 @@ async function guardarIndicador(payload) {
   mensaje.value = ''
 
   try {
-    if (indicadorSeleccionado.value?.id) {
+    if (payload.soloPonderacion) {
+      // KPI ya autorizado: solo se reenvía la ponderación (Bloque 3,
+      // segunda parte — ver IndicadorForm.vue).
+      await actualizarPonderacionIndicador(indicadorSeleccionado.value.id, payload.ponderacion)
+      mensaje.value = 'Ponderación actualizada correctamente.'
+    } else if (indicadorSeleccionado.value?.id) {
       await actualizarIndicador(indicadorSeleccionado.value.id, payload)
       mensaje.value = 'KPI actualizado correctamente.'
     } else {
@@ -707,6 +715,9 @@ onBeforeUnmount(() => {
               <span class="code-chip" :title="indicador.objetivo_especifico_texto || 'Sin objetivo'">
                 {{ indicador.objetivo_especifico_texto || 'Sin objetivo' }}
               </span>
+              <div class="cell-sub" :title="indicador.objetivo_general_texto || ''">
+                {{ indicador.objetivo_general_texto || '' }}
+              </div>
             </td>
 
             <td>
@@ -715,6 +726,9 @@ onBeforeUnmount(() => {
               </div>
               <div class="cell-sub">
                 {{ indicador.unidad_medida || 'unidad' }}
+              </div>
+              <div class="cell-extra">
+                Ponderación: {{ indicador.ponderacion != null ? `${indicador.ponderacion}%` : 'Sin ponderar' }}
               </div>
             </td>
 
@@ -885,8 +899,10 @@ onBeforeUnmount(() => {
       <IndicadorForm
         :indicador="indicadorSeleccionado"
         :planes-anuales="planesAnuales"
+        :objetivos-generales="objetivosGenerales"
         :objetivos-especificos="objetivosEspecificos"
         :frecuencias="frecuencias"
+        :indicadores="indicadores"
         @guardar="guardarIndicador"
         @cancelar="cerrarModal"
       />

@@ -5,6 +5,7 @@ from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
@@ -15,6 +16,7 @@ from apps.usuarios.permissions import (
     PermisoPlaneacion,
 )
 from .models import (
+    ConfiguracionMediciones,
     Frecuencia,
     IndicadorKPI,
     MetaKPI,
@@ -26,6 +28,7 @@ from .models import (
     Alerta,
 )
 from .serializers import (
+    ConfiguracionMedicionesSerializer,
     FrecuenciaSerializer,
     IndicadorKPISerializer,
     MetaKPISerializer,
@@ -48,11 +51,35 @@ class FrecuenciaViewSet(viewsets.ModelViewSet):
     permission_classes = [PermisoCatalogoSoloAdmin]
 
 
+class ConfiguracionMedicionesView(APIView):
+    """Bloque 4: GET/PATCH del plazo de registro singleton. Mismo
+    permiso que el resto de catálogos de este módulo (consulta libre,
+    escritura exclusiva de Administrador de planificación) — ningún
+    permiso nuevo."""
+
+    permission_classes = [PermisoCatalogoSoloAdmin]
+
+    def get(self, request):
+        configuracion = ConfiguracionMediciones.obtener()
+        serializer = ConfiguracionMedicionesSerializer(configuracion)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        configuracion = ConfiguracionMediciones.obtener()
+        serializer = ConfiguracionMedicionesSerializer(
+            configuracion, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
 class IndicadorKPIViewSet(viewsets.ModelViewSet):
     queryset = IndicadorKPI.objects.select_related(
         'objetivo_especifico',
         'objetivo_especifico__plan_anual',
         'objetivo_especifico__plan_anual__plan_estrategico',
+        'objetivo_especifico__objetivo_general',
         'frecuencia',
         'autorizado_por',
     ).all()

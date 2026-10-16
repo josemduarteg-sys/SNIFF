@@ -6,10 +6,11 @@ from apps.indicadores.services import cerrar_mediciones_vencidas
 class Command(BaseCommand):
     help = (
         'Cierra automáticamente en 0.00 los periodos de medición de KPI autorizados '
-        'cuya ventana de registro (cierre del periodo + 5 días) ya venció sin que '
-        'exista una medición manual. Procesa en orden todos los periodos atrasados de '
-        'cada KPI (no solo el más reciente). Idempotente: puede ejecutarse varias '
-        'veces sin duplicar cierres. Pensado para programarse una vez al día '
+        'cuya ventana de registro (cierre del periodo + el plazo configurado en '
+        'ConfiguracionMediciones) ya venció sin que exista una medición manual. '
+        'Procesa en orden todos los periodos atrasados de cada KPI (no solo el más '
+        'reciente). Idempotente: puede ejecutarse varias veces sin duplicar cierres. '
+        'Pensado para programarse una vez al día '
         '(Windows Task Scheduler o cron, ver documentación del proyecto).'
     )
 

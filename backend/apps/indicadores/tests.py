@@ -1572,3 +1572,498 @@ class MarcarAlertaRevisadaTests(MedicionTestsBase):
 
         alerta.refresh_from_db()
         self.assertEqual(alerta.estado_alerta, 'pendiente')
+
+
+class IndicadorKPIDirectoTests(APITestCase):
+    """Bloque 3 (KPI directo): objetivo específico opcional en el
+    formulario de KPI, resuelto/creado internamente a partir de
+    (plan_anual, objetivo_general) cuando el usuario no elige uno real."""
+
+    def setUp(self):
+        self.usuario = crear_usuario_admin('admin_kpi_directo')
+        self.client.force_authenticate(user=self.usuario)
+
+        self.frecuencia = Frecuencia.objects.create(nombre='Mensual', estado=True)
+
+        for nombre, color in [('Incumplido', 'rojo'), ('En riesgo', 'amarillo'), ('Favorable', 'verde')]:
+            EstadoCumplimiento.objects.get_or_create(
+                nombre=nombre, defaults={'color': color, 'estado': True}
+            )
+
+        self.plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Plan estratégico KPI directo',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2030-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        self.objetivo_general = ObjetivoGeneral.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            texto_objetivo='Objetivo general KPI directo',
+            creado_por=self.usuario,
+        )
+
+        self.plan_anual = PlanAnual.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            anio=2027,
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        self.objetivo_especifico_real = ObjetivoEspecifico.objects.create(
+            plan_anual=self.plan_anual,
+            objetivo_general=self.objetivo_general,
+            texto_objetivo='Objetivo específico real 2027',
+            creado_por=self.usuario,
+        )
+
+    def payload_directo(self, nombre='KPI directo'):
+        return {
+            'plan_anual': self.plan_anual.id,
+            'objetivo_general': self.objetivo_general.id,
+            'frecuencia': self.frecuencia.id,
+            'nombre': nombre,
+            'descripcion': '',
+            'formula_medicion': '(Resultado obtenido / Meta) x 100',
+            'unidad_medida': '%',
+            'valor_meta': '85.00',
+        }
+
+    def payload_con_objetivo_especifico(self, nombre='KPI con objetivo específico'):
+        return {
+            'objetivo_especifico': self.objetivo_especifico_real.id,
+            'frecuencia': self.frecuencia.id,
+            'nombre': nombre,
+            'descripcion': '',
+            'formula_medicion': '(Resultado obtenido / Meta) x 100',
+            'unidad_medida': '%',
+            'valor_meta': '85.00',
+        }
+
+    # Crear KPI seleccionando un objetivo específico real: comportamiento
+    # sin cambios respecto a antes del Bloque 3.
+    def test_crear_kpi_con_objetivo_especifico_real(self):
+        response = self.client.post('/api/indicadores-kpi/', self.payload_con_objetivo_especifico())
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['objetivo_especifico'], self.objetivo_especifico_real.id)
+        self.assertFalse(response.data['es_directo'])
+        self.assertEqual(response.data['objetivo_general'], self.objetivo_general.id)
+
+    # Crear KPI sin seleccionar objetivo específico (directo): se
+    # resuelve/crea el objetivo específico implícito con el texto e
+    # indicador es_directo esperados.
+    def test_crear_kpi_directo_sin_objetivo_especifico(self):
+        response = self.client.post('/api/indicadores-kpi/', self.payload_directo())
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data['es_directo'])
+        self.assertEqual(response.data['objetivo_general'], self.objetivo_general.id)
+        self.assertEqual(response.data['objetivo_especifico_texto'], 'KPI directo del objetivo general')
+
+        objetivo_implicito = ObjetivoEspecifico.objects.get(id=response.data['objetivo_especifico'])
+        self.assertTrue(objetivo_implicito.es_generado_automaticamente)
+        self.assertEqual(objetivo_implicito.plan_anual_id, self.plan_anual.id)
+        self.assertEqual(objetivo_implicito.objetivo_general_id, self.objetivo_general.id)
+
+    # Varios KPI directos bajo el mismo (plan_anual, objetivo_general)
+    # reutilizan el mismo objetivo específico implícito: no se duplica.
+    def test_kpi_directos_reutilizan_el_mismo_objetivo_implicito(self):
+        respuesta_1 = self.client.post(
+            '/api/indicadores-kpi/', self.payload_directo(nombre='KPI directo 1')
+        )
+        respuesta_2 = self.client.post(
+            '/api/indicadores-kpi/', self.payload_directo(nombre='KPI directo 2')
+        )
+
+        self.assertEqual(respuesta_1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(respuesta_2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            respuesta_1.data['objetivo_especifico'], respuesta_2.data['objetivo_especifico']
+        )
+        self.assertEqual(
+            ObjetivoEspecifico.objects.filter(
+                plan_anual=self.plan_anual,
+                objetivo_general=self.objetivo_general,
+                es_generado_automaticamente=True,
+            ).count(),
+            1,
+        )
+
+    # El servicio de resolución es idempotente incluso si, al momento de
+    # crear, ya existe el implícito (simula la carrera ganada por otra
+    # request concurrente): no debe duplicar ni levantar error al
+    # llamador.
+    def test_servicio_reutiliza_implicito_creado_por_una_carrera_concurrente(self):
+        from unittest.mock import patch
+
+        from apps.estrategia.services import obtener_o_crear_objetivo_especifico_directo
+
+        ganador_de_la_carrera = ObjetivoEspecifico.objects.create(
+            plan_anual=self.plan_anual,
+            objetivo_general=self.objetivo_general,
+            texto_objetivo='KPI directo del objetivo general',
+            es_generado_automaticamente=True,
+            creado_por=self.usuario,
+        )
+
+        # Fuerza a la función a no ver el implícito ya creado en su primer
+        # chequeo (como si ambas requests llegaran a ese punto a la vez),
+        # para ejercitar la rama que atrapa el IntegrityError real de la
+        # UniqueConstraint y relee la fila.
+        with patch(
+            'apps.estrategia.models.ObjetivoEspecifico.objects.filter'
+        ) as filtro_mockeado:
+            filtro_mockeado.return_value.first.return_value = None
+
+            resultado = obtener_o_crear_objetivo_especifico_directo(
+                self.plan_anual, self.objetivo_general, usuario=self.usuario,
+            )
+
+        self.assertEqual(resultado.id, ganador_de_la_carrera.id)
+        self.assertEqual(
+            ObjetivoEspecifico.objects.filter(
+                plan_anual=self.plan_anual,
+                objetivo_general=self.objetivo_general,
+                es_generado_automaticamente=True,
+            ).count(),
+            1,
+        )
+
+    # El objetivo específico implícito nunca aparece en el listado/
+    # administración de objetivos específicos (no se mezcla con los
+    # creados por usuarios).
+    def test_objetivo_implicito_no_aparece_en_listado_de_objetivos_especificos(self):
+        response = self.client.post('/api/indicadores-kpi/', self.payload_directo())
+        id_implicito = response.data['objetivo_especifico']
+
+        listado = self.client.get('/api/objetivos-especificos/')
+        ids_listados = [objetivo['id'] for objetivo in listado.data]
+
+        self.assertNotIn(id_implicito, ids_listados)
+        self.assertIn(self.objetivo_especifico_real.id, ids_listados)
+
+    # Validación de pertenencia: el objetivo general debe pertenecer al
+    # mismo Plan estratégico que el Plan anual seleccionado.
+    def test_rechaza_objetivo_general_de_otro_plan_estrategico(self):
+        otro_plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Otro plan estratégico',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2030-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+        objetivo_general_ajeno = ObjetivoGeneral.objects.create(
+            plan_estrategico=otro_plan_estrategico,
+            texto_objetivo='Objetivo general de otro plan estratégico',
+            creado_por=self.usuario,
+        )
+
+        payload = self.payload_directo()
+        payload['objetivo_general'] = objetivo_general_ajeno.id
+
+        response = self.client.post('/api/indicadores-kpi/', payload)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # Validación de pertenencia: un objetivo específico real enviado junto
+    # con un plan_anual que no es el suyo se rechaza.
+    def test_rechaza_objetivo_especifico_que_no_pertenece_al_plan_anual_enviado(self):
+        # Sin estado=En uso a propósito: self.plan_anual ya es el único
+        # Plan anual En uso de self.plan_estrategico (regla Bloque 1). No
+        # hace falta que lo esté para este test: el rechazo ocurre por el
+        # cruce objetivo_especifico/plan_anual, antes del chequeo de estado.
+        otro_plan_anual = PlanAnual.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            anio=2028,
+            creado_por=self.usuario,
+        )
+
+        payload = self.payload_con_objetivo_especifico()
+        payload['plan_anual'] = otro_plan_anual.id
+
+        response = self.client.post('/api/indicadores-kpi/', payload)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # Restricción existente: nombres duplicados entre dos KPI directos de
+    # la MISMA combinación (plan_anual, objetivo_general) siguen
+    # rechazados, porque comparten el mismo objetivo específico implícito.
+    def test_rechaza_nombre_duplicado_entre_kpi_directos_de_la_misma_combinacion(self):
+        self.client.post(
+            '/api/indicadores-kpi/', self.payload_directo(nombre='KPI directo repetido')
+        )
+        response = self.client.post(
+            '/api/indicadores-kpi/', self.payload_directo(nombre='KPI directo repetido')
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # Sin restricciones nuevas innecesarias: un KPI directo y un KPI bajo
+    # un objetivo específico real de la MISMA combinación (plan_anual,
+    # objetivo_general) pueden compartir nombre, porque pertenecen a
+    # objetivos específicos distintos (la unicidad sigue siendo por
+    # objetivo_especifico, como ya era antes del Bloque 3).
+    def test_mismo_nombre_entre_kpi_directo_y_kpi_con_objetivo_especifico_real_permitido(self):
+        self.client.post(
+            '/api/indicadores-kpi/', self.payload_directo(nombre='KPI mismo nombre')
+        )
+        response = self.client.post(
+            '/api/indicadores-kpi/',
+            self.payload_con_objetivo_especifico(nombre='KPI mismo nombre'),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    # Los KPI y mediciones ya existentes (creados antes del Bloque 3, con
+    # un objetivo específico real) siguen funcionando: editar solo el
+    # nombre no toca ni exige plan_anual/objetivo_general, y el objetivo
+    # específico original se conserva intacto.
+    def test_editar_kpi_existente_sin_tocar_objetivo_no_lo_modifica(self):
+        creacion = self.client.post(
+            '/api/indicadores-kpi/', self.payload_con_objetivo_especifico(nombre='KPI histórico')
+        )
+        kpi_id = creacion.data['id']
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_id}/', {'nombre': 'KPI histórico renombrado'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['nombre'], 'KPI histórico renombrado')
+        self.assertEqual(response.data['objetivo_especifico'], self.objetivo_especifico_real.id)
+        self.assertFalse(response.data['es_directo'])
+
+
+class IndicadorKPIPonderacionTests(APITestCase):
+    """Bloque 3, segunda parte: ponderación de KPI dentro de su ámbito
+    (plan_anual, objetivo_general) — reglas 5/6/7 confirmadas por Hernán,
+    reunión del 6/10/2026."""
+
+    def setUp(self):
+        self.usuario = crear_usuario_admin('admin_ponderacion_kpi')
+        self.client.force_authenticate(user=self.usuario)
+
+        self.frecuencia = Frecuencia.objects.create(nombre='Mensual', estado=True)
+
+        for nombre, color in [('Incumplido', 'rojo'), ('En riesgo', 'amarillo'), ('Favorable', 'verde')]:
+            EstadoCumplimiento.objects.get_or_create(
+                nombre=nombre, defaults={'color': color, 'estado': True}
+            )
+
+        self.plan_estrategico = PlanEstrategico.objects.create(
+            titulo='Plan estratégico ponderación KPI',
+            fecha_inicio='2027-01-01',
+            fecha_fin='2030-12-31',
+            estado=PlanEstrategico.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        self.objetivo_general = ObjetivoGeneral.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            texto_objetivo='Objetivo general ponderación KPI',
+            creado_por=self.usuario,
+        )
+
+        self.plan_anual = PlanAnual.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            anio=2027,
+            estado=PlanAnual.ESTADO_EN_USO,
+            creado_por=self.usuario,
+        )
+
+        self.objetivo_especifico_real = ObjetivoEspecifico.objects.create(
+            plan_anual=self.plan_anual,
+            objetivo_general=self.objetivo_general,
+            texto_objetivo='Objetivo específico real para ponderación',
+            creado_por=self.usuario,
+        )
+
+    def crear_kpi_directo(self, nombre):
+        return self.client.post('/api/indicadores-kpi/', {
+            'plan_anual': self.plan_anual.id,
+            'objetivo_general': self.objetivo_general.id,
+            'frecuencia': self.frecuencia.id,
+            'nombre': nombre,
+            'descripcion': '',
+            'formula_medicion': '(Resultado obtenido / Meta) x 100',
+            'unidad_medida': '%',
+            'valor_meta': '85.00',
+        })
+
+    def crear_kpi_con_objetivo_especifico(self, nombre):
+        return self.client.post('/api/indicadores-kpi/', {
+            'objetivo_especifico': self.objetivo_especifico_real.id,
+            'frecuencia': self.frecuencia.id,
+            'nombre': nombre,
+            'descripcion': '',
+            'formula_medicion': '(Resultado obtenido / Meta) x 100',
+            'unidad_medida': '%',
+            'valor_meta': '85.00',
+        })
+
+    # 1. Registro de porcentajes válidos.
+    def test_asigna_ponderacion_valida(self):
+        kpi = self.crear_kpi_directo('KPI ponderado').data
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi["id"]}/', {'ponderacion': '40.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['ponderacion']), '40.00')
+
+    # 2. Rechazo de valores negativos o superiores a 100.
+    def test_rechaza_ponderacion_negativa(self):
+        kpi = self.crear_kpi_directo('KPI ponderación negativa').data
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi["id"]}/', {'ponderacion': '-10.00'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rechaza_ponderacion_mayor_a_100(self):
+        kpi = self.crear_kpi_directo('KPI ponderación excesiva').data
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi["id"]}/', {'ponderacion': '150.00'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # 3. Rechazo de distribuciones que superen el 100% dentro del mismo ámbito.
+    def test_rechaza_distribucion_que_supera_100_en_el_ambito(self):
+        kpi_1 = self.crear_kpi_directo('KPI ámbito A').data
+        kpi_2 = self.crear_kpi_directo('KPI ámbito B').data
+
+        self.client.patch(f'/api/indicadores-kpi/{kpi_1["id"]}/', {'ponderacion': '60.00'})
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_2["id"]}/', {'ponderacion': '50.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # 4. Aceptación de distribuciones parciales durante su preparación.
+    def test_acepta_distribucion_parcial_en_preparacion(self):
+        kpi = self.crear_kpi_directo('KPI parcial').data
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi["id"]}/', {'ponderacion': '30.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['ponderacion_total_ambito']), '30.00')
+        self.assertEqual(str(response.data['ponderacion_pendiente_ambito']), '70.00')
+
+    # 5. Identificación de una distribución que alcance exactamente el 100%.
+    def test_identifica_distribucion_completa_al_100_en_el_ambito(self):
+        kpi_1 = self.crear_kpi_directo('KPI completo A').data
+        kpi_2 = self.crear_kpi_directo('KPI completo B').data
+
+        self.client.patch(f'/api/indicadores-kpi/{kpi_1["id"]}/', {'ponderacion': '60.00'})
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_2["id"]}/', {'ponderacion': '40.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['ponderacion_total_ambito']), '100.00')
+        self.assertEqual(str(response.data['ponderacion_pendiente_ambito']), '0.00')
+
+    # 6. Independencia entre ámbitos (plan_anual, objetivo_general) distintos.
+    def test_independencia_entre_ambitos_distintos(self):
+        otro_plan_anual = PlanAnual.objects.create(
+            plan_estrategico=self.plan_estrategico,
+            anio=2028,
+            creado_por=self.usuario,
+        )
+        # Bloque 1: un único Plan anual En uso por Plan estratégico — se
+        # cierra el primero para poder poner este segundo En uso.
+        self.plan_anual.estado = PlanAnual.ESTADO_CERRADO
+        self.plan_anual.save(update_fields=['estado'])
+        otro_plan_anual.estado = PlanAnual.ESTADO_EN_USO
+        otro_plan_anual.save(update_fields=['estado'])
+
+        kpi_otro_ambito = self.client.post('/api/indicadores-kpi/', {
+            'plan_anual': otro_plan_anual.id,
+            'objetivo_general': self.objetivo_general.id,
+            'frecuencia': self.frecuencia.id,
+            'nombre': 'KPI de otro año',
+            'descripcion': '',
+            'formula_medicion': '(Resultado obtenido / Meta) x 100',
+            'unidad_medida': '%',
+            'valor_meta': '85.00',
+        }).data
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_otro_ambito["id"]}/', {'ponderacion': '90.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['ponderacion_total_ambito']), '90.00')
+
+    # 7. Compatibilidad con KPI directos y KPI vinculados a objetivos
+    # específicos: ambos comparten el mismo ámbito (plan_anual,
+    # objetivo_general) y compiten por el mismo 100%.
+    def test_compatible_entre_kpi_directo_y_kpi_con_objetivo_especifico(self):
+        kpi_directo = self.crear_kpi_directo('KPI directo compartido').data
+        kpi_real = self.crear_kpi_con_objetivo_especifico('KPI real compartido').data
+
+        self.client.patch(f'/api/indicadores-kpi/{kpi_directo["id"]}/', {'ponderacion': '55.00'})
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_real["id"]}/', {'ponderacion': '45.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['ponderacion_total_ambito']), '100.00')
+
+        exceso = self.crear_kpi_directo('KPI directo excedente')
+        respuesta_exceso = self.client.patch(
+            f'/api/indicadores-kpi/{exceso.data["id"]}/', {'ponderacion': '1.00'}
+        )
+        self.assertEqual(respuesta_exceso.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # 8. Conservación de KPI y mediciones existentes: un KPI nunca nace
+    # con una ponderación por defecto, y editar otro campo no la altera.
+    def test_kpi_nuevo_nace_sin_ponderacion_por_defecto(self):
+        kpi = self.crear_kpi_directo('KPI sin ponderar').data
+        self.assertIsNone(kpi['ponderacion'])
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi["id"]}/', {'descripcion': 'Actualizada'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data['ponderacion'])
+
+    # 9. Restricción de edición al Administrador de planificación.
+    def test_restringido_a_administrador_de_planificacion(self):
+        kpi = self.crear_kpi_directo('KPI restringido').data
+
+        ejecutor = crear_usuario_operativo('ejecutor_ponderacion_kpi')
+        self.client.force_authenticate(user=ejecutor)
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi["id"]}/', {'ponderacion': '20.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # La ponderación es independiente del estado de autorización del KPI
+    # (regla 7: no se deriva de ni se bloquea junto con meta/resultado) —
+    # a diferencia de nombre/fórmula/meta, que sí quedan bloqueados.
+    def test_ponderacion_editable_en_kpi_ya_autorizado(self):
+        kpi_id = self.crear_kpi_directo('KPI para autorizar').data['id']
+        self.client.post(f'/api/indicadores-kpi/{kpi_id}/autorizar/')
+
+        response = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_id}/', {'ponderacion': '25.00'}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['ponderacion']), '25.00')
+        self.assertEqual(response.data['estado'], 'autorizado')
+
+        # Pero sigue sin poder tocar un campo principal (sin cambios en
+        # esta regla ya existente del Bloque 3, primera parte).
+        respuesta_bloqueada = self.client.patch(
+            f'/api/indicadores-kpi/{kpi_id}/', {'nombre': 'Intento de renombrar'}
+        )
+        self.assertEqual(respuesta_bloqueada.status_code, status.HTTP_400_BAD_REQUEST)

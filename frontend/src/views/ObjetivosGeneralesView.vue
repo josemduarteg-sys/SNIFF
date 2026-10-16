@@ -11,6 +11,12 @@ import {
   obtenerObjetivosGenerales,
   obtenerPlanesEstrategicosParaObjetivo,
 } from '../services/objetivoGeneralService'
+import { obtenerPlanesAnuales } from '../services/planAnualService'
+import {
+  actualizarPonderacionAnual,
+  crearPonderacionAnual,
+  obtenerPonderacionesAnuales,
+} from '../services/ponderacionAnualService'
 import { esAdministradorPlanificacion, puedeGestionarObjetivosGenerales } from '../utils/permisos'
 import { useResaltado } from '../composables/useResaltado'
 import { usePaginacion } from '../composables/usePaginacion'
@@ -35,6 +41,8 @@ const { idResaltado, aplicarResaltadoDesdeRuta } = useResaltado(route)
 const objetivos = ref([])
 const planesFormulario = ref([])
 const planesFiltro = ref([])
+const planesAnualesTodos = ref([])
+const ponderacionesAnuales = ref([])
 const busqueda = ref('')
 const planSeleccionadoFiltro = ref('')
 const cargando = ref(false)
@@ -47,24 +55,120 @@ const objetivoSeleccionado = ref(null)
 const guardandoObjetivo = ref(false)
 const errorModalObjetivo = ref('')
 
+// Bloque 3, segunda parte (ponderaciones): edición en vivo del porcentaje
+// por año dentro del modal de detalle, keyed por id de Plan anual. Se
+// reinicia cada vez que se abre el detalle (ver abrirDetalleObjetivo).
+const edicionPonderaciones = ref({})
+const guardandoPonderacionAnioId = ref(null)
+const errorPonderacionAnual = ref('')
+
 async function cargarDatos() {
   cargando.value = true
   error.value = ''
 
   try {
-    const [objetivosData, datosFormulario, planesTodos] = await Promise.all([
+    const [objetivosData, datosFormulario, planesTodos, planesAnualesData, ponderacionesData] = await Promise.all([
       obtenerObjetivosGenerales(),
       obtenerDatosFormularioObjetivoGeneral(),
       obtenerPlanesEstrategicosParaObjetivo(),
+      obtenerPlanesAnuales(),
+      obtenerPonderacionesAnuales(),
     ])
 
     objetivos.value = objetivosData
     planesFormulario.value = datosFormulario.planes
     planesFiltro.value = planesTodos
+    planesAnualesTodos.value = planesAnualesData
+    ponderacionesAnuales.value = ponderacionesData
   } catch (e) {
     error.value = 'No se pudieron cargar los objetivos generales.'
   } finally {
     cargando.value = false
+  }
+}
+
+// Todos los años (Planes anuales) del mismo Plan estratégico que el
+// objetivo general en detalle — regla 2/3: el 100% se distribuye entre
+// ESOS años, sin importar si ya tienen o no actividad (Objetivo
+// específico/KPI) todavía.
+const aniosDelObjetivoSeleccionado = computed(() => {
+  if (!objetivoSeleccionado.value) {
+    return []
+  }
+
+  return planesAnualesTodos.value
+    .filter(
+      (plan) => Number(plan.plan_estrategico) === Number(objetivoSeleccionado.value.plan_estrategico)
+    )
+    .slice()
+    .sort((a, b) => a.anio - b.anio)
+})
+
+const ponderacionesPorAnio = computed(() => {
+  if (!objetivoSeleccionado.value) {
+    return {}
+  }
+
+  const mapa = {}
+
+  for (const ponderacion of ponderacionesAnuales.value) {
+    if (Number(ponderacion.objetivo_general) === Number(objetivoSeleccionado.value.id)) {
+      mapa[ponderacion.plan_anual] = ponderacion
+    }
+  }
+
+  return mapa
+})
+
+const totalAsignadoObjetivoSeleccionado = computed(() => {
+  return Object.values(ponderacionesPorAnio.value).reduce(
+    (total, p) => total + Number(p.porcentaje || 0), 0
+  )
+})
+
+const pendienteObjetivoSeleccionado = computed(() => {
+  return Math.max(0, 100 - totalAsignadoObjetivoSeleccionado.value)
+})
+
+async function guardarPonderacionAnio(plan) {
+  if (!objetivoSeleccionado.value) {
+    return
+  }
+
+  errorPonderacionAnual.value = ''
+  guardandoPonderacionAnioId.value = plan.id
+
+  const porcentaje = edicionPonderaciones.value[plan.id]
+  const existente = ponderacionesPorAnio.value[plan.id]
+
+  try {
+    let resultado
+
+    if (existente) {
+      resultado = await actualizarPonderacionAnual(existente.id, {
+        objetivo_general: objetivoSeleccionado.value.id,
+        plan_anual: plan.id,
+        porcentaje,
+      })
+    } else {
+      resultado = await crearPonderacionAnual({
+        objetivo_general: objetivoSeleccionado.value.id,
+        plan_anual: plan.id,
+        porcentaje,
+      })
+    }
+
+    const indiceExistente = ponderacionesAnuales.value.findIndex((p) => p.id === resultado.id)
+
+    if (indiceExistente >= 0) {
+      ponderacionesAnuales.value.splice(indiceExistente, 1, resultado)
+    } else {
+      ponderacionesAnuales.value.push(resultado)
+    }
+  } catch (e) {
+    errorPonderacionAnual.value = obtenerMensajeError(e, 'No se pudo guardar la ponderación.')
+  } finally {
+    guardandoPonderacionAnioId.value = null
   }
 }
 
@@ -166,6 +270,22 @@ function abrirEditarObjetivo(objetivo) {
 function abrirDetalleObjetivo(objetivo) {
   objetivoSeleccionado.value = objetivo
   modalDetalleAbierto.value = true
+  errorPonderacionAnual.value = ''
+
+  // Precarga cada año con su porcentaje ya guardado (o vacío si todavía
+  // no se asignó) para que el input muestre el valor real al abrir.
+  const precarga = {}
+
+  for (const plan of planesAnualesTodos.value) {
+    if (Number(plan.plan_estrategico) === Number(objetivo.plan_estrategico)) {
+      const existente = ponderacionesAnuales.value.find(
+        (p) => Number(p.objetivo_general) === Number(objetivo.id) && Number(p.plan_anual) === Number(plan.id)
+      )
+      precarga[plan.id] = existente ? existente.porcentaje : ''
+    }
+  }
+
+  edicionPonderaciones.value = precarga
 }
 
 function cerrarModalObjetivo() {
@@ -178,6 +298,8 @@ function cerrarModalObjetivo() {
 function cerrarModalDetalle() {
   modalDetalleAbierto.value = false
   objetivoSeleccionado.value = null
+  edicionPonderaciones.value = {}
+  errorPonderacionAnual.value = ''
 }
 
 function obtenerMensajeError(e, mensajeDefault) {
@@ -517,6 +639,70 @@ onMounted(async () => {
           <span>Texto del objetivo</span>
           <strong>{{ objetivoSeleccionado.texto_objetivo }}</strong>
         </div>
+      </div>
+
+      <div v-if="objetivoSeleccionado" class="ponderacion-seccion">
+        <h4>Ponderación anual</h4>
+        <p class="ponderacion-ayuda">
+          El 100% del cumplimiento estratégico de este objetivo general se distribuye
+          entre los años de su plan estratégico. Una distribución parcial queda en
+          preparación: no es un error.
+        </p>
+
+        <div class="ponderacion-resumen">
+          Distribuido: <strong>{{ totalAsignadoObjetivoSeleccionado.toFixed(2) }}%</strong> ·
+          Pendiente: <strong>{{ pendienteObjetivoSeleccionado.toFixed(2) }}%</strong>
+        </div>
+
+        <div v-if="errorPonderacionAnual" class="alert error">
+          {{ errorPonderacionAnual }}
+        </div>
+
+        <div v-if="!aniosDelObjetivoSeleccionado.length" class="ponderacion-vacio">
+          Este plan estratégico todavía no tiene planes anuales.
+        </div>
+
+        <table v-else class="ponderacion-tabla">
+          <thead>
+            <tr>
+              <th>Año</th>
+              <th>Estado</th>
+              <th>Porcentaje</th>
+              <th v-if="esAdmin"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="plan in aniosDelObjetivoSeleccionado" :key="plan.id">
+              <td>{{ plan.nombre }}</td>
+              <td>{{ plan.estado }}</td>
+              <td>
+                <input
+                  v-model="edicionPonderaciones[plan.id]"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  placeholder="Sin asignar"
+                  :disabled="!esAdmin || plan.estado === 'cerrado' || plan.plan_estrategico_estado === 'cerrado'"
+                />
+              </td>
+              <td v-if="esAdmin">
+                <button
+                  type="button"
+                  class="btn-secondary btn-small"
+                  :disabled="
+                    plan.estado === 'cerrado'
+                    || plan.plan_estrategico_estado === 'cerrado'
+                    || guardandoPonderacionAnioId === plan.id
+                  "
+                  @click="guardarPonderacionAnio(plan)"
+                >
+                  {{ guardandoPonderacionAnioId === plan.id ? 'Guardando...' : 'Guardar' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </ModalBase>
   </AppLayout>
@@ -980,6 +1166,101 @@ tbody tr:hover {
     align-items: flex-start;
     gap: 12px;
   }
+}
+
+.ponderacion-seccion {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #e4eaef;
+}
+
+.ponderacion-seccion h4 {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #1d3557;
+}
+
+.ponderacion-ayuda {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #6c7a89;
+}
+
+.ponderacion-resumen {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #1d3557;
+}
+
+.ponderacion-vacio {
+  font-size: 13px;
+  color: #6c7a89;
+}
+
+.ponderacion-tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ponderacion-tabla th {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #6c7a89;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e4eaef;
+}
+
+.ponderacion-tabla td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f3f5;
+  color: #1d3557;
+}
+
+.ponderacion-tabla input {
+  width: 100px;
+  border: 1.5px solid #e4eaef;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  color: #1d3557;
+}
+
+.ponderacion-tabla input:disabled {
+  background: #f4f7f9;
+  color: #9aa8b8;
+}
+
+.btn-secondary {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1.5px solid #e4eaef;
+  background: #ffffff;
+  color: #5e6e82;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #f4f7f9;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-small {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .highlight-row {

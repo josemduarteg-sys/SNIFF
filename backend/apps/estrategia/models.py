@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 
@@ -219,6 +220,14 @@ class ObjetivoEspecifico(models.Model):
     No tiene un campo `estado` propio: su disponibilidad para edición la
     gobierna el estado del Plan anual (y, a través de él, el del Plan
     estratégico). Ver apps/estrategia/services.py.
+
+    Bloque 3 (KPI directo, punto 2): `es_generado_automaticamente` distingue
+    un objetivo específico creado explícitamente por un usuario (False,
+    valor también de todos los registros previos a este cambio) de uno que
+    el sistema crea/reutiliza internamente para permitir un KPI "directo"
+    sobre (plan_anual, objetivo_general) sin pasar por este nivel. Estos
+    últimos nunca se exponen como opción seleccionable (ver
+    ObjetivoEspecificoViewSet.queryset) ni se editan por este módulo.
     """
 
     plan_anual = models.ForeignKey(
@@ -232,6 +241,7 @@ class ObjetivoEspecifico(models.Model):
         related_name='objetivos_especificos'
     )
     texto_objetivo = models.TextField()
+    es_generado_automaticamente = models.BooleanField(default=False)
     creado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -244,6 +254,80 @@ class ObjetivoEspecifico(models.Model):
         verbose_name = 'Objetivo específico'
         verbose_name_plural = 'Objetivos específicos'
         ordering = ['-fecha_creacion']
+        constraints = [
+            # A lo sumo UN objetivo específico "implícito" por combinación
+            # (plan_anual, objetivo_general) — así nunca se duplica el
+            # registro interno que reutilizan los KPI directos, ni siquiera
+            # ante solicitudes simultáneas (ver
+            # services.obtener_o_crear_objetivo_especifico_directo). No
+            # restringe en nada a los objetivos específicos reales: un
+            # mismo (plan_anual, objetivo_general) puede seguir teniendo
+            # cuantos objetivos específicos explícitos el usuario cree.
+            models.UniqueConstraint(
+                fields=['plan_anual', 'objetivo_general'],
+                condition=models.Q(es_generado_automaticamente=True),
+                name='unique_objetivo_especifico_implicito',
+            ),
+        ]
 
     def __str__(self):
         return self.texto_objetivo[:80]
+
+
+class PonderacionAnualObjetivoGeneral(models.Model):
+    """Bloque 3, segunda parte (ponderaciones): qué porcentaje del
+    cumplimiento estratégico de un ObjetivoGeneral (100% a lo largo de
+    todo su Plan estratégico, regla 1 confirmada por Hernán) le
+    corresponde a UN año concreto (un PlanAnual del mismo Plan
+    estratégico). No existía ninguna tabla que vinculara directamente un
+    ObjetivoGeneral con un año específico (la única conexión previa era
+    indirecta, vía ObjetivoEspecifico) — esta es esa tabla.
+
+    Solo registra el porcentaje configurado: NO calcula ni consolida
+    ningún resultado de cumplimiento (eso queda fuera de este bloque,
+    pendiente de que Hernán defina las fórmulas de consolidación).
+
+    No se asigna ningún valor por defecto ni se completan automáticamente
+    los años faltantes: una fila solo existe si la administración
+    efectivamente la creó. Un ObjetivoGeneral puede tener filas para solo
+    algunos de los años de su Plan estratégico (distribución en
+    preparación, ver apps/estrategia/services.resumen_ponderacion_anual).
+    """
+
+    objetivo_general = models.ForeignKey(
+        ObjetivoGeneral,
+        on_delete=models.PROTECT,
+        related_name='ponderaciones_anuales',
+    )
+    plan_anual = models.ForeignKey(
+        PlanAnual,
+        on_delete=models.PROTECT,
+        related_name='ponderaciones_objetivos_generales',
+    )
+    porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='ponderaciones_anuales_creadas',
+    )
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'ponderacion_anual_objetivo_general'
+        verbose_name = 'Ponderación anual de objetivo general'
+        verbose_name_plural = 'Ponderaciones anuales de objetivos generales'
+        ordering = ['plan_anual__anio']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['objetivo_general', 'plan_anual'],
+                name='unique_ponderacion_anual_por_objetivo_y_plan',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.objetivo_general} - {self.plan_anual.nombre}: {self.porcentaje}%'

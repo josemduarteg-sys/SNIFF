@@ -2,7 +2,9 @@ import os
 
 from rest_framework import serializers
 
+from apps.estrategia.models import ObjetivoGeneral, ObjetivoEspecifico, PlanAnual
 from .models import (
+    ConfiguracionMediciones,
     Frecuencia,
     IndicadorKPI,
     MetaKPI,
@@ -28,11 +30,45 @@ class FrecuenciaSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
+class ConfiguracionMedicionesSerializer(serializers.ModelSerializer):
+    """Bloque 4: plazo adicional (en días calendario) para registrar una
+    medición después del cierre de su periodo. Singleton — ver
+    ConfiguracionMediciones.obtener()."""
+
+    class Meta:
+        model = ConfiguracionMediciones
+        fields = ['id', 'dias_plazo_registro', 'fecha_actualizacion']
+        read_only_fields = ['id', 'fecha_actualizacion']
+
+    def validate_dias_plazo_registro(self, valor):
+        if valor < 1:
+            raise serializers.ValidationError(
+                'El plazo debe ser de al menos 1 día calendario.'
+            )
+
+        return valor
+
+
 class IndicadorKPISerializer(serializers.ModelSerializer):
+    # Bloque 3 (KPI directo): objetivo_especifico pasa a ser opcional —
+    # ModelSerializer lo generaría como required=True por ser NOT NULL en
+    # el modelo, así que se redeclara acá. plan_anual/objetivo_general NO
+    # son columnas de IndicadorKPI (sigue sin duplicar esa relación, ver
+    # nota de clase en models.py): son PrimaryKeyRelatedField que leen/
+    # escriben a través de las propiedades homónimas del modelo, así un
+    # mismo nombre de campo sirve para mostrar el id derivado (GET, igual
+    # que antes) y para recibir la selección del formulario (POST/PATCH)
+    # con la que validate() resuelve o crea el objetivo_especifico
+    # "implícito" cuando el usuario no elige uno real.
+    objetivo_especifico = serializers.PrimaryKeyRelatedField(
+        queryset=ObjetivoEspecifico.objects.all(), required=False, allow_null=True,
+    )
     objetivo_especifico_texto = serializers.CharField(
         source='objetivo_especifico.texto_objetivo', read_only=True
     )
-    plan_anual = serializers.SerializerMethodField()
+    plan_anual = serializers.PrimaryKeyRelatedField(
+        queryset=PlanAnual.objects.all(), required=False,
+    )
     plan_anual_nombre = serializers.SerializerMethodField()
     plan_anual_estado = serializers.SerializerMethodField()
     plan_estrategico = serializers.SerializerMethodField()
@@ -41,6 +77,27 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
     # Plan estratégico ancestro está Cerrado. El bloqueo real lo aplica la
     # validación de abajo (ver validate() e IndicadorKPI.esta_bloqueado()).
     plan_estrategico_estado = serializers.SerializerMethodField()
+    objetivo_general = serializers.PrimaryKeyRelatedField(
+        queryset=ObjetivoGeneral.objects.all(), required=False,
+    )
+    objetivo_general_texto = serializers.CharField(
+        source='objetivo_general.texto_objetivo', read_only=True
+    )
+    es_directo = serializers.SerializerMethodField()
+    # Bloque 3, segunda parte (ponderaciones): total ya asignado y
+    # pendiente dentro del mismo ámbito (plan_anual, objetivo_general) de
+    # este KPI, INCLUYENDO su propia ponderación — para que el frontend
+    # muestre "distribuido/pendiente" sin tener que traer y sumar él mismo
+    # el resto de KPI del ámbito.
+    ponderacion_total_ambito = serializers.SerializerMethodField()
+    ponderacion_pendiente_ambito = serializers.SerializerMethodField()
+    # Bloque 4 (periodos y plazos): identifica, para cada KPI, si tiene un
+    # periodo disponible para registrar AHORA MISMO (regla 8 confirmada
+    # por Hernán) — para que el selector de KPI del formulario de
+    # mediciones lo muestre sin tener que consultar /siguiente-periodo/
+    # uno por uno antes de que el usuario elija.
+    periodo_disponible = serializers.SerializerMethodField()
+    periodo_disponible_motivo = serializers.SerializerMethodField()
     anio = serializers.ReadOnlyField()
     fecha_inicio_vigencia = serializers.ReadOnlyField()
     fecha_fin_vigencia = serializers.ReadOnlyField()
@@ -69,6 +126,9 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'plan_estrategico',
             'plan_estrategico_titulo',
             'plan_estrategico_estado',
+            'objetivo_general',
+            'objetivo_general_texto',
+            'es_directo',
             'anio',
             'frecuencia',
             'frecuencia_nombre',
@@ -77,6 +137,11 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'formula_medicion',
             'unidad_medida',
             'valor_meta',
+            'ponderacion',
+            'ponderacion_total_ambito',
+            'ponderacion_pendiente_ambito',
+            'periodo_disponible',
+            'periodo_disponible_motivo',
             'fecha_inicio_vigencia',
             'fecha_fin_vigencia',
             'estado',
@@ -108,6 +173,11 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'estado_acumulado_id',
             'estado_acumulado_nombre',
             'estado_acumulado_color',
+            'es_directo',
+            'ponderacion_total_ambito',
+            'ponderacion_pendiente_ambito',
+            'periodo_disponible',
+            'periodo_disponible_motivo',
         ]
         # DRF genera automáticamente un UniqueTogetherValidator a partir de
         # la UniqueConstraint del modelo (objetivo_especifico, nombre), que
@@ -118,14 +188,51 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
         # constraint del modelo/base de datos sigue intacta.
         validators = []
 
-    def get_plan_anual(self, obj):
-        return obj.plan_anual.id
-
     def get_plan_anual_nombre(self, obj):
         return obj.plan_anual.nombre
 
     def get_plan_anual_estado(self, obj):
         return obj.plan_anual.estado
+
+    def get_es_directo(self, obj):
+        return obj.es_directo
+
+    def _resumen_ponderacion_ambito_cacheado(self, obj):
+        if not hasattr(obj, '_resumen_ponderacion_ambito_cache'):
+            from .services import resumen_ponderacion_kpi_ambito
+
+            obj._resumen_ponderacion_ambito_cache = resumen_ponderacion_kpi_ambito(
+                obj.plan_anual, obj.objetivo_general, excluir_id=obj.pk,
+            )
+
+        return obj._resumen_ponderacion_ambito_cache
+
+    def get_ponderacion_total_ambito(self, obj):
+        from decimal import Decimal
+
+        resumen = self._resumen_ponderacion_ambito_cacheado(obj)
+        return resumen['total_asignado'] + (obj.ponderacion or Decimal('0'))
+
+    def get_ponderacion_pendiente_ambito(self, obj):
+        from decimal import Decimal
+
+        resumen = self._resumen_ponderacion_ambito_cacheado(obj)
+        return resumen['pendiente'] - (obj.ponderacion or Decimal('0'))
+
+    def _info_siguiente_periodo_cacheada(self, obj):
+        if not hasattr(obj, '_info_siguiente_periodo_cache'):
+            from .services import obtener_info_siguiente_periodo
+
+            obj._info_siguiente_periodo_cache = obtener_info_siguiente_periodo(obj)
+
+        return obj._info_siguiente_periodo_cache
+
+    def get_periodo_disponible(self, obj):
+        return self._info_siguiente_periodo_cacheada(obj)['disponible']
+
+    def get_periodo_disponible_motivo(self, obj):
+        info = self._info_siguiente_periodo_cacheada(obj)
+        return info['motivo'] or (f'Disponible: {info["periodo_nombre"]}' if info['disponible'] else '')
 
     def get_plan_estrategico(self, obj):
         return obj.plan_estrategico.id
@@ -181,32 +288,26 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
         return estado.color if estado else None
 
     def validate(self, attrs):
-        from apps.estrategia.services import plan_anual_esta_bloqueado
-
-        instance = self.instance
-        objetivo_especifico = attrs.get(
-            'objetivo_especifico', getattr(instance, 'objetivo_especifico', None)
+        from apps.estrategia.services import (
+            obtener_o_crear_objetivo_especifico_directo,
+            plan_anual_esta_bloqueado,
         )
 
-        if not objetivo_especifico:
-            raise serializers.ValidationError({
-                'objetivo_especifico': 'Seleccioná el objetivo específico del KPI.'
-            })
+        instance = self.instance
 
-        if instance is None:
-            # Creación: solo dentro de un Plan anual En uso, cuyo Plan
-            # estratégico no esté Cerrado (plan_anual_esta_bloqueado ya
-            # contempla ambos casos).
-            plan_anual = objetivo_especifico.plan_anual
+        # Bloque 3 (KPI directo): el formulario puede enviar un
+        # objetivo_especifico real, o en su lugar plan_anual +
+        # objetivo_general para que el sistema resuelva/cree el objetivo
+        # específico "implícito" de esa combinación. Se detecta la
+        # presencia de cada clave ANTES de hacer nada con sus valores,
+        # porque todas estas variantes cuentan por igual como "intento de
+        # tocar el objetivo del KPI" para el chequeo de autorizado de abajo.
+        objetivo_especifico_dado = 'objetivo_especifico' in attrs
+        plan_anual_dado = 'plan_anual' in attrs
+        objetivo_general_dado = 'objetivo_general' in attrs
+        tocando_objetivo = objetivo_especifico_dado or plan_anual_dado or objetivo_general_dado
 
-            if not plan_anual.esta_en_uso() or plan_anual_esta_bloqueado(plan_anual):
-                raise serializers.ValidationError({
-                    'objetivo_especifico': (
-                        'Solo se pueden crear KPI sobre un objetivo específico '
-                        'cuyo Plan anual esté En uso.'
-                    )
-                })
-        else:
+        if instance is not None:
             if instance.esta_bloqueado():
                 raise serializers.ValidationError(
                     'El Plan anual o el Plan estratégico de este KPI están '
@@ -216,6 +317,8 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             if not instance.puede_modificarse():
                 campos_bloqueados = {
                     'objetivo_especifico',
+                    'plan_anual',
+                    'objetivo_general',
                     'frecuencia',
                     'nombre',
                     'descripcion',
@@ -231,16 +334,108 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
                         'El KPI ya está autorizado y no permite modificar sus datos principales.'
                     )
 
-            # Si se intenta reasociar el KPI a otro objetivo específico,
-            # ese nuevo contexto también debe estar en uso y no bloqueado.
+        # plan_anual/objetivo_general nunca son columnas de IndicadorKPI
+        # (ver nota de clase): se usan únicamente para resolver acá el
+        # objetivo_especifico real a guardar, y no deben llegar a
+        # super().create()/update().
+        plan_anual_attr = attrs.pop('plan_anual', None)
+        objetivo_general_attr = attrs.pop('objetivo_general', None)
+        objetivo_especifico_valor = attrs.get('objetivo_especifico')
+
+        if not tocando_objetivo:
+            # Edición que no toca el objetivo del KPI (ej. solo nombre o
+            # descripción): se conserva el objetivo_especifico actual tal
+            # cual, sin resolver ni crear nada.
+            objetivo_especifico = getattr(instance, 'objetivo_especifico', None)
+        elif objetivo_especifico_dado and objetivo_especifico_valor is not None:
+            # Selección explícita de un objetivo específico real.
+            objetivo_especifico = objetivo_especifico_valor
+
+            if (
+                plan_anual_dado and plan_anual_attr
+                and objetivo_especifico.plan_anual_id != plan_anual_attr.id
+            ):
+                raise serializers.ValidationError({
+                    'objetivo_especifico': (
+                        'El objetivo específico seleccionado no pertenece al '
+                        'plan anual indicado.'
+                    )
+                })
+
+            if (
+                objetivo_general_dado and objetivo_general_attr
+                and objetivo_especifico.objetivo_general_id != objetivo_general_attr.id
+            ):
+                raise serializers.ValidationError({
+                    'objetivo_especifico': (
+                        'El objetivo específico seleccionado no pertenece al '
+                        'objetivo general indicado.'
+                    )
+                })
+        else:
+            # KPI "directo" (punto 2 del Bloque 3): no se eligió un
+            # objetivo específico real, se resuelve/crea el implícito de
+            # (plan_anual, objetivo_general). Ambos son obligatorios acá
+            # aunque el campo del modelo sea opcional a nivel de
+            # serializer: sin ellos no hay combinación que resolver.
+            if not plan_anual_attr:
+                raise serializers.ValidationError({
+                    'plan_anual': 'Seleccioná el plan anual del KPI.'
+                })
+
+            if not objetivo_general_attr:
+                raise serializers.ValidationError({
+                    'objetivo_general': 'Seleccioná el objetivo general del KPI.'
+                })
+
+            if objetivo_general_attr.plan_estrategico_id != plan_anual_attr.plan_estrategico_id:
+                raise serializers.ValidationError({
+                    'objetivo_general': (
+                        'El objetivo general debe pertenecer al mismo plan '
+                        'estratégico que el plan anual seleccionado.'
+                    )
+                })
+
+            objetivo_especifico = obtener_o_crear_objetivo_especifico_directo(
+                plan_anual_attr,
+                objetivo_general_attr,
+                usuario=self.context['request'].user,
+            )
+            attrs['objetivo_especifico'] = objetivo_especifico
+
+        if objetivo_especifico is None:
+            raise serializers.ValidationError({
+                'objetivo_especifico': (
+                    'Seleccioná un objetivo específico, o el plan anual y el '
+                    'objetivo general para crear un KPI directo.'
+                )
+            })
+
+        if instance is None:
+            # Creación: solo dentro de un Plan anual En uso, cuyo Plan
+            # estratégico no esté Cerrado (plan_anual_esta_bloqueado ya
+            # contempla ambos casos). Aplica igual a un KPI con objetivo
+            # específico real o a uno directo: en ambos casos
+            # objetivo_especifico.plan_anual es el plan anual real.
+            plan_anual = objetivo_especifico.plan_anual
+
+            if not plan_anual.esta_en_uso() or plan_anual_esta_bloqueado(plan_anual):
+                raise serializers.ValidationError({
+                    'objetivo_especifico': (
+                        'Solo se pueden crear KPI sobre un plan anual En uso.'
+                    )
+                })
+        else:
+            # Si se intenta reasociar el KPI (a otro objetivo específico
+            # real, o a un KPI directo de otra combinación), ese nuevo
+            # contexto también debe estar en uso y no bloqueado.
             if 'objetivo_especifico' in attrs:
                 nuevo_plan_anual = objetivo_especifico.plan_anual
 
                 if not nuevo_plan_anual.esta_en_uso() or plan_anual_esta_bloqueado(nuevo_plan_anual):
                     raise serializers.ValidationError({
                         'objetivo_especifico': (
-                            'El objetivo específico seleccionado debe pertenecer a un '
-                            'Plan anual En uso.'
+                            'El nuevo plan anual debe estar En uso.'
                         )
                     })
 
@@ -299,6 +494,34 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'frecuencia': 'Seleccioná la frecuencia del KPI.'
             })
+
+        # Bloque 3, segunda parte (ponderaciones): a diferencia de
+        # nombre/fórmula/meta, la ponderación NO queda bloqueada por
+        # instance.puede_modificarse() (KPI ya autorizado) — regla 7
+        # confirmada por Hernán: la ponderación es independiente de la
+        # meta/el resultado/el promedio acumulado, y la mayoría de los KPI
+        # reales ya están autorizados cuando se empiezan a ponderar.
+        if 'ponderacion' in attrs:
+            ponderacion = attrs['ponderacion']
+
+            if ponderacion is not None:
+                from .services import resumen_ponderacion_kpi_ambito
+
+                resumen = resumen_ponderacion_kpi_ambito(
+                    objetivo_especifico.plan_anual,
+                    objetivo_especifico.objetivo_general,
+                    excluir_id=instance.pk if instance else None,
+                )
+
+                if resumen['total_asignado'] + ponderacion > 100:
+                    raise serializers.ValidationError({
+                        'ponderacion': (
+                            'La ponderación excede el 100% del ámbito (año + '
+                            f'objetivo general): ya hay {resumen["total_asignado"]}% '
+                            f'asignado en otros KPI, máximo disponible '
+                            f'{resumen["pendiente"]}%.'
+                        )
+                    })
 
         return attrs
 
