@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { configurarRenovacionSesion } from './sesion'
 
 const api = axios.create({
     baseURL: 'http://127.0.0.1:8000/api/',
@@ -7,20 +8,18 @@ const api = axios.create({
     },
 })
 
-api.interceptors.request.use(
-    (config) => {
-        const token = localStorage.getItem('access_token')
+// Etapa 2 (A3): token en cada petición + renovación centralizada ante 401.
+// La reacción visible (volver al login) la registra App.vue con
+// registrarAlExpirarSesion, porque es quien conoce el router y el usuario.
+let alExpirarSesion = () => {}
 
-        if (token) {
-        config.headers.Authorization = `Bearer ${token}`
-        }
+export function registrarAlExpirarSesion(callback) {
+    alExpirarSesion = callback
+}
 
-        return config
-    },
-    (error) => {
-        return Promise.reject(error)
-    }
-)
+configurarRenovacionSesion(api, {
+    storage: localStorage,
+    alExpirarSesion: () => alExpirarSesion(),
+})
 
 export default api
-

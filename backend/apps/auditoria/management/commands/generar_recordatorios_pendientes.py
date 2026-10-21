@@ -1,12 +1,12 @@
 from django.core.management.base import BaseCommand
 
-from apps.auditoria.services import generar_recordatorios_pendientes
+from apps.auditoria.services import generar_recordatorios_pendientes, registrar_ejecucion_tarea_automatica
 
 
 class Command(BaseCommand):
     help = (
-        'Genera notificaciones diarias para administradores, supervisores y usuarios '
-        'operativos con estrategias, objetivos o KPI pendientes de revisión o autorización.'
+        'Genera notificaciones diarias para los Administradores de planificación '
+        'con Planes estratégicos en Borrador o KPI pendientes de autorización.'
     )
 
     def handle(self, *args, **kwargs):
@@ -24,10 +24,13 @@ class Command(BaseCommand):
                     f"  · Ya existía recordatorio para {item['usuario']}: {item['elemento']}"
                 )
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Elementos revisados: {resultado['revisados']} | "
-                f"Notificaciones creadas: {resultado['creadas']} | "
-                f"Omitidas: {resultado['omitidas']}"
-            )
+        resumen = (
+            f"Elementos revisados: {resultado['revisados']} | "
+            f"Notificaciones creadas: {resultado['creadas']} | "
+            f"Omitidas: {resultado['omitidas']}"
         )
+
+        self.stdout.write(self.style.SUCCESS(resumen))
+
+        # Etapa 4 (M7): registro de la ejecución en bitácora como "Sistema".
+        registrar_ejecucion_tarea_automatica('Recordatorios de pendientes', resumen)

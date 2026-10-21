@@ -16,6 +16,7 @@ from .models import (
 )
 from .serializers import (
     AreaSerializer,
+    CompletarVigenciaPlanAnualSerializer,
     ObjetivoEspecificoSerializer,
     ObjetivoGeneralSerializer,
     PlanAnualSerializer,
@@ -34,6 +35,47 @@ class AreaViewSet(viewsets.ModelViewSet):
     queryset = Area.objects.all()
     serializer_class = AreaSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
+    # Etapa 1 (M3): el frontend ya inactiva Áreas por PATCH (estado=False);
+    # sin borrado físico, igual que el resto de este módulo.
+    http_method_names = METODOS_SIN_BORRADO
+
+    # Etapa 4 (M7): trazabilidad de altas, cambios y (des)activaciones.
+    def perform_create(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+
+        area = serializer.save()
+
+        registrar_bitacora_obligatoria(
+            usuario=self.request.user,
+            accion='crear',
+            modulo='Áreas',
+            descripcion=f'Creó el área {area.nombre}.',
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+
+        estado_anterior = serializer.instance.estado
+        nombre_anterior = serializer.instance.nombre
+        area = serializer.save()
+
+        if estado_anterior and not area.estado:
+            accion, descripcion = 'eliminar', f'Inactivó el área {area.nombre}.'
+        elif not estado_anterior and area.estado:
+            accion, descripcion = 'actualizar', f'Reactivó el área {area.nombre}.'
+        elif nombre_anterior != area.nombre:
+            accion, descripcion = 'actualizar', f'Actualizó el área {nombre_anterior} (ahora {area.nombre}).'
+        else:
+            accion, descripcion = 'actualizar', f'Actualizó el área {area.nombre}.'
+
+        registrar_bitacora_obligatoria(
+            usuario=self.request.user,
+            accion=accion,
+            modulo='Áreas',
+            descripcion=descripcion,
+            request=self.request,
+        )
 
 
 class PlanEstrategicoViewSet(viewsets.ModelViewSet):
@@ -43,14 +85,14 @@ class PlanEstrategicoViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
 
         plan = serializer.save(
             creado_por=self.request.user,
             estado=PlanEstrategico.ESTADO_BORRADOR,
         )
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='crear',
             modulo='Planes estratégicos',
@@ -67,11 +109,11 @@ class PlanEstrategicoViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         plan = serializer.save()
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
             modulo='Planes estratégicos',
@@ -81,7 +123,7 @@ class PlanEstrategicoViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='poner-en-uso')
     def poner_en_uso(self, request, pk=None):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         plan = self.get_object()
 
@@ -94,7 +136,7 @@ class PlanEstrategicoViewSet(viewsets.ModelViewSet):
         plan.estado = PlanEstrategico.ESTADO_EN_USO
         plan.save(update_fields=['estado'])
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=request.user,
             accion='actualizar',
             modulo='Planes estratégicos',
@@ -107,7 +149,7 @@ class PlanEstrategicoViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def cerrar(self, request, pk=None):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         plan = self.get_object()
 
@@ -120,12 +162,20 @@ class PlanEstrategicoViewSet(viewsets.ModelViewSet):
         plan.estado = PlanEstrategico.ESTADO_CERRADO
         plan.save(update_fields=['estado'])
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=request.user,
             accion='actualizar',
             modulo='Planes estratégicos',
             descripcion=f'Cerró el Plan estratégico {plan.titulo}.',
             request=request,
+        )
+
+        # Etapa 5: las solicitudes de días adicionales pendientes de sus KPI
+        # quedan Sin efecto en esta misma operación (y transacción).
+        from apps.indicadores.services import dejar_sin_efecto_por_cierre_de_plan
+
+        dejar_sin_efecto_por_cierre_de_plan(
+            f'se cerró el Plan estratégico {plan.titulo}.', request.user, request, plan_estrategico=plan,
         )
 
         serializer = self.get_serializer(plan)
@@ -142,11 +192,11 @@ class ObjetivoGeneralViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
 
         objetivo = serializer.save(creado_por=self.request.user)
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='crear',
             modulo='Objetivos generales',
@@ -169,11 +219,11 @@ class ObjetivoGeneralViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         objetivo = serializer.save()
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
             modulo='Objetivos generales',
@@ -192,14 +242,14 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
 
         plan_anual = serializer.save(
             creado_por=self.request.user,
             estado=PlanAnual.ESTADO_BORRADOR,
         )
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='crear',
             modulo='Planes anuales',
@@ -222,11 +272,11 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         plan_anual = serializer.save()
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
             modulo='Planes anuales',
@@ -238,7 +288,7 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
     def poner_en_uso(self, request, pk=None):
         from django.db import IntegrityError, transaction
 
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         plan_anual = self.get_object()
 
@@ -307,7 +357,7 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=request.user,
             accion='actualizar',
             modulo='Planes anuales',
@@ -318,9 +368,47 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(plan_anual)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'], url_path='completar-vigencia')
+    def completar_vigencia(self, request, pk=None):
+        """Etapa 1 (auditoría M9): completado único de fechas de un Plan
+        anual antiguo En uso. Ver CompletarVigenciaPlanAnualSerializer."""
+        from django.db import transaction
+
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+
+        self.get_object()
+
+        # La fila se bloquea y se relee dentro de la transacción: dos
+        # solicitudes simultáneas no pueden completar las fechas dos veces.
+        with transaction.atomic():
+            plan_anual = (
+                PlanAnual.objects
+                .select_for_update()
+                .select_related('plan_estrategico')
+                .get(pk=pk)
+            )
+            serializer = CompletarVigenciaPlanAnualSerializer(plan_anual, data=request.data)
+            serializer.is_valid(raise_exception=True)
+            plan_anual = serializer.save()
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Planes anuales',
+            descripcion=(
+                f'Completó la vigencia del {plan_anual.nombre} del Plan estratégico '
+                f'{plan_anual.plan_estrategico.titulo}: '
+                f'{plan_anual.fecha_inicio.strftime("%d/%m/%Y")} al '
+                f'{plan_anual.fecha_fin.strftime("%d/%m/%Y")}.'
+            ),
+            request=request,
+        )
+
+        return Response(self.get_serializer(plan_anual).data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'])
     def cerrar(self, request, pk=None):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         plan_anual = self.get_object()
 
@@ -339,12 +427,20 @@ class PlanAnualViewSet(viewsets.ModelViewSet):
         plan_anual.estado = PlanAnual.ESTADO_CERRADO
         plan_anual.save(update_fields=['estado'])
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=request.user,
             accion='actualizar',
             modulo='Planes anuales',
             descripcion=f'Cerró el {plan_anual.nombre}.',
             request=request,
+        )
+
+        # Etapa 5: las solicitudes de días adicionales pendientes de sus KPI
+        # quedan Sin efecto en esta misma operación (y transacción).
+        from apps.indicadores.services import dejar_sin_efecto_por_cierre_de_plan
+
+        dejar_sin_efecto_por_cierre_de_plan(
+            f'se cerró el {plan_anual.nombre}.', request.user, request, plan_anual=plan_anual,
         )
 
         serializer = self.get_serializer(plan_anual)
@@ -373,11 +469,11 @@ class ObjetivoEspecificoViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
 
         objetivo = serializer.save(creado_por=self.request.user)
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='crear',
             modulo='Objetivos específicos',
@@ -400,11 +496,11 @@ class ObjetivoEspecificoViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         objetivo = serializer.save()
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
             modulo='Objetivos específicos',
@@ -430,11 +526,11 @@ class PonderacionAnualObjetivoGeneralViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
     def perform_create(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         ponderacion = serializer.save(creado_por=self.request.user)
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='crear',
             modulo='Ponderaciones anuales',
@@ -446,11 +542,11 @@ class PonderacionAnualObjetivoGeneralViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         ponderacion = serializer.save()
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
             modulo='Ponderaciones anuales',

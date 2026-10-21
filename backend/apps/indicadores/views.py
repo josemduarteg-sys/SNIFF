@@ -1,6 +1,7 @@
 import os
 
 from django.db import transaction
+from django.db.models.functions import Coalesce
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -9,13 +10,22 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
+# Etapa 1 (auditoría M3): sin DELETE físico en este módulo. Mediciones,
+# alertas y rangos son historial (borrarlos cambia resultados, promedios o
+# deja huecos de periodo que el cálculo secuencial no vuelve a pedir); los
+# catálogos con campo `estado` se desactivan por PATCH. Un DELETE responde
+# 405 en lugar de borrar o fallar con 500 por las FK PROTECT.
+from apps.auditoria.mixins import BitacoraCatalogoMixin
+from apps.estrategia.views import METODOS_SIN_BORRADO
 from apps.usuarios.permissions import (
     PermisoCatalogoSoloAdmin,
     PermisoIndicadorKPI,
     PermisoMedicion,
     PermisoPlaneacion,
+    PermisoSolicitudAmpliacion,
 )
 from .models import (
+    SolicitudAmpliacionPlazo,
     ConfiguracionMediciones,
     Frecuencia,
     IndicadorKPI,
@@ -38,17 +48,30 @@ from .serializers import (
     PeriodoMedicionSerializer,
     MedicionSerializer,
     AlertaSerializer,
+    SolicitudAmpliacionPlazoSerializer,
 )
 from .services import (
+    MODULO_AMPLIACIONES,
+    actualizar_alertas_por_ampliacion,
     crear_rangos_provisionales,
+    dejar_sin_efecto_solicitudes_pendientes,
+    describir_solicitud_ampliacion,
+    enlace_solicitud_ampliacion,
+    evaluar_solicitud_ampliacion,
+    notificar_sin_duplicar,
     obtener_info_siguiente_periodo,
 )
 
 
-class FrecuenciaViewSet(viewsets.ModelViewSet):
+class FrecuenciaViewSet(BitacoraCatalogoMixin, viewsets.ModelViewSet):
     queryset = Frecuencia.objects.filter(estado=True).order_by('nombre')
     serializer_class = FrecuenciaSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
+    http_method_names = METODOS_SIN_BORRADO
+    modulo_bitacora = 'Frecuencias'
+
+    def describir_para_bitacora(self, frecuencia):
+        return f'la frecuencia {frecuencia.nombre}'
 
 
 class ConfiguracionMedicionesView(APIView):
@@ -65,12 +88,29 @@ class ConfiguracionMedicionesView(APIView):
         return Response(serializer.data)
 
     def patch(self, request):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+
         configuracion = ConfiguracionMediciones.obtener()
+        plazo_anterior = configuracion.dias_plazo_registro
         serializer = ConfiguracionMedicionesSerializer(
             configuracion, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        configuracion = serializer.save()
+
+        # Etapa 4 (M7): el plazo afecta las fechas límite de todos los KPI.
+        if configuracion.dias_plazo_registro != plazo_anterior:
+            registrar_bitacora_obligatoria(
+                usuario=request.user,
+                accion='actualizar',
+                modulo='Configuración de mediciones',
+                descripcion=(
+                    f'Cambió el plazo de registro de mediciones de {plazo_anterior} '
+                    f'a {configuracion.dias_plazo_registro} día(s) calendario.'
+                ),
+                request=request,
+            )
+
         return Response(serializer.data)
 
 
@@ -82,12 +122,52 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         'objetivo_especifico__objetivo_general',
         'frecuencia',
         'autorizado_por',
+        'creado_por',
     ).all()
     serializer_class = IndicadorKPISerializer
     permission_classes = [PermisoIndicadorKPI]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        if self.action not in ('list', 'retrieve'):
+            return queryset
+
+        # Etapa 6 (M8): datos que el serializer pedía KPI por KPI (promedio,
+        # conteos, rangos, siguiente periodo, ampliaciones, responsables) se
+        # cargan en pocas consultas para todo el listado. Solo en lectura:
+        # las acciones que modifican siguen consultando en el momento.
+        from django.db.models import Count, IntegerField, OuterRef, Prefetch, Subquery
+        from apps.usuarios.permissions import ROL_EJECUTOR_OPERATIVO
+
+        responsables = ResponsableKPI.objects.filter(
+            indicador=OuterRef('pk'),
+            estado=True,
+            usuario__is_active=True,
+            usuario__estado=True,
+            usuario__rol__nombre__iexact=ROL_EJECUTOR_OPERATIVO,
+        ).order_by().values('indicador').annotate(total=Count('usuario', distinct=True)).values('total')
+
+        return queryset.annotate(
+            cantidad_responsables_vigentes=Coalesce(Subquery(responsables, output_field=IntegerField()), 0),
+        ).prefetch_related(
+            Prefetch('mediciones', queryset=Medicion.objects.select_related('periodo')),
+            Prefetch('rangos', queryset=RangoKPI.objects.select_related('estado_cumplimiento')),
+            Prefetch(
+                'solicitudes_ampliacion',
+                queryset=SolicitudAmpliacionPlazo.objects.filter(
+                    estado__in=[SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA, SolicitudAmpliacionPlazo.ESTADO_PENDIENTE],
+                ).select_related('periodo'),
+            ),
+        )
+
+    def get_serializer_context(self):
+        contexto = super().get_serializer_context()
+        contexto['listado_kpi'] = self.action == 'list'
+        return contexto
+
     def perform_create(self, serializer):
-        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_seguro
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
         from rest_framework.exceptions import ValidationError
 
         # Transaccional: el KPI y sus tres RangoKPI provisionales se crean
@@ -105,7 +185,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
                 )
             })
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='crear',
             modulo='Indicadores KPI',
@@ -125,11 +205,11 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         indicador = serializer.save()
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
             modulo='Indicadores KPI',
@@ -139,7 +219,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def autorizar(self, request, pk=None):
-        from apps.auditoria.services import crear_notificacion, registrar_bitacora_seguro
+        from apps.auditoria.services import crear_notificacion, registrar_bitacora_obligatoria
 
         indicador = self.get_object()
 
@@ -152,6 +232,14 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         if indicador.estado == 'autorizado':
             return Response(
                 {'detail': 'El KPI ya se encuentra autorizado.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Etapa 1 (auditoría M2): Anulado es terminal. Solo Borrador ->
+        # Autorizado; antes un KPI anulado podía reautorizarse por API.
+        if indicador.estado != 'borrador':
+            return Response(
+                {'detail': 'Un KPI anulado no puede volver a autorizarse.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -172,7 +260,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             ]
         )
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=request.user,
             accion='actualizar',
             modulo='Indicadores KPI',
@@ -194,7 +282,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def anular(self, request, pk=None):
-        from apps.auditoria.services import crear_notificacion, registrar_bitacora_seguro
+        from apps.auditoria.services import crear_notificacion, registrar_bitacora_obligatoria
 
         indicador = self.get_object()
 
@@ -204,15 +292,27 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Etapa 1 (M2): evita re-anular (duplicaba bitácora y notificación).
+        if indicador.estado == 'anulado':
+            return Response(
+                {'detail': 'El KPI ya se encuentra anulado.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         indicador.estado = 'anulado'
         indicador.save(update_fields=['estado'])
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=request.user,
             accion='eliminar',
             modulo='Indicadores KPI',
             descripcion=f'Anuló el KPI {indicador.nombre}.',
             request=request,
+        )
+
+        # Etapa 5: un KPI anulado no admite ampliaciones de plazo.
+        dejar_sin_efecto_solicitudes_pendientes(
+            indicador, 'el KPI fue anulado.', usuario=request.user, request=request,
         )
 
         if indicador.creado_por_id and indicador.creado_por_id != request.user.id:
@@ -227,42 +327,162 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(indicador)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-class MetaKPIViewSet(viewsets.ModelViewSet):
+class MetaKPIViewSet(BitacoraCatalogoMixin, viewsets.ModelViewSet):
     queryset = MetaKPI.objects.select_related(
         'indicador',
     ).all()
     serializer_class = MetaKPISerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
+    http_method_names = METODOS_SIN_BORRADO
+    modulo_bitacora = 'Metas KPI'
+
+    def describir_para_bitacora(self, meta):
+        return f'la meta #{meta.id} del KPI {meta.indicador.nombre}'
 
 
 class ResponsableKPIViewSet(viewsets.ModelViewSet):
+    """Etapa 4 (auditoría M6): asignaciones de responsables. Las gestiona el
+    Administrador de planificación (PermisoPlaneacion: los demás roles solo
+    consultan). Filtros: ?indicador=<id>, ?estado=true|false."""
+
     queryset = ResponsableKPI.objects.select_related(
         'indicador',
         'usuario',
-    ).all()
+    ).order_by('usuario__username')
     serializer_class = ResponsableKPISerializer
     permission_classes = [PermisoPlaneacion]
+    http_method_names = METODOS_SIN_BORRADO
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        indicador = self.request.query_params.get('indicador')
+        estado = self.request.query_params.get('estado')
+
+        if indicador and indicador.isdigit():
+            queryset = queryset.filter(indicador_id=int(indicador))
+
+        if estado in ('true', 'false'):
+            queryset = queryset.filter(estado=(estado == 'true'))
+
+        return queryset
+
+    def _bitacora(self, accion, verbo, responsable):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+
+        registrar_bitacora_obligatoria(
+            usuario=self.request.user,
+            accion=accion,
+            modulo='Responsables KPI',
+            descripcion=(
+                f'{verbo} a {responsable.usuario.username} como responsable del KPI '
+                f'{responsable.indicador.nombre}.'
+            ),
+            request=self.request,
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        indicador = serializer.validated_data['indicador']
+        usuario = serializer.validated_data['usuario']
+        existente = ResponsableKPI.objects.select_for_update().filter(
+            indicador=indicador, usuario=usuario,
+        ).first()
+
+        if existente and existente.estado:
+            return Response(
+                {'detail': f'{usuario.username} ya es responsable de este KPI.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if existente:
+            # Reactivación: misma fila (conserva su fecha de asignación
+            # original); la bitácora deja la fecha de reactivación.
+            existente.estado = True
+            existente.save(update_fields=['estado'])
+            self._bitacora('actualizar', 'Reactivó', existente)
+            return Response(self.get_serializer(existente).data, status=status.HTTP_200_OK)
+
+        from django.db import IntegrityError
+
+        try:
+            with transaction.atomic():
+                responsable = serializer.save(estado=True)
+        except IntegrityError:
+            # Otra solicitud simultánea creó el mismo par (indicador, usuario).
+            return Response(
+                {'detail': f'{usuario.username} ya es responsable de este KPI.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        self._bitacora('crear', 'Asignó', responsable)
+        return Response(self.get_serializer(responsable).data, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        estado_anterior = serializer.instance.estado
+        responsable = serializer.save()
+
+        if estado_anterior and not responsable.estado:
+            self._bitacora('eliminar', 'Desactivó', responsable)
+        elif not estado_anterior and responsable.estado:
+            self._bitacora('actualizar', 'Reactivó', responsable)
+
+    @action(detail=False, methods=['get'])
+    def candidatos(self, request):
+        """Ejecutores operativos activos que pueden asignarse. Solo para
+        quien gestiona las asignaciones."""
+        from apps.usuarios.models import Usuario
+        from apps.usuarios.permissions import ROL_EJECUTOR_OPERATIVO, es_administrador_planificacion
+
+        if not es_administrador_planificacion(request.user):
+            return Response(
+                {'detail': 'No tenés permisos para gestionar responsables de KPI.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        usuarios = Usuario.objects.filter(
+            is_active=True, estado=True, rol__nombre__iexact=ROL_EJECUTOR_OPERATIVO,
+        ).order_by('username')
+
+        return Response([
+            {'id': u.id, 'username': u.username, 'nombre': u.get_full_name() or u.username}
+            for u in usuarios
+        ])
 
 
-class EstadoCumplimientoViewSet(viewsets.ModelViewSet):
+class EstadoCumplimientoViewSet(BitacoraCatalogoMixin, viewsets.ModelViewSet):
     queryset = EstadoCumplimiento.objects.filter(estado=True).order_by('nombre')
     serializer_class = EstadoCumplimientoSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
+    http_method_names = METODOS_SIN_BORRADO
+    modulo_bitacora = 'Estados de cumplimiento'
+
+    def describir_para_bitacora(self, estado):
+        return f'el estado de cumplimiento {estado.nombre}'
 
 
-class RangoKPIViewSet(viewsets.ModelViewSet):
+class RangoKPIViewSet(BitacoraCatalogoMixin, viewsets.ModelViewSet):
     queryset = RangoKPI.objects.select_related(
         'indicador',
         'estado_cumplimiento',
     ).all()
     serializer_class = RangoKPISerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
+    http_method_names = METODOS_SIN_BORRADO
+    modulo_bitacora = 'Rangos KPI'
+
+    def describir_para_bitacora(self, rango):
+        return (
+            f'el rango "{rango.estado_cumplimiento.nombre}" del KPI {rango.indicador.nombre}'
+        )
 
 
 class PeriodoMedicionViewSet(viewsets.ModelViewSet):
     queryset = PeriodoMedicion.objects.all()
     serializer_class = PeriodoMedicionSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
+    http_method_names = METODOS_SIN_BORRADO
 
 
 class MedicionViewSet(viewsets.ModelViewSet):
@@ -281,7 +501,35 @@ class MedicionViewSet(viewsets.ModelViewSet):
     ).all()
     serializer_class = MedicionSerializer
     permission_classes = [PermisoMedicion]
+    http_method_names = METODOS_SIN_BORRADO
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        from django.db.models import OuterRef, Subquery
+
+        # Etapa 5/6: fecha extraordinaria de la ampliación autorizada del
+        # periodo (si existe), para la oportunidad de registro sin una
+        # consulta por cada medición del listado.
+        ampliacion = SolicitudAmpliacionPlazo.objects.filter(
+            indicador=OuterRef('indicador_id'),
+            periodo=OuterRef('periodo_id'),
+            estado=SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA,
+        ).values('fecha_limite_extraordinaria')[:1]
+
+        queryset = super().get_queryset().annotate(fecha_extraordinaria_ampliacion=Subquery(ampliacion))
+
+        if self.action in ('list', 'retrieve'):
+            # Etapa 6 (M8): el promedio y el estado acumulados "hasta esta
+            # medición" se calculan sobre las mediciones y los rangos del KPI
+            # ya cargados, en lugar de dos consultas por cada medición.
+            from django.db.models import Prefetch
+
+            queryset = queryset.prefetch_related(
+                Prefetch('indicador__mediciones', queryset=Medicion.objects.select_related('periodo')),
+                Prefetch('indicador__rangos', queryset=RangoKPI.objects.select_related('estado_cumplimiento')),
+            )
+
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(registrado_por=self.request.user)
@@ -314,7 +562,11 @@ class MedicionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        info = obtener_info_siguiente_periodo(indicador)
+        # Etapa 5: la misma evaluación informa la fecha límite efectiva, la
+        # ordinaria, el estado de la ampliación y si hoy puede pedirse una.
+        info, motivo_ampliacion = evaluar_solicitud_ampliacion(indicador)
+        autorizada = info['ampliacion_autorizada']
+        pendiente = info['ampliacion_pendiente']
 
         return Response({
             'disponible': info['disponible'],
@@ -323,6 +575,24 @@ class MedicionViewSet(viewsets.ModelViewSet):
             'fecha_inicio_periodo': info['fecha_inicio_periodo'],
             'fecha_cierre': info['fecha_cierre'],
             'fecha_limite_registro': info['fecha_limite_registro'],
+            'fecha_limite_ordinaria': info['fecha_limite_ordinaria'],
+            'fecha_limite_extraordinaria': (
+                info['fecha_limite_registro']
+                if info['fecha_limite_registro'] != info['fecha_limite_ordinaria']
+                else None
+            ),
+            'ampliacion_autorizada': autorizada and {
+                'id': autorizada.id,
+                'dias_autorizados': autorizada.dias_autorizados,
+                'fecha_limite_extraordinaria': autorizada.fecha_limite_extraordinaria,
+            },
+            'ampliacion_pendiente': pendiente and {
+                'id': pendiente.id,
+                'dias_solicitados': pendiente.dias_solicitados,
+                'fecha_limite_maxima': pendiente.fecha_limite_maxima,
+            },
+            'puede_solicitar_ampliacion': not motivo_ampliacion,
+            'motivo_ampliacion': motivo_ampliacion,
             'motivo': info['motivo'],
         })
 
@@ -358,7 +628,16 @@ class MedicionViewSet(viewsets.ModelViewSet):
         )
 
 
-class AlertaViewSet(viewsets.ModelViewSet):
+class AlertaViewSet(viewsets.ReadOnlyModelViewSet):
+    """Etapa 4 (auditoría M6/M7): solo consulta y las dos acciones de
+    revisión. Antes era un ModelViewSet: por PUT/PATCH se podían cambiar el
+    tipo, el mensaje, el KPI o el estado de una alerta sin dejar rastro.
+    Las alertas las crea únicamente el sistema.
+
+    Filtros opcionales: ?estado_alerta=pendiente y ?vigentes=1 (excluye
+    alertas de KPI anulados o de planes Cerrados: siguen guardadas como
+    historial, pero ya no requieren atención)."""
+
     queryset = Alerta.objects.select_related(
         'indicador',
         'medicion',
@@ -367,23 +646,385 @@ class AlertaViewSet(viewsets.ModelViewSet):
     serializer_class = AlertaSerializer
     permission_classes = [PermisoCatalogoSoloAdmin]
 
+    def get_queryset(self):
+        from .services import filtrar_alertas_vigentes
+
+        queryset = super().get_queryset()
+        estado_alerta = self.request.query_params.get('estado_alerta')
+
+        if estado_alerta:
+            queryset = queryset.filter(estado_alerta=estado_alerta)
+
+        if self.request.query_params.get('vigentes') == '1':
+            queryset = filtrar_alertas_vigentes(queryset)
+
+        return queryset
+
     @action(detail=True, methods=['post'], url_path='marcar-revisada')
     def marcar_revisada(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
         from .services import marcar_alerta_revisada
 
         alerta = self.get_object()
+        estado_anterior = alerta.estado_alerta
         marcar_alerta_revisada(alerta, usuario=request.user)
+
+        if alerta.estado_alerta != estado_anterior:
+            registrar_bitacora_obligatoria(
+                usuario=request.user,
+                accion='actualizar',
+                modulo='Alertas',
+                descripcion=(
+                    f'Marcó como revisada la alerta #{alerta.id} ({alerta.tipo_alerta}) '
+                    f'del KPI {alerta.indicador.nombre}.'
+                ),
+                request=request,
+            )
 
         serializer = self.get_serializer(alerta)
         return Response(serializer.data)
 
     @action(detail=False, methods=['post'], url_path='marcar-todas-revisadas')
     def marcar_todas_revisadas(self, request):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
         from .services import marcar_todas_alertas_revisadas
 
-        actualizadas = marcar_todas_alertas_revisadas(usuario=request.user)
+        # Etapa 4: solo las vigentes, que son las que el usuario ve en el
+        # centro de notificaciones; las de KPI anulados o planes Cerrados no
+        # se dan por revisadas sin que nadie las haya visto.
+        actualizadas = marcar_todas_alertas_revisadas(usuario=request.user, solo_vigentes=True)
+
+        if actualizadas:
+            registrar_bitacora_obligatoria(
+                usuario=request.user,
+                accion='actualizar',
+                modulo='Alertas',
+                descripcion=f'Marcó como revisadas {actualizadas} alerta(s) pendientes.',
+                request=request,
+            )
 
         return Response({
             'detail': f'{actualizadas} alerta(s) marcada(s) como revisada(s).'
         })
 
+
+
+def consulta_bloqueo_solicitud_ampliacion():
+    """Bloquea SOLO la fila de la solicitud (FOR UPDATE OF la tabla propia).
+    PostgreSQL no admite FOR UPDATE sobre el lado nulable de un LEFT OUTER
+    JOIN, y revisado_por es opcional: se une únicamente lo obligatorio
+    (INNER JOIN) y el revisor se carga después, sin bloqueo."""
+    return SolicitudAmpliacionPlazo.objects.select_for_update(of=('self',)).select_related(
+        'indicador', 'periodo', 'solicitante',
+    )
+
+
+class SolicitudAmpliacionPlazoViewSet(viewsets.ModelViewSet):
+    """Etapa 5: solicitudes de días adicionales para registrar mediciones.
+    Sin edición ni borrado: se crean y luego solo cambian de estado por las
+    acciones autorizar / rechazar / retirar (o por la tarea diaria, que las
+    deja Vencidas o Sin efecto). El Ejecutor operativo ve solo las suyas.
+    Filtros: ?estado=<estado>, ?indicador=<id>."""
+
+    queryset = SolicitudAmpliacionPlazo.objects.select_related(
+        'indicador',
+        'periodo',
+        'solicitante',
+        'revisado_por',
+    ).all()
+    serializer_class = SolicitudAmpliacionPlazoSerializer
+    permission_classes = [PermisoSolicitudAmpliacion]
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def get_queryset(self):
+        from apps.usuarios.permissions import es_administrador_planificacion
+
+        queryset = super().get_queryset()
+
+        if not es_administrador_planificacion(self.request.user):
+            queryset = queryset.filter(solicitante=self.request.user)
+
+        estado = self.request.query_params.get('estado')
+        indicador = self.request.query_params.get('indicador')
+
+        if estado:
+            queryset = queryset.filter(estado=estado)
+
+        if indicador and indicador.isdigit():
+            queryset = queryset.filter(indicador_id=int(indicador))
+
+        return queryset
+
+    @staticmethod
+    def _bloquear_indicador(indicador_id):
+        """Serializa las operaciones sobre las solicitudes de un mismo KPI
+        (crear, autorizar) para que dos peticiones simultáneas no evalúen
+        el mismo estado a la vez."""
+        return IndicadorKPI.objects.select_for_update().filter(pk=indicador_id).first()
+
+    def _bloquear_solicitud(self):
+        solicitud = self.get_object()
+        self._bloquear_indicador(solicitud.indicador_id)
+
+        return consulta_bloqueo_solicitud_ampliacion().get(pk=solicitud.pk)
+
+    @staticmethod
+    def _error(detalle, codigo=status.HTTP_400_BAD_REQUEST):
+        return Response({'detail': detalle}, status=codigo)
+
+    @staticmethod
+    def _validar_resoluble(solicitud):
+        """Mensaje de error si la solicitud ya no puede resolverse, o '' si
+        sigue pendiente y dentro de su plazo máximo."""
+        if solicitud.estado != SolicitudAmpliacionPlazo.ESTADO_PENDIENTE:
+            return f'La solicitud ya no está pendiente: su estado es {solicitud.get_estado_display()}.'
+
+        if solicitud.indicador.esta_bloqueado():
+            # Defensa adicional: al Cerrar el plan la pendiente ya queda Sin
+            # efecto; ninguna resolución (autorizar, rechazar, retirar) se
+            # admite sobre un plan Cerrado.
+            return (
+                'El Plan anual o el Plan estratégico de este KPI están Cerrados: '
+                'la solicitud ya no puede resolverse.'
+            )
+
+        from .services import hoy
+
+        if hoy() > solicitud.fecha_limite_maxima:
+            return (
+                'Venció el plazo máximo para resolver esta solicitud '
+                f'({solicitud.fecha_limite_maxima.strftime("%d/%m/%Y")}). '
+                'El sistema la marcará como Vencida.'
+            )
+
+        return ''
+
+    def create(self, request, *args, **kwargs):
+        from django.db import IntegrityError
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
+
+        indicador_id = str(request.data.get('indicador', ''))
+
+        if indicador_id.isdigit():
+            self._bloquear_indicador(int(indicador_id))
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            with transaction.atomic():
+                solicitud = serializer.save(solicitante=request.user)
+        except IntegrityError:
+            return self._error('Ya existe una solicitud pendiente de días adicionales para este periodo.')
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='crear',
+            modulo=MODULO_AMPLIACIONES,
+            descripcion=(
+                f'Solicitó {solicitud.dias_solicitados} día(s) adicional(es) para el KPI '
+                f'{solicitud.indicador.nombre} (periodo {solicitud.periodo.descripcion}, plazo '
+                f'ordinario hasta el {solicitud.fecha_limite_ordinaria.strftime("%d/%m/%Y")}). '
+                f'Motivo: {solicitud.motivo}'
+            ),
+            request=request,
+        )
+
+        notificar_usuarios_gestion(
+            tipo='ampliacion_solicitada',
+            titulo='Nueva solicitud de días adicionales',
+            mensaje=(
+                f'{request.user.username} pidió {solicitud.dias_solicitados} día(s) adicional(es) '
+                f'para registrar el KPI "{solicitud.indicador.nombre}" '
+                f'(periodo {solicitud.periodo.descripcion}).'
+            ),
+            enlace=enlace_solicitud_ampliacion(solicitud),
+            excluir_usuario=request.user,
+        )
+
+        return Response(self.get_serializer(solicitud).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def autorizar(self, request, pk=None):
+        from datetime import timedelta
+
+        from django.db import IntegrityError
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+        from .services import hoy
+
+        solicitud = self._bloquear_solicitud()
+        error = self._validar_resoluble(solicitud)
+
+        if error:
+            return self._error(error)
+
+        indicador = solicitud.indicador
+
+        if indicador.estado != 'autorizado':
+            return self._error('El KPI ya no está autorizado: la solicitud solo puede rechazarse.')
+
+        if Medicion.objects.filter(indicador=indicador, periodo=solicitud.periodo).exists():
+            return self._error('El periodo ya tiene una medición: no corresponde ampliar su plazo.')
+
+        if SolicitudAmpliacionPlazo.objects.filter(
+            indicador=indicador, periodo=solicitud.periodo, estado=SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA,
+        ).exists():
+            return self._error('Este periodo ya tiene una ampliación autorizada.')
+
+        dias = request.data.get('dias_autorizados', solicitud.dias_solicitados)
+
+        try:
+            dias = int(dias)
+        except (TypeError, ValueError):
+            return self._error('Indicá un número entero de días a autorizar.')
+
+        if dias < 1:
+            return self._error('Autorizá al menos 1 día.')
+
+        if dias > solicitud.dias_solicitados:
+            return self._error(
+                f'No se pueden autorizar más días de los solicitados ({solicitud.dias_solicitados}).'
+            )
+
+        fecha_extraordinaria = solicitud.fecha_limite_ordinaria + timedelta(days=dias)
+        fecha_hoy = hoy()
+
+        if fecha_extraordinaria < fecha_hoy:
+            # Regla 8: nunca se autoriza un plazo que ya venció.
+            minimo = (fecha_hoy - solicitud.fecha_limite_ordinaria).days
+            return self._error(
+                f'Con {dias} día(s) el plazo terminaría el {fecha_extraordinaria.strftime("%d/%m/%Y")}, '
+                f'que ya pasó. Autorizá al menos {minimo} día(s).'
+            )
+
+        solicitud.estado = SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA
+        solicitud.dias_autorizados = dias
+        solicitud.fecha_limite_extraordinaria = fecha_extraordinaria
+        solicitud.revisado_por = request.user
+        solicitud.fecha_resolucion = timezone.now()
+        solicitud.observacion_revision = (request.data.get('observacion') or '').strip()
+
+        try:
+            with transaction.atomic():
+                solicitud.save(update_fields=[
+                    'estado', 'dias_autorizados', 'fecha_limite_extraordinaria',
+                    'revisado_por', 'fecha_resolucion', 'observacion_revision',
+                ])
+        except IntegrityError:
+            return self._error('Este periodo ya tiene una ampliación autorizada.')
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='actualizar',
+            modulo=MODULO_AMPLIACIONES,
+            descripcion=(
+                f'Autorizó {dias} de {solicitud.dias_solicitados} día(s) solicitado(s) en '
+                f'{describir_solicitud_ampliacion(solicitud)}, pedida por '
+                f'{solicitud.solicitante.username}. Nuevo plazo de registro: '
+                f'{fecha_extraordinaria.strftime("%d/%m/%Y")}.'
+            ),
+            request=request,
+        )
+
+        actualizar_alertas_por_ampliacion(solicitud, request.user, fecha_referencia=fecha_hoy)
+
+        notificar_sin_duplicar(
+            solicitud.solicitante,
+            tipo='ampliacion_autorizada',
+            titulo='Días adicionales autorizados',
+            mensaje=(
+                f'Se autorizaron {dias} día(s) adicional(es) para el KPI "{indicador.nombre}" '
+                f'(periodo {solicitud.periodo.descripcion}). Podés registrar la medición hasta el '
+                f'{fecha_extraordinaria.strftime("%d/%m/%Y")}.'
+            ),
+            enlace=enlace_solicitud_ampliacion(solicitud),
+        )
+
+        return Response(self.get_serializer(solicitud).data)
+
+    @action(detail=True, methods=['post'])
+    def rechazar(self, request, pk=None):
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+
+        solicitud = self._bloquear_solicitud()
+        error = self._validar_resoluble(solicitud)
+
+        if error:
+            return self._error(error)
+
+        observacion = (request.data.get('observacion') or '').strip()
+
+        if not observacion:
+            return Response(
+                {'observacion': 'Indicá el motivo del rechazo.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        solicitud.estado = SolicitudAmpliacionPlazo.ESTADO_RECHAZADA
+        solicitud.revisado_por = request.user
+        solicitud.fecha_resolucion = timezone.now()
+        solicitud.observacion_revision = observacion
+        solicitud.save(update_fields=['estado', 'revisado_por', 'fecha_resolucion', 'observacion_revision'])
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='actualizar',
+            modulo=MODULO_AMPLIACIONES,
+            descripcion=(
+                f'Rechazó {describir_solicitud_ampliacion(solicitud)}, pedida por '
+                f'{solicitud.solicitante.username}. Motivo: {observacion}'
+            ),
+            request=request,
+        )
+
+        notificar_sin_duplicar(
+            solicitud.solicitante,
+            tipo='ampliacion_rechazada',
+            titulo='Solicitud de días adicionales rechazada',
+            mensaje=(
+                f'Se rechazó tu solicitud de días adicionales para el KPI '
+                f'"{solicitud.indicador.nombre}" (periodo {solicitud.periodo.descripcion}). '
+                f'Motivo: {observacion}'
+            ),
+            enlace=enlace_solicitud_ampliacion(solicitud),
+        )
+
+        return Response(self.get_serializer(solicitud).data)
+
+    @action(detail=True, methods=['post'])
+    def retirar(self, request, pk=None):
+        from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
+
+        solicitud = self._bloquear_solicitud()
+
+        if solicitud.solicitante_id != request.user.id:
+            return self._error('Solo quien hizo la solicitud puede retirarla.', status.HTTP_403_FORBIDDEN)
+
+        error = self._validar_resoluble(solicitud)
+
+        if error:
+            return self._error(error)
+
+        solicitud.estado = SolicitudAmpliacionPlazo.ESTADO_RETIRADA
+        solicitud.fecha_resolucion = timezone.now()
+        solicitud.save(update_fields=['estado', 'fecha_resolucion'])
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='actualizar',
+            modulo=MODULO_AMPLIACIONES,
+            descripcion=f'Retiró {describir_solicitud_ampliacion(solicitud)}.',
+            request=request,
+        )
+
+        notificar_usuarios_gestion(
+            tipo='ampliacion_retirada',
+            titulo='Solicitud de días adicionales retirada',
+            mensaje=(
+                f'{request.user.username} retiró su solicitud de días adicionales para el KPI '
+                f'"{solicitud.indicador.nombre}" (periodo {solicitud.periodo.descripcion}).'
+            ),
+            enlace=enlace_solicitud_ampliacion(solicitud),
+        )
+
+        return Response(self.get_serializer(solicitud).data)

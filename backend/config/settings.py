@@ -81,6 +81,10 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD'),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '5432'),
+        # Etapa 4 (auditoría M7): cada petición es una sola transacción. Si
+        # algo falla después de guardar (p. ej. la bitácora), se revierte
+        # todo: no quedan operaciones a medias ni sin registro de auditoría.
+        'ATOMIC_REQUESTS': True,
     }
 }
 
@@ -142,12 +146,41 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'EXCEPTION_HANDLER': 'config.exception_handler.manejador_excepciones',
+    # Etapa 2 (B2): cantidad de proxies inversos de confianza delante de
+    # Django. 0 = se usa REMOTE_ADDR y se ignora X-Forwarded-For (que el
+    # cliente puede falsificar). Detrás de Nginx/IIS en producción: 1.
+    'NUM_PROXIES': int(os.getenv('DRF_NUM_PROXIES', '0')),
 }
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'AUTH_HEADER_TYPES': ('Bearer',),
+    # Etapa 2 (A3): login y renovación exigen is_active Y estado vigente.
+    'USER_AUTHENTICATION_RULE': 'apps.usuarios.authentication.usuario_puede_autenticarse',
+}
+
+# Etapa 2 (B2): los contadores de límites de intentos usan esta caché. La
+# caché en memoria es por proceso: sirve para el servidor de desarrollo y
+# para un despliegue de un solo proceso. Con varios workers, cada uno
+# contaría por separado; para producción configurar una caché compartida
+# (ver documentación de despliegue).
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'sniff-default',
+    }
+}
+
+# Etapa 2 (B2): límites de intentos (formato DRF: "<n>/<second|minute|hour|day>").
+# Valores técnicos provisionales, pendientes de confirmación institucional;
+# una variable vacía desactiva ese límite.
+SNIFF_LIMITES_SOLICITUDES = {
+    'login_ip': os.getenv('LIMITE_LOGIN_IP', '20/minute'),
+    'login_usuario': os.getenv('LIMITE_LOGIN_USUARIO', '5/minute'),
+    'restablecimiento_ip': os.getenv('LIMITE_RESTABLECIMIENTO_IP', '10/hour'),
+    'restablecimiento_identificador': os.getenv('LIMITE_RESTABLECIMIENTO_IDENTIFICADOR', '3/hour'),
 }
 
 CORS_ALLOWED_ORIGINS = [

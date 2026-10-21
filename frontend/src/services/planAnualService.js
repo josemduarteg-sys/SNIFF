@@ -38,6 +38,15 @@ export async function ponerEnUsoPlanAnual(id) {
   return response.data
 }
 
+// Etapa 1 (M9): completado único de fechas de un plan anual antiguo En uso.
+export async function completarVigenciaPlanAnual(id, payload) {
+  const response = await api.post(`planes-anuales/${id}/completar-vigencia/`, {
+    fecha_inicio: payload.fecha_inicio,
+    fecha_fin: payload.fecha_fin,
+  })
+  return response.data
+}
+
 export async function cerrarPlanAnual(id) {
   const response = await api.post(`planes-anuales/${id}/cerrar/`)
   return response.data

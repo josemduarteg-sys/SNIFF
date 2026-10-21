@@ -1,24 +1,51 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import { obtenerIndicadoresKpi, obtenerEstadosCumplimiento } from '../services/indicadorService'
 import { obtenerMediciones } from '../services/medicionService'
-import { obtenerAlertasPendientes } from '../services/alertaService'
 import { obtenerPlanesEstrategicos } from '../services/planEstrategicoService'
 import { obtenerPlanesAnuales } from '../services/planAnualService'
 import { formatearNumero } from '../utils/formato'
-import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
+import {
+  aniosDisponibles,
+  descripcionContexto,
+  filtrarContexto,
+  normalizarSeleccion,
+  planesAnualesDe,
+} from '../utils/dashboardFiltros'
+import {
+  alturaConteo,
+  codigoKpi,
+  ejeConteo,
+  ejeEscala,
+  etiquetasDona,
+  evidenciasPorKpi,
+  gruposCumplimiento,
+  nombreCorto,
+  paginar,
+  porcentajeDe,
+  resumenEvidencias,
+  resumenOportunidad,
+  resumenTarjetas,
+} from '../utils/dashboardBloques'
+import { textoObjetivoKpi } from '../utils/objetivos'
+import {
+  SIN_REGISTRO,
+  categoriaKpi,
+  claseColorCumplimiento,
+  textoEstadoCumplimiento,
+  textoOmisiones,
+} from '../utils/cumplimiento'
 
-// Bloque 6: el Dashboard se reconstruye sobre la jerarquía vigente
-// (PlanEstrategico -> PlanAnual -> ObjetivoEspecifico -> IndicadorKPI ->
-// Medicion) y sobre los campos de acumulado ya expuestos desde el Bloque 5
-// (promedio_acumulado, cantidad_mediciones, estado_acumulado_*). No existe
-// endpoint de agregación en el backend: se reutilizan los services ya
-// existentes de cada módulo (mismo patrón que Indicadores/Mediciones), sin
-// volver a golpear endpoints viejos (estrategias/, objetivos/).
+// Dashboard de la entrega, según la referencia visual aprobada por Hernán:
+// año del plan anual arriba a la derecha, cinco tarjetas resumen y cinco
+// bloques (Cumplimiento de KPI, Estado actual de KPI, KPI con evidencias,
+// Oportunidad de registro y Detalle de indicadores KPI). Solo presenta lo
+// que ya calcula el backend: no cambia fórmulas, rangos ni clasificaciones.
 
 const router = useRouter()
+const route = useRoute()
 
 const props = defineProps({
   usuario: {
@@ -33,40 +60,89 @@ const emit = defineEmits(['logout'])
 const cargando = ref(false)
 const error = ref('')
 
-const planesEstrategicos = ref([])
-const planesAnuales = ref([])
-const indicadores = ref([])
-const mediciones = ref([])
-const alertasPendientes = ref([])
+const todosPlanesEstrategicos = ref([])
+const todosPlanesAnuales = ref([])
+const todosIndicadores = ref([])
+const todasMediciones = ref([])
 const estadosCumplimientoCatalogo = ref([])
+
+// ============================================================
+// Contexto: año, plan estratégico y plan anual (en la URL). Las tarjetas y
+// los cinco bloques parten siempre del mismo conjunto filtrado.
+// ============================================================
+
+const seleccion = computed(() => normalizarSeleccion(
+  { planEstrategico: route.query.plan, planAnual: route.query.anual, anio: route.query.anio },
+  todosPlanesEstrategicos.value,
+  todosPlanesAnuales.value,
+))
+
+const contexto = computed(() => filtrarContexto({
+  planesEstrategicos: todosPlanesEstrategicos.value,
+  planesAnuales: todosPlanesAnuales.value,
+  indicadores: todosIndicadores.value,
+  mediciones: todasMediciones.value,
+  alertas: [],
+}, seleccion.value))
+
+const anios = computed(() => aniosDisponibles(todosPlanesAnuales.value))
+const opcionesPlanAnual = computed(() => planesAnualesDe(
+  todosPlanesAnuales.value, seleccion.value.planEstrategico, seleccion.value.anio,
+))
+const hayFiltroPlanes = computed(() => Boolean(seleccion.value.planEstrategico || seleccion.value.planAnual))
+const hayFiltro = computed(() => hayFiltroPlanes.value || Boolean(seleccion.value.anio))
+const textoContexto = computed(() => descripcionContexto(
+  seleccion.value, todosPlanesEstrategicos.value, todosPlanesAnuales.value,
+))
+const sufijoVacio = computed(() => (hayFiltro.value ? ' para los filtros seleccionados' : ''))
+
+function cambiarFiltro({ planEstrategico = null, planAnual = null, anio = null }) {
+  const normalizada = normalizarSeleccion({ planEstrategico, planAnual, anio }, todosPlanesEstrategicos.value, todosPlanesAnuales.value)
+  const query = {}
+
+  if (normalizada.anio) query.anio = String(normalizada.anio)
+  if (normalizada.planEstrategico) query.plan = String(normalizada.planEstrategico)
+  if (normalizada.planAnual) query.anual = String(normalizada.planAnual)
+
+  router.replace({ path: '/dashboard', query })
+}
+
+// Cambiar el año descarta un plan anual de otro año; el plan estratégico se
+// conserva (puede tener un plan anual en el año nuevo).
+function seleccionarAnio(valor) {
+  cambiarFiltro({ anio: valor, planEstrategico: seleccion.value.planEstrategico })
+}
+
+function seleccionarPlanEstrategico(valor) {
+  cambiarFiltro({ anio: seleccion.value.anio, planEstrategico: valor })
+}
+
+function seleccionarPlanAnual(valor) {
+  cambiarFiltro({ anio: seleccion.value.anio, planEstrategico: seleccion.value.planEstrategico, planAnual: valor })
+}
+
+function limpiarFiltro() {
+  cambiarFiltro({})
+}
 
 async function cargarDatosDashboard() {
   cargando.value = true
   error.value = ''
 
   try {
-    const [
-      planesEstrategicosData,
-      planesAnualesData,
-      indicadoresData,
-      medicionesData,
-      alertasData,
-      estadosCumplimientoData,
-    ] = await Promise.all([
+    const [planesEstrategicosData, planesAnualesData, indicadoresData, medicionesData, estadosData] = await Promise.all([
       obtenerPlanesEstrategicos(),
       obtenerPlanesAnuales(),
       obtenerIndicadoresKpi(),
       obtenerMediciones(),
-      obtenerAlertasPendientes(),
       obtenerEstadosCumplimiento(),
     ])
 
-    planesEstrategicos.value = planesEstrategicosData
-    planesAnuales.value = planesAnualesData
-    indicadores.value = indicadoresData
-    mediciones.value = medicionesData
-    alertasPendientes.value = alertasData
-    estadosCumplimientoCatalogo.value = estadosCumplimientoData
+    todosPlanesEstrategicos.value = planesEstrategicosData
+    todosPlanesAnuales.value = planesAnualesData
+    todosIndicadores.value = indicadoresData
+    todasMediciones.value = medicionesData
+    estadosCumplimientoCatalogo.value = estadosData
   } catch (e) {
     error.value = 'No se pudieron cargar los datos del panel de control.'
   } finally {
@@ -74,76 +150,42 @@ async function cargarDatosDashboard() {
   }
 }
 
-// ============================================================
-// Jerarquía / estado base
-// ============================================================
-
-// Punto 32: borrador y anulado nunca representan un KPI en seguimiento.
-// Todas las tarjetas y gráficos gerenciales parten de este único filtro.
+// Borrador y anulado nunca representan un KPI en seguimiento.
 const indicadoresAutorizados = computed(() => {
-  return indicadores.value.filter((kpi) => kpi.estado === 'autorizado')
+  return contexto.value.indicadores.filter((kpi) => kpi.estado === 'autorizado')
 })
 
-const ESTADOS_ATENCION = ['En riesgo', 'Incumplido']
-
-// Punto 31: "en uso" es el único criterio para los contadores gerenciales;
-// un PlanEstrategico Cerrado o Borrador no cuenta acá (documentado también
-// en la entrega final).
-const planesEstrategicosEnUso = computed(() => {
-  return planesEstrategicos.value.filter((plan) => plan.estado === 'en_uso')
+const medicionesAutorizadas = computed(() => {
+  const ids = new Set(indicadoresAutorizados.value.map((kpi) => kpi.id))
+  return contexto.value.mediciones.filter((medicion) => ids.has(medicion.indicador) && medicion.fecha_medicion)
 })
 
 // ============================================================
-// 1) Tarjetas superiores
+// Tarjetas resumen
 // ============================================================
 
-const totalPlanesEstrategicosEnUso = computed(() => planesEstrategicosEnUso.value.length)
+// Conteos en utils/dashboardBloques.js (resumenTarjetas), sobre el contexto.
+const tarjetas = computed(() => {
+  const resumen = resumenTarjetas(contexto.value.planesEstrategicos, contexto.value.planesAnuales, indicadoresAutorizados.value)
 
-const totalPlanesAnualesEnUso = computed(() => {
-  return planesAnuales.value.filter((plan) => plan.estado === 'en_uso').length
-})
-
-const totalKpiAutorizados = computed(() => indicadoresAutorizados.value.length)
-
-const totalKpiFavorables = computed(() => {
-  return indicadoresAutorizados.value.filter((kpi) => {
-    return kpi.cantidad_mediciones > 0 && kpi.estado_acumulado_nombre === 'Favorable'
-  }).length
-})
-
-const totalKpiRequierenAtencion = computed(() => {
-  return indicadoresAutorizados.value.filter((kpi) => {
-    return ESTADOS_ATENCION.includes(kpi.estado_acumulado_nombre)
-  }).length
-})
-
-const totalCierresAutomaticos = computed(() => {
-  return mediciones.value.filter((medicion) => medicion.cierre_automatico).length
+  return [
+    { clave: 'planes', icono: 'capas', clase: 'navy', valor: resumen.planesEnUso, titulo: 'Planes estratégicos en uso', detalle: `De ${resumen.planesRegistrados} planes registrados` },
+    { clave: 'anuales', icono: 'calendario', clase: 'steel', valor: resumen.anualesEnUso, titulo: 'Planes anuales en ejecución', detalle: `De ${resumen.anualesRegistrados} planes anuales registrados` },
+    { clave: 'kpi', icono: 'pulso', clase: 'aqua', valor: resumen.kpiAutorizados, titulo: 'KPI autorizados', detalle: 'En seguimiento activo' },
+    { clave: 'favorables', icono: 'check', clase: 'ok', valor: resumen.kpiFavorables, titulo: 'KPI favorables', detalle: 'Según su promedio acumulado' },
+    { clave: 'atencion', icono: 'alerta', clase: 'danger', valor: resumen.kpiAtencion, titulo: 'Requieren atención', detalle: 'En riesgo o incumplidos' },
+  ]
 })
 
 // ============================================================
-// Colores: SIEMPRE derivados del catálogo real EstadoCumplimiento (fuente
-// única y central para TODO el panel — helper reutilizado por las 3
-// gráficas de estado y sus leyendas). Corrección: antes este mapa se
-// armaba escaneando únicamente los KPI/mediciones ya CARGADOS, así que un
-// estado real (ej. "Incumplido") que ningún KPI tuviera en ese momento
-// nunca entraba al mapa; "color de un Incumplido" entonces caía al
-// fallback neutral (gris) de claseColorCumplimiento(undefined),
-// mostrándose igual que "Sin mediciones" — el bug reportado. Ahora se lee
-// directamente del catálogo /api/estados-cumplimiento/ (ya existente, sin
-// endpoint nuevo), que tiene el color real de cada estado exista o no
-// actualmente un KPI en ese estado. "Sin mediciones" sigue siendo la
-// única categoría sin equivalente backend (no hay EstadoCumplimiento
-// para "todavía no se midió") y usa la clase neutral ya existente.
+// Colores: del catálogo real EstadoCumplimiento (fuente única).
 // ============================================================
 
 const coloresPorNombreEstado = computed(() => {
   const mapa = new Map()
 
   estadosCumplimientoCatalogo.value.forEach((estado) => {
-    if (estado.nombre && estado.color) {
-      mapa.set(estado.nombre, estado.color)
-    }
+    if (estado.nombre && estado.color) mapa.set(estado.nombre, estado.color)
   })
 
   return mapa
@@ -151,336 +193,227 @@ const coloresPorNombreEstado = computed(() => {
 
 function claseEstadoNombre(nombre) {
   if (!nombre || nombre === 'Sin mediciones') return 'neutral'
+  if (nombre === SIN_REGISTRO) return 'omision'
 
   return claseColorCumplimiento(coloresPorNombreEstado.value.get(nombre))
 }
 
-// Punto 26: "Sin mediciones" (cantidad_mediciones === 0) y "Pendiente de
-// actualización" (sí hay mediciones pero ningún RangoKPI aplica) son dos
-// categorías distintas — nunca se tratan como la misma cosa.
-function categorizarKpi(kpi) {
-  if (!kpi.cantidad_mediciones) return 'Sin mediciones'
-
-  return kpi.estado_acumulado_nombre || 'Pendiente de actualización'
-}
-
-// ============================================================
-// 2) Primer gráfico — Estado de KPI por Plan estratégico
-// ============================================================
-
-const CATEGORIAS_ESTADO = ['Favorable', 'En riesgo', 'Incumplido', 'Pendiente de actualización', 'Sin mediciones']
-
-const distribucionPorPlan = computed(() => {
-  return planesEstrategicosEnUso.value
-    .map((plan) => {
-      // Punto 30: relación por FK/id real (IndicadorKPISerializer expone
-      // plan_estrategico como id), nunca por nombre.
-      const kpisDelPlan = indicadoresAutorizados.value.filter((kpi) => {
-        return Number(kpi.plan_estrategico) === Number(plan.id)
-      })
-
-      const conteos = {}
-      CATEGORIAS_ESTADO.forEach((categoria) => { conteos[categoria] = 0 })
-      kpisDelPlan.forEach((kpi) => { conteos[categorizarKpi(kpi)] += 1 })
-
-      const total = kpisDelPlan.length
-
-      const segmentos = CATEGORIAS_ESTADO
-        .filter((categoria) => conteos[categoria] > 0)
-        .map((categoria) => ({
-          nombre: categoria,
-          cantidad: conteos[categoria],
-          porcentaje: total ? (conteos[categoria] / total) * 100 : 0,
-          clase: claseEstadoNombre(categoria),
-        }))
-
-      return {
-        id: plan.id,
-        nombre: plan.titulo,
-        total,
-        segmentos,
-      }
-    })
-    // Punto 8: se muestran TODOS los planes en uso, incluidos los que
-    // tienen 0 KPI o 0 mediciones — nunca se ocultan.
-    .sort((a, b) => a.nombre.localeCompare(b.nombre))
-})
-
-// ============================================================
-// 2.1) Gráfico — Estado individual de KPI
-// ============================================================
-
-// Punto 3 de la tarea: estado SIEMPRE tomado de estado_acumulado_nombre/
-// estado_acumulado_color ya calculados por el backend (RangoKPI real del
-// KPI) — nunca un umbral global inventado acá. Como los KPI pueden tener
-// unidades distintas (%, días, Q...), la barra NO codifica magnitud: cada
-// barra tiene altura fija y el color es el único portador de estado; el
-// resultado real se conserva como etiqueta y en el tooltip (nunca se
-// mezclan unidades en una escala numérica común).
-const estadoIndividualKpis = computed(() => {
-  return indicadoresAutorizados.value
-    .map((kpi) => {
-      const categoria = categorizarKpi(kpi)
-      const valorTexto = formatearValorUnidad(kpi.promedio_acumulado, kpi.unidad_medida)
-
-      return {
-        id: kpi.id,
-        nombre: kpi.nombre,
-        categoria,
-        clase: claseEstadoNombre(categoria),
-        valorTexto,
-        tooltip: `${kpi.nombre} · ${categoria}${kpi.cantidad_mediciones ? ` · ${valorTexto}` : ''}`,
-      }
-    })
-    .sort((a, b) => a.nombre.localeCompare(b.nombre))
-})
-
-// ============================================================
-// 2.2) Gráfico — Evidencias de respaldo por KPI
-// ============================================================
-
-// Punto 4: cuenta ARCHIVOS reales (medicion.tiene_evidencia, que en
-// backend es bool(evidencia) sobre el FileField real) de mediciones de
-// cada KPI. Se excluyen explícitamente cierre_automatico (nunca tienen
-// evidencia por diseño, pero se filtra igual por claridad/defensa) y
-// nunca se inventa "evidencia múltiple": sigue siendo 1 archivo por
-// medición, esto solo las cuenta por KPI.
-const evidenciasPorKpi = computed(() => {
-  const conteos = new Map()
-
-  mediciones.value.forEach((medicion) => {
-    if (medicion.cierre_automatico || !medicion.tiene_evidencia) return
-
-    conteos.set(medicion.indicador, (conteos.get(medicion.indicador) || 0) + 1)
-  })
-
-  const filas = indicadoresAutorizados.value.map((kpi) => ({
-    id: kpi.id,
-    nombre: kpi.nombre,
-    conteo: conteos.get(kpi.id) || 0,
-  }))
-
-  const maximo = Math.max(1, ...filas.map((fila) => fila.conteo))
-
-  return filas
-    .map((fila) => ({ ...fila, porcentaje: (fila.conteo / maximo) * 100 }))
-    .sort((a, b) => b.conteo - a.conteo || a.nombre.localeCompare(b.nombre))
-})
-
-// ============================================================
-// 3) Segundo gráfico — Evolución mensual del estado de KPI
-// ============================================================
-
-// Solo mediciones de KPI actualmente autorizados (punto 32), y solo las
-// que tienen fecha_medicion (siempre la tienen, pero se guarda como
-// defensa ante datos incompletos).
-const medicionesAutorizadas = computed(() => {
-  const idsAutorizados = new Set(indicadoresAutorizados.value.map((kpi) => kpi.id))
-
-  return mediciones.value.filter((medicion) => {
-    return idsAutorizados.has(medicion.indicador) && medicion.fecha_medicion
-  })
-})
-
-// Punto 13: fecha_medicion, NUNCA fecha_registro (una medición de enero
-// registrada en febrero sigue siendo de enero). Las claves 'YYYY-MM' se
-// comparan como texto: el orden alfabético coincide con el cronológico.
-function obtenerClaveMes(fechaMedicion) {
-  return fechaMedicion.slice(0, 7)
-}
-
-const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
-const MESES_LARGOS = [
-  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
-]
-
-function formatearMesCorto(claveMes) {
-  const [anio, mes] = claveMes.split('-')
-  return `${MESES_CORTOS[Number(mes) - 1]} ${anio.slice(2)}`
-}
-
-function formatearMesLargo(claveMes) {
-  const [anio, mes] = claveMes.split('-')
-  return `${MESES_LARGOS[Number(mes) - 1]} ${anio}`
-}
-
-// Punto 14/15: máximo 12 meses, orden cronológico ascendente, solo meses
-// con al menos una medición real (no se inventan meses vacíos en medio).
-const mesesEvolucion = computed(() => {
-  const claves = new Set(medicionesAutorizadas.value.map((medicion) => obtenerClaveMes(medicion.fecha_medicion)))
-
-  return Array.from(claves).sort().slice(-12)
-})
-
-const CATEGORIAS_EVOLUCION = ['Favorable', 'En riesgo', 'Incumplido', 'Pendiente de actualización']
-
-const evolucionPorMes = computed(() => {
-  return mesesEvolucion.value.map((mesClave) => {
-    // Punto 15: denominador = KPI que YA tenían al menos una medición
-    // acumulada hasta ese mes (arrastra el último estado conocido de cada
-    // KPI, no solo los medidos ese mes puntual).
-    const ultimaMedicionPorKpi = new Map()
-
-    medicionesAutorizadas.value.forEach((medicion) => {
-      const claveMedicion = obtenerClaveMes(medicion.fecha_medicion)
-
-      if (claveMedicion > mesClave) return
-
-      const anterior = ultimaMedicionPorKpi.get(medicion.indicador)
-
-      if (!anterior || medicion.fecha_medicion > anterior.fecha_medicion) {
-        ultimaMedicionPorKpi.set(medicion.indicador, medicion)
-      }
-    })
-
-    const conteos = {}
-    CATEGORIAS_EVOLUCION.forEach((categoria) => { conteos[categoria] = 0 })
-
-    ultimaMedicionPorKpi.forEach((medicion) => {
-      const nombre = medicion.estado_acumulado_hasta_medicion_nombre
-
-      if (nombre && Object.prototype.hasOwnProperty.call(conteos, nombre)) {
-        conteos[nombre] += 1
-      }
-    })
-
-    const total = ultimaMedicionPorKpi.size
-
-    const segmentos = CATEGORIAS_EVOLUCION
-      .filter((categoria) => conteos[categoria] > 0)
-      .map((categoria) => ({
-        nombre: categoria,
-        cantidad: conteos[categoria],
-        porcentaje: total ? (conteos[categoria] / total) * 100 : 0,
-        clase: claseEstadoNombre(categoria),
-      }))
-
-    return {
-      clave: mesClave,
-      etiqueta: formatearMesCorto(mesClave),
-      etiquetaCompleta: formatearMesLargo(mesClave),
-      total,
-      segmentos,
-    }
-  })
-})
-
-// ============================================================
-// 4) KPI que requieren atención
-// ============================================================
-
-function ultimaFechaMedicionDeKpi(kpiId) {
-  let ultima = ''
-
-  mediciones.value.forEach((medicion) => {
-    if (medicion.indicador === kpiId && medicion.fecha_medicion > ultima) {
-      ultima = medicion.fecha_medicion
-    }
-  })
-
-  return ultima
-}
-
-// Punto 17: se ordena por SEVERIDAD (Incumplido antes que En riesgo),
-// nunca por promedio_acumulado bruto (unidades distintas no son
-// comparables). Dentro del mismo estado, por actualización más reciente.
-const SEVERIDAD_ATENCION = { Incumplido: 0, 'En riesgo': 1 }
-
-const kpiRequierenAtencionLista = computed(() => {
-  return indicadoresAutorizados.value
-    .filter((kpi) => ESTADOS_ATENCION.includes(kpi.estado_acumulado_nombre))
-    .map((kpi) => ({ ...kpi, _ultimaMedicion: ultimaFechaMedicionDeKpi(kpi.id) }))
-    .sort((a, b) => {
-      const severidadA = SEVERIDAD_ATENCION[a.estado_acumulado_nombre] ?? 99
-      const severidadB = SEVERIDAD_ATENCION[b.estado_acumulado_nombre] ?? 99
-
-      if (severidadA !== severidadB) return severidadA - severidadB
-
-      return b._ultimaMedicion.localeCompare(a._ultimaMedicion)
-    })
-})
-
-// ============================================================
-// 5) Últimas mediciones y alertas pendientes
-// ============================================================
-
-function obtenerFechaOrden(item) {
-  return item?.fecha_registro || item?.fecha_generacion || ''
-}
-
-const ultimasMediciones = computed(() => {
-  return [...mediciones.value]
-    .sort((a, b) => new Date(obtenerFechaOrden(b)) - new Date(obtenerFechaOrden(a)))
-    .slice(0, 5)
-})
-
-const alertasRecientes = computed(() => {
-  return [...alertasPendientes.value]
-    .sort((a, b) => new Date(obtenerFechaOrden(b)) - new Date(obtenerFechaOrden(a)))
-    .slice(0, 5)
-})
-
-function claseAlerta(alerta) {
-  const texto = `${alerta.tipo_alerta || ''} ${alerta.mensaje || ''}`.toLowerCase()
-
-  if (texto.includes('incumplido')) return 'danger'
-  if (texto.includes('riesgo') || texto.includes('vencido')) return 'warning'
-
-  return 'neutral'
-}
-
-function tipoRegistroMedicion(medicion) {
-  return medicion.cierre_automatico ? 'Automático' : 'Manual'
-}
-
-// ============================================================
-// Formato / presentación (siempre vía formato.js, nunca Math.round)
-// ============================================================
+const CATEGORIAS_ESTADO = ['Favorable', 'En riesgo', 'Incumplido', 'Pendiente de actualización', SIN_REGISTRO, 'Sin mediciones']
 
 function formatearValorUnidad(valor, unidad) {
   if (valor === null || valor === undefined) return 'Sin mediciones'
-
   return formatearNumero(valor, { unidad: unidad || '' })
 }
 
-function formatearFecha(fecha) {
-  if (!fecha) return 'No definida'
-
-  const soloFecha = fecha.split('T')[0]
-  const [anio, mes, dia] = soloFecha.split('-')
-
-  if (!anio || !mes || !dia) return fecha
-
-  return `${dia}/${mes}/${anio}`
+// Promedio acumulado real del backend, con la unidad propia del KPI.
+function textoPromedioKpi(kpi) {
+  if (!kpi.cantidad_mediciones && kpi.cantidad_omisiones) return SIN_REGISTRO
+  return formatearValorUnidad(kpi.promedio_acumulado, kpi.unidad_medida)
 }
 
 // ============================================================
-// Navegación (reutiliza el patrón ?resaltar= ya existente en
-// Indicadores/Mediciones/Planes estratégicos — useResaltado)
+// 1) Cumplimiento de KPI — una unidad por vista, 6 KPI por página
 // ============================================================
 
-function irAPlanEstrategico(id) {
-  if (!id) return
-  router.push({ path: '/planes-estrategicos', query: { resaltar: id } })
+// Dentro de una unidad la altura es proporcional al valor real y la línea
+// punteada marca la meta. Unidades distintas nunca comparten escala: se
+// elige la unidad con el selector. El color es el estado del backend.
+const KPI_POR_VISTA = 6
+const unidadElegida = ref('')
+const paginaCumplimiento = ref(1)
+
+const gruposCumplimientoKpi = computed(() => gruposCumplimiento(indicadoresAutorizados.value))
+
+const grupoVisible = computed(() => {
+  const grupos = gruposCumplimientoKpi.value
+  return grupos.find((grupo) => grupo.unidad === unidadElegida.value) || grupos[0] || null
+})
+
+const vistaCumplimiento = computed(() => {
+  const grupo = grupoVisible.value
+
+  if (!grupo) return null
+
+  const pagina = paginar(grupo.barras, paginaCumplimiento.value, KPI_POR_VISTA)
+
+  return {
+    ...pagina,
+    unidad: grupo.unidad,
+    marcas: ejeEscala(grupo.escala).map((valor) => ({
+      valor,
+      texto: formatearNumero(valor, { unidad: '' }),
+      altura: grupo.escala ? (valor / grupo.escala) * 100 : 0,
+    })),
+    barras: pagina.elementos.map((barra) => {
+      const categoria = categoriaKpi(barra.kpi)
+      const valorTexto = textoPromedioKpi(barra.kpi)
+      const metaTexto = formatearValorUnidad(barra.kpi.valor_meta, barra.kpi.unidad_medida)
+
+      return {
+        ...barra,
+        categoria,
+        clase: claseEstadoNombre(categoria),
+        valorTexto,
+        nombre: nombreCorto(barra.kpi.nombre),
+        sinDato: barra.valor === null,
+        tieneOmisiones: Boolean(barra.kpi.cantidad_mediciones && barra.kpi.cantidad_omisiones),
+        tooltip: [
+          `${barra.codigo} · ${barra.kpi.nombre}`,
+          `Estado: ${categoria}`,
+          `Promedio acumulado: ${valorTexto}`,
+          `Meta: ${metaTexto}`,
+          textoOmisiones(barra.kpi.cantidad_omisiones),
+        ].filter(Boolean).join('\n'),
+      }
+    }),
+  }
+})
+
+function elegirUnidad(unidad) {
+  unidadElegida.value = unidad
+  paginaCumplimiento.value = 1
 }
+
+// ============================================================
+// 2) Estado actual de KPI — dona
+// ============================================================
+
+const COLOR_HEX_POR_CLASE = {
+  ok: 'var(--success)',
+  warning: 'var(--orange)',
+  danger: 'var(--danger)',
+  neutral: '#C7D0D9',
+  omision: '#8D99AE',
+}
+
+const distribucionEstadoActual = computed(() => {
+  const conteos = Object.fromEntries(CATEGORIAS_ESTADO.map((categoria) => [categoria, 0]))
+  indicadoresAutorizados.value.forEach((kpi) => { conteos[categoriaKpi(kpi)] += 1 })
+
+  const total = indicadoresAutorizados.value.length
+  const segmentos = CATEGORIAS_ESTADO
+    .filter((categoria) => conteos[categoria] > 0)
+    .map((categoria) => ({
+      nombre: categoria,
+      cantidad: conteos[categoria],
+      porcentaje: total ? (conteos[categoria] / total) * 100 : 0,
+      clase: claseEstadoNombre(categoria),
+    }))
+
+  return { total, segmentos, etiquetas: etiquetasDona(segmentos) }
+})
+
+const estiloDona = computed(() => {
+  const { segmentos } = distribucionEstadoActual.value
+
+  if (!segmentos.length) return { background: '#C7D0D9' }
+
+  let acumulado = 0
+  const partes = segmentos.map((segmento) => {
+    const inicio = acumulado
+    acumulado += segmento.porcentaje
+    return `${COLOR_HEX_POR_CLASE[segmento.clase]} ${inicio}% ${acumulado}%`
+  })
+
+  return { background: `conic-gradient(${partes.join(', ')})` }
+})
+
+// ============================================================
+// 3) KPI con evidencias — cuenta INDICADORES (con / sin evidencia)
+// ============================================================
+
+const evidenciasKpi = computed(() => resumenEvidencias(indicadoresAutorizados.value, medicionesAutorizadas.value))
+
+// Barras horizontales: el largo es la proporción de KPI autorizados del
+// contexto (con + sin = total), y la cantidad va al extremo de la barra.
+const graficoEvidencias = computed(() => {
+  const { con, sin, total } = evidenciasKpi.value
+
+  return [
+    { nombre: 'Con evidencia', cantidad: con, clase: 'steel', porcentaje: porcentajeDe(con, total) },
+    { nombre: 'Sin evidencia', cantidad: sin, clase: 'neutral', porcentaje: porcentajeDe(sin, total) },
+  ].map((barra) => ({ ...barra, ancho: alturaConteo(barra.cantidad, total) }))
+})
+
+// ============================================================
+// 4) Oportunidad de registro — clasificación actual del backend
+// ============================================================
+
+// "A tiempo" y "Con retraso" son mediciones registradas; "Sin registro" son
+// periodos cerrados sin medición (se muestran con su propio color, nunca
+// como medición tardía). "Con ampliación" queda como nota secundaria.
+const oportunidad = computed(() => resumenOportunidad(medicionesAutorizadas.value, SIN_REGISTRO))
+
+const graficoOportunidad = computed(() => {
+  const { aTiempo, conRetraso, sinRegistro, total } = oportunidad.value
+  const eje = ejeConteo(Math.max(aTiempo, conRetraso, sinRegistro))
+
+  return {
+    eje,
+    barras: [
+      { nombre: 'A tiempo', cantidad: aTiempo, clase: 'ok', ayuda: 'Mediciones registradas dentro del plazo ordinario' },
+      { nombre: 'Con retraso', cantidad: conRetraso, clase: 'warning', ayuda: 'Mediciones registradas después del plazo' },
+      { nombre: SIN_REGISTRO, cantidad: sinRegistro, clase: 'danger', ayuda: 'Periodos cerrados por el sistema sin medición' },
+    ].map((barra) => ({ ...barra, porcentaje: porcentajeDe(barra.cantidad, total), altura: (barra.cantidad / eje.tope) * 100 })),
+  }
+})
+
+// ============================================================
+// 5) Detalle de indicadores KPI — 8 por página
+// ============================================================
+
+const KPI_POR_PAGINA = 8
+const paginaTabla = ref(1)
+
+const SEVERIDAD = {
+  Incumplido: 0,
+  'En riesgo': 1,
+  [SIN_REGISTRO]: 2,
+  'Pendiente de actualización': 3,
+  'Sin mediciones': 4,
+}
+
+const filasDetalle = computed(() => {
+  const evidencias = evidenciasPorKpi(medicionesAutorizadas.value)
+
+  return indicadoresAutorizados.value
+    .map((kpi) => ({
+      kpi,
+      codigo: codigoKpi(kpi),
+      objetivo: textoObjetivoKpi(kpi),
+      cumplimiento: textoPromedioKpi(kpi),
+      meta: formatearValorUnidad(kpi.valor_meta, kpi.unidad_medida),
+      // Barra de la celda: solo para KPI en %, donde el valor ya está en
+      // escala 0–100 (no se calcula ninguna relación con la meta).
+      barra: kpi.unidad_medida === '%' && kpi.promedio_acumulado !== null && kpi.promedio_acumulado !== undefined
+        ? Math.min(100, Math.max(0, Number(kpi.promedio_acumulado)))
+        : null,
+      categoria: categoriaKpi(kpi),
+      evidencias: evidencias.get(kpi.id) || 0,
+    }))
+    .sort((a, b) => (SEVERIDAD[a.categoria] ?? 1.5) - (SEVERIDAD[b.categoria] ?? 1.5) || a.kpi.id - b.kpi.id)
+})
+
+// paginar() ajusta la página al rango válido: si los resultados disminuyen,
+// nunca queda una página vacía.
+const tablaPaginada = computed(() => paginar(filasDetalle.value, paginaTabla.value, KPI_POR_PAGINA))
+
+function irPaginaTabla(pagina) {
+  paginaTabla.value = paginar(filasDetalle.value, pagina, KPI_POR_PAGINA).pagina
+}
+
+// Cambiar año, plan estratégico o plan anual vuelve a la página 1.
+watch(
+  () => [seleccion.value.anio, seleccion.value.planEstrategico, seleccion.value.planAnual],
+  () => {
+    paginaTabla.value = 1
+    paginaCumplimiento.value = 1
+  },
+)
 
 function irAIndicador(id) {
   if (!id) return
   router.push({ path: '/indicadores', query: { resaltar: id } })
-}
-
-function irAMedicion(id) {
-  if (!id) return
-  router.push({ path: '/mediciones', query: { resaltar: id } })
-}
-
-function verTodosLosKpi() {
-  router.push('/indicadores')
-}
-
-function verTodasLasMediciones() {
-  router.push('/mediciones')
 }
 
 function cerrarSesion() {
@@ -496,412 +429,375 @@ onMounted(() => {
   <AppLayout
     :usuario="props.usuario"
     titulo="Panel de control"
-    subtitulo="Seguimiento gerencial de planes estratégicos, planes anuales y KPI"
+    subtitulo="Estado general de los indicadores KPI"
     breadcrumb-actual="Panel de control"
     @logout="cerrarSesion"
   >
     <template #actions>
-      <div class="period-select">
-        <svg class="cal" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-        Datos actualizados del sistema
+      <div class="encabezado-filtros">
+        <label class="filtro-anio">
+          <span>Plan anual:</span>
+          <select :value="seleccion.anio || ''" aria-label="Año del plan anual" @change="seleccionarAnio($event.target.value)">
+            <option value="">Todos</option>
+            <option v-for="anio in anios" :key="anio" :value="anio">{{ anio }}</option>
+          </select>
+        </label>
+
+        <!-- Filtros por plan, discretos: se despliegan a pedido. -->
+        <details class="mas-filtros" :open="hayFiltroPlanes">
+          <summary>Filtros<span v-if="hayFiltroPlanes" class="punto-activo"></span></summary>
+          <div class="mas-filtros-panel">
+            <label>
+              <span>Plan estratégico</span>
+              <select :value="seleccion.planEstrategico || ''" @change="seleccionarPlanEstrategico($event.target.value)">
+                <option value="">Todos</option>
+                <option v-for="plan in todosPlanesEstrategicos" :key="plan.id" :value="plan.id">
+                  {{ plan.titulo }}{{ plan.estado === 'en_uso' ? '' : ` (${plan.estado === 'cerrado' ? 'Cerrado' : 'Borrador'})` }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>Plan anual</span>
+              <select
+                :value="seleccion.planAnual || ''"
+                :disabled="!opcionesPlanAnual.length"
+                @change="seleccionarPlanAnual($event.target.value)"
+              >
+                <option value="">Todos</option>
+                <option v-for="anual in opcionesPlanAnual" :key="anual.id" :value="anual.id">
+                  {{ anual.nombre }}{{ seleccion.planEstrategico ? '' : ` — ${anual.plan_estrategico_titulo}` }}
+                </option>
+              </select>
+            </label>
+          </div>
+        </details>
       </div>
     </template>
 
     <div class="dashboard-content">
-
       <div v-if="cargando" class="dashboard-message">Cargando datos del panel de control...</div>
       <div v-if="error" class="dashboard-error">{{ error }}</div>
 
-      <!-- ================= TARJETAS ================= -->
-      <section class="summary-grid">
+      <p v-if="hayFiltro" class="contexto-linea">
+        Mostrando: {{ textoContexto }}
+        <button type="button" class="btn-limpiar" @click="limpiarFiltro">Quitar filtros</button>
+      </p>
 
-        <div class="kpi-card">
-          <div class="kpi-top">
-            <div class="kpi-icon navy">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
-            </div>
+      <!-- ===== Tarjetas resumen ===== -->
+      <section class="tarjetas" aria-label="Resumen">
+        <article v-for="tarjeta in tarjetas" :key="tarjeta.clave" class="tarjeta">
+          <div class="tarjeta-icono" :class="tarjeta.clase" aria-hidden="true">
+            <svg v-if="tarjeta.icono === 'capas'" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+            <svg v-else-if="tarjeta.icono === 'calendario'" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <svg v-else-if="tarjeta.icono === 'pulso'" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            <svg v-else-if="tarjeta.icono === 'check'" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l2.5 2.5L16 9"/></svg>
+            <svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           </div>
-          <div class="kpi-value">{{ totalPlanesEstrategicosEnUso }}</div>
-          <div class="kpi-label">Planes estratégicos en uso</div>
-          <div class="kpi-foot">De {{ planesEstrategicos.length }} planes registrados</div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-top">
-            <div class="kpi-icon steel">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-            </div>
-          </div>
-          <div class="kpi-value">{{ totalPlanesAnualesEnUso }}</div>
-          <div class="kpi-label">Planes anuales en ejecución</div>
-          <div class="kpi-foot">De {{ planesAnuales.length }} planes anuales registrados</div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-top">
-            <div class="kpi-icon aqua">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            </div>
-          </div>
-          <div class="kpi-value">{{ totalKpiAutorizados }}</div>
-          <div class="kpi-label">KPI autorizados</div>
-          <div class="kpi-foot">En seguimiento activo</div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-top">
-            <div class="kpi-icon ok">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l2.5 2.5L16 9"/></svg>
-            </div>
-          </div>
-          <div class="kpi-value">{{ totalKpiFavorables }}</div>
-          <div class="kpi-label">KPI favorables</div>
-          <div class="kpi-foot">Según su promedio acumulado</div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-top">
-            <div class="kpi-icon danger">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            </div>
-          </div>
-          <div class="kpi-value">{{ totalKpiRequierenAtencion }}</div>
-          <div class="kpi-label">Requieren atención</div>
-          <div class="kpi-foot">En riesgo o incumplidos</div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-top">
-            <div class="kpi-icon steel">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-            </div>
-          </div>
-          <div class="kpi-value">{{ totalCierresAutomaticos }}</div>
-          <div class="kpi-label">Cierres automáticos</div>
-          <div class="kpi-foot">Periodos cerrados en 0.00</div>
-        </div>
-
+          <div class="tarjeta-valor">{{ tarjeta.valor }}</div>
+          <div class="tarjeta-titulo">{{ tarjeta.titulo }}</div>
+          <div class="tarjeta-detalle">{{ tarjeta.detalle }}</div>
+        </article>
       </section>
 
-      <!-- ================= ESTADO INDIVIDUAL DE KPI ================= -->
-      <section class="card-panel chart-individual-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Estado individual de KPI</h2>
-            <div class="desc">Estado acumulado y resultado real de cada KPI autorizado, uno por uno</div>
-          </div>
-        </div>
-
-        <div v-if="!estadoIndividualKpis.length" class="dashboard-message">
-          No hay KPI autorizados registrados.
-        </div>
-
-        <template v-else>
-          <div class="kpi-individual-scroll">
-            <div class="kpi-individual-columnas">
-              <div
-                v-for="kpi in estadoIndividualKpis"
-                :key="kpi.id"
-                class="kpi-individual-columna"
-                :title="kpi.tooltip"
-                @click="irAIndicador(kpi.id)"
-              >
-                <div class="kpi-individual-valor">{{ kpi.valorTexto }}</div>
-                <div class="kpi-individual-barra" :class="kpi.clase"></div>
-                <div class="kpi-individual-nombre">{{ kpi.nombre }}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="chart-legend">
-            <div v-for="categoria in CATEGORIAS_ESTADO" :key="categoria" class="legend-item">
-              <span class="legend-dot" :class="claseEstadoNombre(categoria)"></span>{{ categoria }}
-            </div>
-          </div>
-        </template>
-      </section>
-
-      <!-- ================= EVIDENCIAS POR KPI ================= -->
-      <section class="card-panel chart-individual-panel">
-        <div class="panel-head">
-          <div>
-            <h2>Evidencias de respaldo por KPI</h2>
-            <div class="desc">Cantidad de archivos de evidencia reales adjuntos a las mediciones de cada KPI</div>
-          </div>
-        </div>
-
-        <div v-if="!evidenciasPorKpi.length" class="dashboard-message">
-          No hay KPI autorizados registrados.
-        </div>
-
-        <template v-else>
-          <div class="evidencias-rows">
-            <div
-              v-for="fila in evidenciasPorKpi"
-              :key="fila.id"
-              class="evidencias-row"
-              @click="irAIndicador(fila.id)"
-            >
-              <span class="evidencias-nombre" :title="fila.nombre">{{ fila.nombre }}</span>
-
-              <div class="evidencias-track" :title="`${fila.nombre} · ${fila.conteo} archivo(s) de evidencia`">
-                <div class="evidencias-fill" :style="{ width: `${fila.porcentaje}%` }"></div>
-              </div>
-
-              <span class="evidencias-conteo" :class="{ 'es-cero': !fila.conteo }">{{ fila.conteo }}</span>
-            </div>
-          </div>
-        </template>
-      </section>
-
-      <!-- ================= GRÁFICOS ================= -->
-      <section class="charts-grid">
-
+      <!-- ===== Fila 1: Cumplimiento de KPI | Estado actual de KPI ===== -->
+      <section class="fila-graficos fila-graficos--principal">
         <div class="card-panel">
           <div class="panel-head">
-            <div>
-              <h2>Estado de KPI por plan estratégico</h2>
-              <div class="desc">Distribución de los KPI autorizados de cada plan en uso, según su estado acumulado</div>
+            <h2>
+              <svg class="icono-titulo" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="8"/><line x1="18" y1="20" x2="18" y2="4"/></svg>
+              Cumplimiento de KPI
+            </h2>
+            <div class="leyenda-mini">
+              <span><i class="punto-leyenda"></i>Promedio acumulado</span>
+              <span><i class="linea-meta"></i>Meta</span>
             </div>
           </div>
 
-          <div v-if="!distribucionPorPlan.length" class="dashboard-message">
-            No hay planes estratégicos en uso registrados.
+          <div v-if="!vistaCumplimiento" class="dashboard-message">
+            No hay KPI autorizados{{ sufijoVacio }}.
           </div>
 
           <template v-else>
-            <div class="plan-rows">
-              <div
-                v-for="plan in distribucionPorPlan"
-                :key="plan.id"
-                class="plan-row"
-                @click="irAPlanEstrategico(plan.id)"
+            <div v-if="gruposCumplimientoKpi.length > 1" class="unidades" role="tablist" aria-label="Unidad de medida">
+              <button
+                v-for="grupo in gruposCumplimientoKpi"
+                :key="grupo.unidad"
+                type="button"
+                role="tab"
+                class="unidad"
+                :class="{ activa: grupo.unidad === vistaCumplimiento.unidad }"
+                :aria-selected="grupo.unidad === vistaCumplimiento.unidad"
+                @click="elegirUnidad(grupo.unidad)"
               >
-                <div class="plan-row-head">
-                  <span class="plan-row-name" :title="plan.nombre">{{ plan.nombre }}</span>
-                  <span class="plan-row-total">{{ plan.total }} KPI</span>
-                </div>
+                {{ grupo.unidad === '%' ? 'Porcentaje' : grupo.unidad }} ({{ grupo.barras.length }})
+              </button>
+            </div>
 
-                <div v-if="!plan.total" class="plan-row-track plan-row-track--vacio">
-                  <span>Sin KPI autorizados</span>
-                </div>
-
-                <div v-else class="plan-row-track">
-                  <div
-                    v-for="segmento in plan.segmentos"
-                    :key="segmento.nombre"
-                    class="plan-segment"
-                    :class="segmento.clase"
-                    :style="{ width: `${segmento.porcentaje}%` }"
-                    :title="`${segmento.nombre}: ${segmento.cantidad} KPI (${formatearNumero(segmento.porcentaje, { unidad: '%' })})`"
-                  ></div>
-                </div>
+            <div class="grafico">
+              <div class="eje" aria-hidden="true">
+                <span v-for="marca in vistaCumplimiento.marcas" :key="marca.valor" :style="{ bottom: `${marca.altura}%` }">
+                  {{ marca.texto }}
+                </span>
               </div>
-            </div>
+              <div class="area">
+                <div
+                  v-for="marca in vistaCumplimiento.marcas"
+                  :key="`linea-${marca.valor}`"
+                  class="linea-guia"
+                  :style="{ bottom: `${marca.altura}%` }"
+                ></div>
 
-            <div class="chart-legend">
-              <div v-for="categoria in CATEGORIAS_ESTADO" :key="categoria" class="legend-item">
-                <span class="legend-dot" :class="claseEstadoNombre(categoria)"></span>{{ categoria }}
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <div class="card-panel">
-          <div class="panel-head">
-            <div>
-              <h2>Evolución mensual del estado de KPI</h2>
-              <div class="desc">Distribución de estados acumulados de los KPI medidos, mes a mes</div>
-            </div>
-          </div>
-
-          <div v-if="!evolucionPorMes.length" class="dashboard-message">
-            No hay mediciones suficientes para mostrar una evolución mensual.
-          </div>
-
-          <template v-else>
-            <div class="evolucion-scroll">
-              <div class="evolucion-columnas">
-                <div v-for="mes in evolucionPorMes" :key="mes.clave" class="evolucion-columna">
-                  <div class="evolucion-columna-total" :title="`${mes.total} KPI medidos`">{{ mes.total }}</div>
-
-                  <div class="evolucion-columna-track">
+                <div
+                  v-for="barra in vistaCumplimiento.barras"
+                  :key="barra.kpi.id"
+                  class="columna"
+                  :title="barra.tooltip"
+                  role="button"
+                  tabindex="0"
+                  @click="irAIndicador(barra.kpi.id)"
+                  @keydown.enter="irAIndicador(barra.kpi.id)"
+                >
+                  <div class="columna-cuerpo">
                     <div
-                      v-for="segmento in mes.segmentos"
-                      :key="segmento.nombre"
-                      class="evolucion-segmento"
-                      :class="segmento.clase"
-                      :style="{ height: `${segmento.porcentaje}%` }"
-                      :title="`${mes.etiquetaCompleta} · ${segmento.nombre}: ${segmento.cantidad} KPI (${formatearNumero(segmento.porcentaje, { unidad: '%' })})`"
+                      v-if="barra.metaPorcentaje !== null"
+                      class="marca-meta"
+                      :style="{ bottom: `${barra.metaPorcentaje}%` }"
                     ></div>
+                    <div
+                      class="barra"
+                      :class="[barra.clase, { 'sin-dato': barra.sinDato }]"
+                      :style="{ height: barra.sinDato ? '0' : `${barra.alturaPorcentaje}%` }"
+                    >
+                      <span class="barra-valor" :class="{ 'sin-dato': barra.sinDato }">
+                        {{ barra.valorTexto }}<span v-if="barra.tieneOmisiones" class="marca-omision" title="Tiene periodos sin registro">*</span>
+                      </span>
+                    </div>
                   </div>
-
-                  <div class="evolucion-columna-label">{{ mes.etiqueta }}</div>
+                </div>
+              </div>
+              <div></div>
+              <div class="etiquetas">
+                <div v-for="barra in vistaCumplimiento.barras" :key="`etiqueta-${barra.kpi.id}`" class="etiqueta" :title="barra.kpi.nombre">
+                  <strong>{{ barra.codigo }}</strong>
+                  <span>{{ barra.nombre }}</span>
                 </div>
               </div>
             </div>
 
-            <div class="chart-legend">
-              <div v-for="categoria in CATEGORIAS_EVOLUCION" :key="categoria" class="legend-item">
-                <span class="legend-dot" :class="claseEstadoNombre(categoria)"></span>{{ categoria }}
-              </div>
-            </div>
-          </template>
-        </div>
-
-      </section>
-
-      <!-- ================= KPI QUE REQUIEREN ATENCIÓN ================= -->
-      <section class="card-panel table-card">
-        <div class="panel-head">
-          <div>
-            <h2>KPI que requieren atención</h2>
-            <div class="desc">KPI autorizados en riesgo o incumplidos, según su promedio acumulado</div>
-          </div>
-        </div>
-
-        <div v-if="!kpiRequierenAtencionLista.length" class="dashboard-message">
-          No hay KPI en riesgo o incumplidos actualmente.
-        </div>
-
-        <div v-else class="table-scroll">
-          <table>
-            <colgroup>
-              <col style="width: 20%">
-              <col style="width: 12%">
-              <col style="width: 22%">
-              <col style="width: 14%">
-              <col style="width: 14%">
-              <col style="width: 10%">
-              <col style="width: 8%">
-            </colgroup>
-            <thead>
-              <tr>
-                <th>KPI</th>
-                <th>Plan anual</th>
-                <th>Objetivo específico</th>
-                <th title="Promedio acumulado">Promedio acumulado</th>
-                <th title="Estado acumulado">Estado acumulado</th>
-                <th title="Cantidad de mediciones">Mediciones</th>
-                <th class="th-acciones" style="text-align: right;">Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="kpi in kpiRequierenAtencionLista" :key="kpi.id">
-                <td>
-                  <div class="cell-main" :title="kpi.nombre">{{ kpi.nombre }}</div>
-                </td>
-                <td>
-                  <div class="cell-sub" :title="kpi.plan_anual_nombre">{{ kpi.plan_anual_nombre || 'Sin plan anual' }}</div>
-                </td>
-                <td>
-                  <div class="cell-sub" :title="kpi.objetivo_especifico_texto">{{ kpi.objetivo_especifico_texto || 'Sin objetivo' }}</div>
-                </td>
-                <td>
-                  <div class="cell-main">{{ formatearValorUnidad(kpi.promedio_acumulado, kpi.unidad_medida) }}</div>
-                </td>
-                <td>
-                  <span class="badge" :class="claseColorCumplimiento(kpi.estado_acumulado_color)">
-                    <span class="badge-dot"></span>
-                    {{ textoEstadoCumplimiento(kpi.estado_acumulado_nombre) }}
-                  </span>
-                </td>
-                <td>{{ kpi.cantidad_mediciones }} mediciones</td>
-                <td class="td-acciones" style="text-align: right;">
-                  <button class="btn-ver" type="button" title="Ver KPI" @click="irAIndicador(kpi.id)">Ver</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="link-see-all" @click="verTodosLosKpi">Ver todos los KPI</div>
-      </section>
-
-      <!-- ================= ALERTAS + ÚLTIMAS MEDICIONES ================= -->
-      <section class="bottom-grid">
-
-        <div class="card-panel">
-          <div class="panel-head">
-            <div>
-              <h2>Alertas pendientes</h2>
-              <div class="desc">Alertas KPI que todavía no fueron revisadas</div>
-            </div>
-          </div>
-
-          <div v-if="!alertasRecientes.length" class="dashboard-message">
-            No hay alertas pendientes.
-          </div>
-
-          <template v-else>
-            <div
-              v-for="alerta in alertasRecientes"
-              :key="alerta.id"
-              class="alert-item fila-navegable"
-              @click="irAIndicador(alerta.indicador)"
-            >
-              <div class="alert-icon" :class="claseAlerta(alerta)">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-              </div>
-              <div class="alert-body">
-                <span class="alert-tipo">{{ alerta.tipo_alerta }}</span>
-                <div class="alert-text">{{ alerta.mensaje }}</div>
-                <div class="alert-time">{{ formatearFecha(alerta.fecha_generacion) }}</div>
-              </div>
+            <div v-if="vistaCumplimiento.totalPaginas > 1" class="paginador paginador--mini">
+              <button type="button" :disabled="!vistaCumplimiento.hayAnterior" aria-label="KPI anteriores" @click="paginaCumplimiento = vistaCumplimiento.pagina - 1">‹</button>
+              <span>{{ vistaCumplimiento.desde }}–{{ vistaCumplimiento.hasta }} de {{ vistaCumplimiento.total }}</span>
+              <button type="button" :disabled="!vistaCumplimiento.haySiguiente" aria-label="KPI siguientes" @click="paginaCumplimiento = vistaCumplimiento.pagina + 1">›</button>
             </div>
           </template>
         </div>
 
         <div class="card-panel">
           <div class="panel-head">
-            <div>
-              <h2>Últimas mediciones registradas</h2>
-              <div class="desc">Cargas más recientes al sistema</div>
-            </div>
+            <h2>
+              <svg class="icono-titulo" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+              Estado actual de KPI
+            </h2>
           </div>
 
-          <div v-if="!ultimasMediciones.length" class="dashboard-message">
-            No hay mediciones registradas.
+          <div v-if="!distribucionEstadoActual.total" class="dashboard-message">
+            No hay KPI autorizados{{ sufijoVacio }}.
           </div>
 
-          <template v-else>
-            <div
-              v-for="medicion in ultimasMediciones"
-              :key="medicion.id"
-              class="meas-item fila-navegable"
-              @click="irAMedicion(medicion.id)"
-            >
-              <div class="meas-main">
-                <div class="meas-top">
-                  <span class="meas-name" :title="medicion.indicador_nombre">{{ medicion.indicador_nombre || 'Sin KPI' }}</span>
-                  <span class="source-chip" :class="medicion.cierre_automatico ? 'automatico' : 'manual'">
-                    {{ tipoRegistroMedicion(medicion) }}
-                  </span>
-                </div>
-                <div class="meas-sub">{{ medicion.periodo_nombre || 'Periodo no definido' }} · {{ formatearFecha(medicion.fecha_registro) }}</div>
-
-                <div class="meas-valores">
-                  <span>Resultado: <strong>{{ formatearValorUnidad(medicion.valor_resultado, medicion.unidad_medida) }}</strong></span>
-                  <span>Acumulado: <strong>{{ formatearValorUnidad(medicion.promedio_acumulado_hasta_medicion, medicion.unidad_medida) }}</strong></span>
-                </div>
-              </div>
-
+          <div v-else class="dona-contenido">
+            <div class="dona-wrap">
+              <div class="dona" :style="estiloDona"></div>
               <span
-                v-if="medicion.estado_acumulado_hasta_medicion_nombre"
-                class="badge"
-                :class="claseColorCumplimiento(medicion.estado_acumulado_hasta_medicion_color)"
-              >
-                <span class="badge-dot"></span>
-                {{ textoEstadoCumplimiento(medicion.estado_acumulado_hasta_medicion_nombre) }}
-              </span>
+                v-for="etiqueta in distribucionEstadoActual.etiquetas"
+                :key="etiqueta.nombre"
+                class="dona-porcentaje"
+                :style="{ left: `${etiqueta.x}%`, top: `${etiqueta.y}%` }"
+              >{{ etiqueta.texto }}</span>
+              <div class="dona-centro">
+                <span class="dona-total">{{ distribucionEstadoActual.total }}</span>
+                <span class="dona-label">KPI autorizados</span>
+              </div>
             </div>
-          </template>
 
-          <div class="link-see-all" @click="verTodasLasMediciones">Ver todas las mediciones</div>
+            <ul class="dona-leyenda">
+              <li v-for="segmento in distribucionEstadoActual.segmentos" :key="segmento.nombre">
+                <span class="legend-dot" :class="segmento.clase"></span>
+                <span>
+                  {{ segmento.nombre }}
+                  <small>{{ segmento.cantidad }} ({{ Math.round(segmento.porcentaje) }}%)</small>
+                </span>
+              </li>
+            </ul>
+          </div>
         </div>
-
       </section>
 
+      <!-- ===== Fila 2: KPI con evidencias | Oportunidad de registro ===== -->
+      <section class="fila-graficos">
+        <div class="card-panel">
+          <div class="panel-head">
+            <h2>
+              <svg class="icono-titulo" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+              KPI con evidencias
+            </h2>
+          </div>
+
+          <div v-if="!evidenciasKpi.total" class="dashboard-message">
+            No hay KPI autorizados{{ sufijoVacio }}.
+          </div>
+
+          <div v-else class="barras-horizontales">
+            <div
+              v-for="barra in graficoEvidencias"
+              :key="barra.nombre"
+              class="fila-horizontal"
+              :title="`${barra.nombre}: ${barra.cantidad} de ${evidenciasKpi.total} KPI (${barra.porcentaje}%)`"
+            >
+              <div class="horizontal-etiqueta">
+                <strong>{{ barra.nombre }}</strong>
+                <span>{{ barra.porcentaje }}%</span>
+              </div>
+              <div class="horizontal-track">
+                <div class="horizontal-barra" :class="barra.clase" :style="{ width: `${barra.ancho}%` }"></div>
+                <span class="horizontal-valor">{{ barra.cantidad }}</span>
+              </div>
+            </div>
+            <p class="nota-secundaria">De {{ evidenciasKpi.total }} KPI autorizados</p>
+          </div>
+        </div>
+
+        <div class="card-panel">
+          <div class="panel-head">
+            <h2>
+              <svg class="icono-titulo" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              Oportunidad de registro
+            </h2>
+          </div>
+
+          <div v-if="!oportunidad.total" class="dashboard-message">
+            No hay mediciones ni periodos cerrados{{ sufijoVacio }}.
+          </div>
+
+          <template v-else>
+            <div class="grafico grafico--conteo">
+              <div class="eje" aria-hidden="true">
+                <span v-for="marca in graficoOportunidad.eje.marcas" :key="marca" :style="{ bottom: `${(marca / graficoOportunidad.eje.tope) * 100}%` }">{{ marca }}</span>
+              </div>
+              <div class="area area--conteo">
+                <div v-for="marca in graficoOportunidad.eje.marcas" :key="`l-${marca}`" class="linea-guia" :style="{ bottom: `${(marca / graficoOportunidad.eje.tope) * 100}%` }"></div>
+                <div
+                  v-for="barra in graficoOportunidad.barras"
+                  :key="barra.nombre"
+                  class="columna columna--conteo"
+                  :title="barra.ayuda"
+                >
+                  <div class="columna-cuerpo">
+                    <div class="barra" :class="barra.clase" :style="{ height: `${barra.altura}%` }">
+                      <span class="barra-valor">{{ barra.cantidad }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div></div>
+              <div class="etiquetas etiquetas--conteo">
+                <div v-for="barra in graficoOportunidad.barras" :key="`o-${barra.nombre}`" class="etiqueta" :title="barra.ayuda">
+                  <strong>{{ barra.nombre }}</strong>
+                  <span>({{ barra.porcentaje }}%)</span>
+                </div>
+              </div>
+            </div>
+
+            <p v-if="oportunidad.conAmpliacion" class="nota-secundaria">
+              Además, {{ oportunidad.conAmpliacion }} medición(es) registrada(s) con días adicionales autorizados.
+            </p>
+          </template>
+        </div>
+      </section>
+
+      <!-- ===== Fila 3: Detalle de indicadores KPI ===== -->
+      <section class="card-panel">
+        <div class="panel-head">
+          <h2>
+            <svg class="icono-titulo" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></svg>
+            Detalle de indicadores KPI
+          </h2>
+          <span v-if="tablaPaginada.total" class="total-kpi">{{ tablaPaginada.total }} KPI encontrados</span>
+        </div>
+
+        <div v-if="!tablaPaginada.total" class="dashboard-message">
+          No hay KPI autorizados{{ sufijoVacio }}.
+        </div>
+
+        <template v-else>
+          <div class="table-scroll">
+            <table>
+              <colgroup>
+                <col style="width: 9%">
+                <col style="width: 26%">
+                <col style="width: 23%">
+                <col style="width: 18%">
+                <col style="width: 14%">
+                <col style="width: 10%">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Código</th>
+                  <th>Nombre del indicador</th>
+                  <th>Objetivo</th>
+                  <th title="Promedio acumulado, en la unidad del KPI">Cumplimiento</th>
+                  <th title="Estado acumulado según los rangos del KPI">Estado</th>
+                  <th title="Archivos de evidencia en las mediciones del KPI">Evidencias</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="fila in tablaPaginada.elementos"
+                  :key="fila.kpi.id"
+                  class="fila-navegable"
+                  @click="irAIndicador(fila.kpi.id)"
+                >
+                  <td class="celda-codigo">{{ fila.codigo }}</td>
+                  <td>
+                    <button type="button" class="nombre-kpi" :title="`Ver el detalle de ${fila.kpi.nombre}`" @click.stop="irAIndicador(fila.kpi.id)">
+                      {{ fila.kpi.nombre }}
+                    </button>
+                  </td>
+                  <td class="celda-texto" :title="fila.objetivo">{{ fila.objetivo }}</td>
+                  <td :title="`Meta: ${fila.meta}`">
+                    <div class="cumplimiento-celda">
+                      <span class="celda-valor">{{ fila.cumplimiento }}</span>
+                      <span v-if="fila.barra !== null" class="mini-track">
+                        <span class="mini-barra" :class="claseEstadoNombre(fila.categoria)" :style="{ width: `${fila.barra}%` }"></span>
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="badge" :class="claseEstadoNombre(fila.categoria)">
+                      <span class="badge-dot"></span>
+                      {{ textoEstadoCumplimiento(fila.categoria) }}
+                    </span>
+                  </td>
+                  <td>
+                    <span class="evidencias-celda" :class="{ 'es-cero': !fila.evidencias }">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                      {{ fila.evidencias }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <nav class="paginador" aria-label="Paginación de indicadores">
+            <span class="paginador-rango">{{ tablaPaginada.desde }}–{{ tablaPaginada.hasta }} de {{ tablaPaginada.total }} KPI</span>
+            <div class="paginador-controles">
+              <button type="button" :disabled="!tablaPaginada.hayAnterior" @click="irPaginaTabla(tablaPaginada.pagina - 1)">Anterior</button>
+              <span>Página {{ tablaPaginada.pagina }} de {{ tablaPaginada.totalPaginas }}</span>
+              <button type="button" :disabled="!tablaPaginada.haySiguiente" @click="irPaginaTabla(tablaPaginada.pagina + 1)">Siguiente</button>
+            </div>
+          </nav>
+        </template>
+      </section>
     </div>
   </AppLayout>
 </template>
@@ -909,7 +805,6 @@ onMounted(() => {
 <style scoped>
   .dashboard-content{
     --navy:#1D3557;
-    --navy-dark:#152840;
     --steel:#457B9D;
     --aqua:#A8DADC;
     --aqua-soft:#EAF5F5;
@@ -921,355 +816,312 @@ onMounted(() => {
     --text-secondary:#5E6E82;
     --text-muted:#9AA8B8;
     --border:#E4EAEF;
-    --radius-lg:20px;
     --radius-md:14px;
     --radius-sm:10px;
     --shadow-card: 0 2px 10px rgba(29,53,87,0.05), 0 1px 2px rgba(29,53,87,0.04);
-    --shadow-hover: 0 10px 26px rgba(29,53,87,0.10);
-  }
-  .dashboard-content *{ box-sizing:border-box; }
-  .dashboard-content{
     font-family:'Montserrat', sans-serif;
     color:var(--navy);
   }
+  .dashboard-content *{ box-sizing:border-box; }
 
-  .period-select{
+  /* ---- encabezado: año y filtros discretos ---- */
+  .encabezado-filtros{ display:flex; align-items:center; gap:10px; position:relative; font-family:'Montserrat', sans-serif; }
+  .filtro-anio{ display:flex; align-items:center; gap:8px; }
+  .filtro-anio span{ font-size:13px; font-weight:600; color:#5E6E82; }
+  .filtro-anio select{
+    height:40px;
+    min-width:120px;
+    padding:0 12px;
+    border:1.5px solid #E4EAEF;
+    border-radius:10px;
+    background:#FFFFFF;
+    font-family:inherit;
+    font-size:14px;
+    font-weight:700;
+    color:#1D3557;
+    box-shadow:0 2px 10px rgba(29,53,87,0.05);
+  }
+  .mas-filtros{ position:relative; }
+  .mas-filtros summary{
+    list-style:none;
     display:flex;
     align-items:center;
-    gap:8px;
+    gap:6px;
     height:40px;
-    padding:0 14px;
+    padding:0 12px;
+    border:1.5px solid #E4EAEF;
     border-radius:10px;
-    border:1.5px solid var(--border);
-    background:var(--white);
-    font-size:13px;
+    background:#FFFFFF;
+    font-size:12.5px;
+    font-weight:700;
+    color:#5E6E82;
+    cursor:pointer;
+  }
+  .mas-filtros summary::-webkit-details-marker{ display:none; }
+  .punto-activo{ width:7px; height:7px; border-radius:50%; background:#457B9D; }
+  .mas-filtros-panel{
+    position:absolute;
+    right:0;
+    top:46px;
+    z-index:20;
+    width:280px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    padding:12px;
+    border:1px solid #E4EAEF;
+    border-radius:12px;
+    background:#FFFFFF;
+    box-shadow:0 10px 26px rgba(29,53,87,0.12);
+  }
+  .mas-filtros-panel label{ display:flex; flex-direction:column; gap:4px; }
+  .mas-filtros-panel span{ font-size:11px; font-weight:700; color:#9AA8B8; }
+  .mas-filtros-panel select{
+    height:34px;
+    border:1px solid #E4EAEF;
+    border-radius:8px;
+    padding:0 8px;
+    font-family:inherit;
+    font-size:12.5px;
     font-weight:600;
-    color:var(--navy);
-    cursor:default;
-    box-shadow:var(--shadow-card);
+    color:#1D3557;
   }
-  .period-select svg.cal{ color:var(--steel); }
+  .mas-filtros-panel select:disabled{ background:#F6F9FA; color:#9AA8B8; }
 
-  /* ---- tarjetas superiores ---- */
-  .summary-grid{
-    display:grid;
-    grid-template-columns:repeat(3, 1fr);
-    gap:16px;
-    margin-bottom:24px;
+  .contexto-linea{ margin:-4px 0 12px; font-size:11.5px; font-weight:600; color:var(--text-muted); }
+  .btn-limpiar{
+    border:none;
+    background:none;
+    padding:0 0 0 6px;
+    color:var(--steel);
+    font-family:inherit;
+    font-size:11.5px;
+    font-weight:700;
+    cursor:pointer;
+    text-decoration:underline;
   }
-  .kpi-card{
+
+  /* ---- tarjetas resumen ---- */
+  .tarjetas{ display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:14px; margin-bottom:16px; }
+  .tarjeta{
     background:var(--white);
     border:1px solid var(--border);
     border-radius:var(--radius-md);
-    padding:18px 18px 16px;
     box-shadow:var(--shadow-card);
-    transition:box-shadow .15s ease, transform .15s ease;
+    padding:16px 16px 14px;
+    min-width:0;
   }
-  .kpi-card:hover{ box-shadow:var(--shadow-hover); transform:translateY(-2px); }
+  .tarjeta-icono{ width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; margin-bottom:12px; }
+  .tarjeta-icono.navy{ background:rgba(29,53,87,0.08); color:var(--navy); }
+  .tarjeta-icono.steel{ background:rgba(69,123,157,0.10); color:var(--steel); }
+  .tarjeta-icono.aqua{ background:var(--aqua-soft); color:var(--steel); }
+  .tarjeta-icono.ok{ background:rgba(42,157,143,0.12); color:var(--success); }
+  .tarjeta-icono.danger{ background:rgba(231,111,81,0.12); color:var(--danger); }
+  .tarjeta-valor{ font-size:26px; font-weight:800; line-height:1; margin-bottom:6px; }
+  .tarjeta-titulo{ font-size:13px; font-weight:700; margin-bottom:4px; }
+  .tarjeta-detalle{ font-size:11.5px; font-weight:500; color:var(--text-muted); }
 
-  .kpi-top{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    margin-bottom:14px;
-  }
-  .kpi-icon{
-    width:34px; height:34px;
-    border-radius:9px;
-    display:flex; align-items:center; justify-content:center;
-  }
-  .kpi-icon.navy{ background:rgba(29,53,87,0.08); color:var(--navy); }
-  .kpi-icon.steel{ background:rgba(69,123,157,0.10); color:var(--steel); }
-  .kpi-icon.aqua{ background:var(--aqua-soft); color:var(--steel); }
-  .kpi-icon.ok{ background:rgba(42,157,143,0.12); color:var(--success); }
-  .kpi-icon.danger{ background:rgba(231,111,81,0.12); color:var(--danger); }
-
-  .kpi-value{
-    font-size:26px;
-    font-weight:800;
-    color:var(--navy);
-    letter-spacing:-0.4px;
-    line-height:1;
-    margin-bottom:6px;
-  }
-  .kpi-label{
-    font-size:12.5px;
-    font-weight:700;
-    color:var(--text-secondary);
-    margin-bottom:10px;
-  }
-  .kpi-foot{
-    font-size:11px;
-    color:var(--text-muted);
-    font-weight:500;
-  }
-
-  /* ---- paneles / encabezados ---- */
+  /* ---- paneles ---- */
   .card-panel{
     background:var(--white);
     border:1px solid var(--border);
     border-radius:var(--radius-md);
     box-shadow:var(--shadow-card);
-    padding:20px 22px 22px;
+    padding:16px 18px 16px;
+    min-width:0;
   }
-  .panel-head{
-    display:flex;
-    align-items:flex-start;
-    justify-content:space-between;
-    margin-bottom:18px;
-    gap:12px;
-  }
-  .panel-head h2{
-    font-size:14.5px;
-    font-weight:800;
-    color:var(--navy);
-  }
-  .panel-head .desc{
-    font-size:11.5px;
-    color:var(--text-muted);
-    font-weight:500;
-    margin-top:3px;
-  }
+  .panel-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+  .panel-head h2{ display:flex; align-items:center; gap:8px; font-size:14.5px; font-weight:800; margin:0; }
+  .icono-titulo{ color:var(--steel); flex-shrink:0; }
+  .leyenda-mini{ display:flex; gap:12px; font-size:11px; font-weight:600; color:var(--text-secondary); }
+  .leyenda-mini span{ display:flex; align-items:center; gap:5px; }
+  .punto-leyenda{ width:8px; height:8px; border-radius:50%; background:var(--steel); display:inline-block; }
+  .linea-meta{ width:14px; border-top:2px dashed var(--navy); opacity:.6; display:inline-block; }
+  .total-kpi{ font-size:11.5px; font-weight:700; color:var(--text-muted); }
 
-  /* ---- gráficos ---- */
-  .charts-grid{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:18px;
-    margin-bottom:20px;
-    align-items:stretch;
-  }
+  .fila-graficos{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
+  .fila-graficos--principal{ grid-template-columns:1.45fr 1fr; }
 
-  /* Distribución de KPI por plan estratégico (barra segmentada) */
-  .plan-rows{ display:flex; flex-direction:column; gap:14px; max-height:360px; overflow-y:auto; padding-right:4px; }
-
-  .plan-row{ cursor:pointer; }
-  .plan-row-head{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:6px; }
-  .plan-row-name{
-    font-size:12px; font-weight:800; color:var(--navy);
-    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70%;
-  }
-  .plan-row-total{ font-size:10.5px; font-weight:700; color:var(--text-muted); flex-shrink:0; }
-
-  .plan-row-track{
-    display:flex;
-    height:18px;
-    border-radius:9px;
-    overflow:hidden;
-    background:var(--bg);
-    gap:2px;
-  }
-  .plan-row-track--vacio{
-    align-items:center;
-    padding-left:10px;
-    font-size:10.5px;
+  /* ---- gráficos de barras (eje + área + etiquetas) ---- */
+  .unidades{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .unidad{
+    height:26px;
+    padding:0 10px;
+    border-radius:13px;
+    border:1px solid var(--border);
+    background:var(--white);
+    font-family:inherit;
+    font-size:11px;
     font-weight:700;
-    color:var(--text-muted);
-    background:repeating-linear-gradient(45deg, var(--border), var(--border) 4px, transparent 4px, transparent 8px);
+    color:var(--text-secondary);
+    cursor:pointer;
   }
+  .unidad.activa{ background:var(--navy); border-color:var(--navy); color:var(--white); }
 
-  .plan-segment{ height:100%; min-width:3px; }
-  .plan-segment.ok{ background:var(--success); }
-  .plan-segment.warning{ background:var(--orange); }
-  .plan-segment.danger{ background:var(--danger); }
-  .plan-segment.neutral{ background:#C7D0D9; }
-
-  /* Evolución mensual (columnas apiladas) */
-  .evolucion-scroll{ overflow-x:auto; padding-bottom:4px; }
-  .evolucion-columnas{
+  .grafico{ display:grid; grid-template-columns:34px 1fr; grid-template-rows:180px auto; column-gap:6px; }
+  .grafico--conteo{ grid-template-rows:150px auto; }
+  .eje{ position:relative; }
+  .eje span{
+    position:absolute;
+    right:0;
+    transform:translateY(50%);
+    font-size:10px;
+    font-weight:600;
+    color:var(--text-muted);
+    white-space:nowrap;
+  }
+  .area{
+    position:relative;
     display:flex;
     align-items:flex-end;
+    justify-content:space-around;
     gap:10px;
-    min-height:220px;
-    min-width:min-content;
+    border-left:1px solid var(--border);
+    border-bottom:1px solid var(--border);
+    padding:0 8px;
   }
-  .evolucion-columna{
+  .area--conteo{ justify-content:center; gap:28px; }
+  .linea-guia{ position:absolute; left:0; right:0; border-top:1px solid #F1F4F7; pointer-events:none; }
+  /* Área y etiquetas usan la misma distribución (flex 1 o 84px fijos y el
+     mismo gap), así cada etiqueta queda debajo de su barra. */
+  .columna{ position:relative; flex:1 1 0; min-width:0; height:100%; cursor:pointer; outline:none; }
+  .columna--conteo{ flex:0 0 84px; cursor:default; }
+  .columna:focus-visible .barra{ box-shadow:0 0 0 2px var(--aqua); }
+  .columna-cuerpo{ position:absolute; inset:0; display:flex; align-items:flex-end; justify-content:center; }
+  .barra{ position:relative; width:100%; max-width:46px; border-radius:6px 6px 0 0; transition:height .2s ease, opacity .15s ease; }
+  .columna--conteo .barra{ max-width:56px; }
+  .columna:hover .barra{ opacity:0.85; }
+  .barra.ok{ background:var(--success); }
+  .barra.warning{ background:var(--orange); }
+  .barra.danger{ background:var(--danger); }
+  .barra.steel{ background:#4A90D9; }
+  .barra.neutral{ background:#C7D0D9; }
+  .barra.omision{ background:repeating-linear-gradient(45deg, #8D99AE 0 4px, #C7D0D9 4px 8px); }
+  .barra-valor{
+    position:absolute;
+    bottom:100%;
+    left:50%;
+    transform:translateX(-50%);
+    margin-bottom:4px;
+    font-size:11.5px;
+    font-weight:800;
+    color:var(--navy);
+    white-space:nowrap;
+  }
+  .barra-valor.sin-dato{ font-size:9.5px; font-weight:700; color:var(--text-muted); }
+  .marca-meta{ position:absolute; left:-5px; right:-5px; border-top:2px dashed var(--navy); opacity:.55; z-index:2; pointer-events:none; }
+  .etiquetas{ display:flex; justify-content:space-around; gap:10px; padding:6px 8px 0; }
+  .etiquetas--conteo{ justify-content:center; gap:28px; }
+  .etiqueta{ flex:1 1 0; display:flex; flex-direction:column; align-items:center; text-align:center; min-width:0; }
+  .etiquetas--conteo .etiqueta{ flex:0 0 84px; }
+  .etiqueta strong{ font-size:11px; font-weight:800; color:var(--navy); white-space:nowrap; }
+  .etiqueta span{ font-size:10px; font-weight:600; color:var(--text-muted); line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .marca-omision{ color:#55657A; font-weight:800; margin-left:2px; }
+  .nota-secundaria{ margin:10px 0 0; font-size:11px; color:var(--text-muted); font-weight:600; text-align:center; }
+
+  /* ---- KPI con evidencias: barras horizontales ---- */
+  .barras-horizontales{ display:flex; flex-direction:column; justify-content:center; gap:16px; min-height:150px; padding:6px 2px 0; }
+  .fila-horizontal{ display:grid; grid-template-columns:120px 1fr; align-items:center; gap:12px; }
+  .horizontal-etiqueta{ display:flex; flex-direction:column; min-width:0; }
+  .horizontal-etiqueta strong{ font-size:12px; font-weight:800; color:var(--navy); white-space:nowrap; }
+  .horizontal-etiqueta span{ font-size:11px; font-weight:600; color:var(--text-muted); }
+  /* La barra crece hasta el ancho disponible menos el espacio de la cantidad. */
+  .horizontal-track{ display:flex; align-items:center; gap:8px; height:26px; min-width:0; }
+  .horizontal-barra{ height:100%; max-width:calc(100% - 36px); min-width:3px; border-radius:0 6px 6px 0; transition:width .2s ease; }
+  .horizontal-barra.steel{ background:#4A90D9; }
+  .horizontal-barra.neutral{ background:#C7D0D9; }
+  .horizontal-valor{ font-size:14px; font-weight:800; color:var(--navy); flex-shrink:0; }
+
+  /* ---- dona ---- */
+  .dona-contenido{ display:flex; align-items:center; justify-content:center; gap:22px; flex-wrap:wrap; padding-top:6px; }
+  .dona-wrap{ position:relative; width:190px; height:190px; flex-shrink:0; }
+  .dona{ width:100%; height:100%; border-radius:50%; }
+  .dona-porcentaje{
+    position:absolute;
+    transform:translate(-50%, -50%);
+    font-size:11px;
+    font-weight:800;
+    color:#FFFFFF;
+    text-shadow:0 1px 2px rgba(0,0,0,0.25);
+    pointer-events:none;
+  }
+  .dona-centro{
+    position:absolute;
+    inset:0;
     display:flex;
     flex-direction:column;
     align-items:center;
-    width:38px;
-    flex-shrink:0;
+    justify-content:center;
+    width:104px;
+    height:104px;
+    margin:auto;
+    border-radius:50%;
+    background:var(--white);
   }
-  .evolucion-columna-total{
-    font-size:10px;
-    font-weight:800;
-    color:var(--text-muted);
-    margin-bottom:4px;
-  }
-  .evolucion-columna-track{
-    width:100%;
-    height:160px;
-    border-radius:6px;
-    overflow:hidden;
-    display:flex;
-    flex-direction:column-reverse;
-    background:var(--bg);
-  }
-  .evolucion-segmento{ width:100%; }
-  .evolucion-segmento.ok{ background:var(--success); }
-  .evolucion-segmento.warning{ background:var(--orange); }
-  .evolucion-segmento.danger{ background:var(--danger); }
-  .evolucion-segmento.neutral{ background:#C7D0D9; }
-  .evolucion-columna-label{
-    font-size:10px;
-    font-weight:700;
-    color:var(--text-muted);
-    margin-top:6px;
-    white-space:nowrap;
-  }
-
-  .chart-legend{ display:flex; gap:16px; flex-wrap:wrap; margin-top:16px; padding-top:14px; border-top:1px solid var(--border); }
-  .legend-item{ display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; color:var(--text-secondary); }
-  .legend-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .dona-total{ font-size:28px; font-weight:800; line-height:1; }
+  .dona-label{ font-size:10.5px; font-weight:700; color:var(--text-muted); margin-top:3px; text-align:center; max-width:80px; }
+  .dona-leyenda{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+  .dona-leyenda li{ display:flex; align-items:flex-start; gap:8px; font-size:12px; font-weight:700; color:var(--navy); }
+  .dona-leyenda small{ display:block; font-size:11px; font-weight:600; color:var(--text-muted); margin-top:1px; }
+  .legend-dot{ width:9px; height:9px; border-radius:50%; flex-shrink:0; margin-top:3px; }
   .legend-dot.ok{ background:var(--success); }
   .legend-dot.warning{ background:var(--orange); }
   .legend-dot.danger{ background:var(--danger); }
   .legend-dot.neutral{ background:#C7D0D9; }
-
-  /* ---- Estado individual de KPI (barras de estado, altura fija: el
-     color es el único portador de magnitud/estado; el valor real va como
-     etiqueta, nunca se mezclan unidades en una escala numérica) ---- */
-  .chart-individual-panel{ margin-bottom:20px; }
-  .kpi-individual-scroll{ overflow-x:auto; padding-bottom:4px; }
-  .kpi-individual-columnas{
-    display:flex;
-    align-items:flex-end;
-    gap:14px;
-    min-height:190px;
-    min-width:min-content;
-  }
-  .kpi-individual-columna{
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    width:84px;
-    flex-shrink:0;
-    cursor:pointer;
-  }
-  .kpi-individual-valor{
-    font-size:12px;
-    font-weight:800;
-    color:var(--navy);
-    margin-bottom:6px;
-    white-space:nowrap;
-  }
-  .kpi-individual-barra{
-    width:100%;
-    height:100px;
-    border-radius:8px;
-    transition:opacity .15s ease;
-  }
-  .kpi-individual-columna:hover .kpi-individual-barra{ opacity:0.82; }
-  .kpi-individual-barra.ok{ background:var(--success); }
-  .kpi-individual-barra.warning{ background:var(--orange); }
-  .kpi-individual-barra.danger{ background:var(--danger); }
-  .kpi-individual-barra.neutral{ background:#C7D0D9; }
-  .kpi-individual-nombre{
-    font-size:10.5px;
-    font-weight:700;
-    color:var(--text-muted);
-    margin-top:8px;
-    text-align:center;
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    max-width:84px;
-  }
-
-  /* ---- Evidencias por KPI (barras horizontales, SÍ magnitud: el
-     conteo de archivos es la misma unidad para todos los KPI) ---- */
-  .evidencias-rows{ display:flex; flex-direction:column; gap:12px; max-height:360px; overflow-y:auto; padding-right:4px; }
-  .evidencias-row{
-    display:grid;
-    grid-template-columns: 1fr 2.2fr 28px;
-    align-items:center;
-    gap:10px;
-    cursor:pointer;
-  }
-  .evidencias-nombre{
-    font-size:12px;
-    font-weight:700;
-    color:var(--navy);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-  }
-  .evidencias-track{
-    height:14px;
-    border-radius:7px;
-    background:var(--bg);
-    overflow:hidden;
-  }
-  .evidencias-fill{
-    height:100%;
-    min-width:2px;
-    border-radius:7px;
-    background:var(--steel);
-  }
-  .evidencias-conteo{
-    font-size:12px;
-    font-weight:800;
-    color:var(--navy);
-    text-align:right;
-  }
-  .evidencias-conteo.es-cero{ color:var(--text-muted); font-weight:700; }
+  .legend-dot.omision{ background:repeating-linear-gradient(45deg, #8D99AE 0 4px, #C7D0D9 4px 8px); }
 
   /* ---- tabla ---- */
-  .table-card{ margin-bottom:20px; }
   .table-scroll{ overflow-x:auto; }
   table{ width:100%; border-collapse:collapse; min-width:760px; table-layout:fixed; }
   thead th{
     text-align:left;
-    font-size:10.5px;
-    font-weight:800;
-    letter-spacing:0.5px;
-    text-transform:uppercase;
-    color:var(--text-muted);
-    padding:0 12px 10px;
-    border-bottom:1px solid var(--border);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-  }
-  .th-acciones, .td-acciones{ white-space:nowrap; }
-  tbody td{
-    overflow:hidden;
-    padding:13px 12px;
-    font-size:13px;
-    color:var(--navy);
-    border-bottom:1px solid #F1F4F7;
-    vertical-align:middle;
-  }
-  tbody tr:last-child td{ border-bottom:none; }
-  tbody tr{ transition:background .12s ease; }
-  tbody tr:hover{ background:#FAFCFD; }
-
-  .cell-main{ font-weight:700; font-size:13px; color:var(--navy); max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .cell-sub{ font-size:12px; color:var(--text-secondary); font-weight:500; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-
-  .btn-ver{
-    height:28px;
-    padding:0 14px;
-    border-radius:8px;
-    border:1px solid var(--border);
-    background:var(--white);
-    color:var(--steel);
-    font-family:inherit;
     font-size:11.5px;
-    font-weight:800;
-    cursor:pointer;
-    transition:background .15s ease, border-color .15s ease;
+    font-weight:700;
+    color:var(--navy);
+    background:var(--bg);
+    padding:9px 12px;
   }
-  .btn-ver:hover{ background:var(--aqua-soft); border-color:var(--aqua); }
+  thead th:first-child{ border-radius:8px 0 0 8px; }
+  thead th:last-child{ border-radius:0 8px 8px 0; }
+  tbody td{ padding:9px 12px; font-size:12.5px; color:var(--navy); border-bottom:1px solid #F1F4F7; vertical-align:middle; }
+  tbody tr:last-child td{ border-bottom:none; }
+  .fila-navegable{ cursor:pointer; transition:background .12s ease; }
+  .fila-navegable:hover{ background:#FAFCFD; }
+  .celda-codigo{ font-weight:800; }
+  .celda-texto{ font-size:12px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .celda-valor{ font-weight:700; white-space:nowrap; }
+  .nombre-kpi{
+    border:none;
+    background:none;
+    padding:0;
+    text-align:left;
+    font-family:inherit;
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--navy);
+    line-height:1.35;
+    cursor:pointer;
+    word-break:break-word;
+  }
+  .nombre-kpi:hover{ color:var(--steel); text-decoration:underline; }
+  .cumplimiento-celda{ display:flex; align-items:center; gap:10px; }
+  .mini-track{ flex:1; height:7px; border-radius:4px; background:#EEF2F5; overflow:hidden; min-width:50px; }
+  .mini-barra{ display:block; height:100%; border-radius:4px; }
+  .mini-barra.ok{ background:var(--success); }
+  .mini-barra.warning{ background:var(--orange); }
+  .mini-barra.danger{ background:var(--danger); }
+  .mini-barra.neutral{ background:#C7D0D9; }
+  .evidencias-celda{ display:inline-flex; align-items:center; gap:5px; font-weight:700; color:var(--text-secondary); }
+  .evidencias-celda.es-cero{ color:var(--text-muted); font-weight:600; }
 
   .badge{
     display:inline-flex;
     align-items:center;
     gap:5px;
     font-size:11px;
-    font-weight:800;
-    padding:4px 10px;
-    border-radius:20px;
+    font-weight:700;
+    padding:3px 9px;
+    border-radius:6px;
     white-space:nowrap;
     max-width:100%;
   }
@@ -1277,115 +1129,49 @@ onMounted(() => {
   .badge.warning{ background:rgba(244,162,97,0.16); color:#B9701E; }
   .badge.danger{ background:rgba(231,111,81,0.12); color:var(--danger); }
   .badge.neutral{ background:rgba(154,168,184,0.16); color:var(--text-muted); }
-  .badge-dot{ width:6px; height:6px; border-radius:50%; background:currentColor; flex-shrink:0; }
+  .badge.omision{ background:rgba(141,153,174,0.20); color:#55657A; border:1px dashed #8D99AE; }
+  .badge-dot{ width:7px; height:7px; border-radius:50%; background:currentColor; flex-shrink:0; }
 
-  /* ---- alertas / mediciones ---- */
-  .bottom-grid{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:18px;
-  }
-
-  .alert-item{
-    display:flex;
-    gap:12px;
-    padding:12px 4px;
-    border-bottom:1px solid #F1F4F7;
-    cursor:pointer;
-  }
-  .alert-item:last-child{ border-bottom:none; padding-bottom:0; }
-  .alert-icon{
-    width:32px; height:32px; border-radius:9px;
-    display:flex; align-items:center; justify-content:center;
-    flex-shrink:0;
-  }
-  .alert-icon.danger{ background:rgba(231,111,81,0.12); color:var(--danger); }
-  .alert-icon.warning{ background:rgba(244,162,97,0.16); color:#B9701E; }
-  .alert-icon.neutral{ background:rgba(69,123,157,0.10); color:var(--steel); }
-  .alert-body{ min-width:0; }
-  .alert-tipo{
-    display:block;
-    font-size:10px;
-    font-weight:800;
-    letter-spacing:0.3px;
-    text-transform:uppercase;
-    color:var(--text-muted);
-    margin-bottom:2px;
-  }
-  .alert-text{ font-size:12.5px; font-weight:600; color:var(--navy); line-height:1.4; }
-  .alert-time{ font-size:11px; color:var(--text-muted); font-weight:500; margin-top:3px; }
-
-  .meas-item{
-    display:flex;
-    align-items:flex-start;
-    justify-content:space-between;
-    gap:12px;
-    padding:12px 4px;
-    border-bottom:1px solid #F1F4F7;
-    cursor:pointer;
-  }
-  .meas-item:last-child{ border-bottom:none; padding-bottom:0; }
-  .meas-main{ min-width:0; flex:1; }
-  .meas-top{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .meas-name{ font-size:12.5px; font-weight:800; color:var(--navy); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; }
-  .meas-sub{ font-size:11px; color:var(--text-muted); font-weight:500; margin-top:2px; }
-  .meas-valores{ display:flex; gap:14px; flex-wrap:wrap; margin-top:6px; font-size:11.5px; color:var(--text-secondary); font-weight:600; }
-  .meas-valores strong{ color:var(--navy); font-weight:800; }
-
-  .source-chip{
-    display:inline-flex;
-    align-items:center;
-    padding:3px 8px;
+  /* ---- paginación ---- */
+  .paginador{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:12px; font-size:12px; font-weight:600; color:var(--text-secondary); }
+  .paginador-controles{ display:flex; align-items:center; gap:10px; }
+  .paginador button{
+    height:30px;
+    padding:0 12px;
     border-radius:8px;
-    font-size:10px;
-    font-weight:800;
-    flex-shrink:0;
-  }
-  .source-chip.manual{ background:rgba(69,123,157,0.12); color:var(--steel); }
-  .source-chip.automatico{ background:rgba(244,162,97,0.16); color:#B9701E; }
-
-  .link-see-all{
-    display:block;
-    text-align:center;
+    border:1px solid var(--border);
+    background:var(--white);
+    font-family:inherit;
     font-size:12px;
     font-weight:700;
-    color:var(--steel);
-    padding-top:14px;
+    color:var(--navy);
     cursor:pointer;
   }
-  .link-see-all:hover{ color:var(--navy); }
+  .paginador button:hover:not(:disabled){ background:var(--aqua-soft); }
+  .paginador button:disabled{ opacity:.45; cursor:not-allowed; }
+  .paginador--mini{ justify-content:center; margin-top:8px; }
+  .paginador--mini button{ width:30px; padding:0; font-size:15px; }
 
-.dashboard-message,
-.dashboard-error {
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.dashboard-message {
-  background: var(--aqua-soft);
-  color: var(--steel);
-}
-
-.dashboard-error {
-  background: rgba(231, 111, 81, 0.12);
-  color: var(--danger);
-}
+  .dashboard-message,
+  .dashboard-error{ margin-bottom:12px; padding:12px 14px; border-radius:var(--radius-sm); font-size:13px; font-weight:600; }
+  .dashboard-message{ background:var(--aqua-soft); color:var(--steel); }
+  .dashboard-error{ background:rgba(231,111,81,0.12); color:var(--danger); }
 
   /* ===================== RESPONSIVE ===================== */
-  @media (max-width:1180px){
-    .charts-grid{ grid-template-columns:1fr; }
+  @media (max-width:1280px){
+    .tarjetas{ grid-template-columns:repeat(3, minmax(0, 1fr)); }
   }
-  @media (max-width:900px){
-    .summary-grid{ grid-template-columns:repeat(2, 1fr); }
-    .bottom-grid{ grid-template-columns:1fr; }
+  @media (max-width:1100px){
+    .fila-graficos,
+    .fila-graficos--principal{ grid-template-columns:1fr; }
   }
-  @media (max-width:640px){
-    .summary-grid{ grid-template-columns:1fr; }
-    .plan-row-name{ max-width:55%; }
-    .evidencias-row{ grid-template-columns: 90px 1fr 24px; }
-    .evidencias-nombre{ font-size:11px; }
+  @media (max-width:760px){
+    .tarjetas{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .encabezado-filtros{ flex-wrap:wrap; }
+    .mas-filtros-panel{ right:auto; left:0; }
+  }
+  @media (max-width:480px){
+    .tarjetas{ grid-template-columns:1fr; }
+    .area--conteo, .etiquetas--conteo{ gap:14px; }
   }
 </style>

@@ -12,6 +12,7 @@ nombres anteriores.
 from datetime import date
 from decimal import Decimal
 
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -45,6 +46,11 @@ def crear_usuario(username, rol_nombre, is_active=True):
 class CuatroRolesLoginTests(APITestCase):
     """1. Los 4 roles pueden iniciar sesión cuando sus cuentas están
     activas (y NO pueden cuando están inactivas)."""
+
+    def setUp(self):
+        # Etapa 2 (B2): los límites de intentos guardan contadores en caché;
+        # se limpian para que cada prueba empiece sin intentos previos.
+        cache.clear()
 
     def test_los_cuatro_roles_inician_sesion_activos(self):
         for rol_nombre in (
@@ -466,6 +472,10 @@ class NotificarAdministradoresSistemaTests(APITestCase):
     usuarios.0003_adaptar_roles_bloque2_hernan."""
 
     def setUp(self):
+        # Etapa 2 (B2): todas las pruebas de esta clase usan el mismo
+        # identificador; sin limpiar la caché, el límite por identificador
+        # respondería 429 a partir de la cuarta.
+        cache.clear()
         self.admin_sistema_activo_1 = crear_usuario('admin_sistema_notif_1', ROL_ADMIN_SISTEMA)
         self.admin_sistema_activo_2 = crear_usuario('admin_sistema_notif_2', ROL_ADMIN_SISTEMA)
         self.admin_sistema_inactivo = crear_usuario(

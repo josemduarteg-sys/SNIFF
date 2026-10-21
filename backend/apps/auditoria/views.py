@@ -16,6 +16,19 @@ class BitacoraViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = BitacoraSerializer
     permission_classes = [EsAdministradorSistema]
 
+    def get_queryset(self):
+        # Etapa 4 (M7): ?origen=sistema | usuario.
+        queryset = super().get_queryset()
+        origen = self.request.query_params.get('origen')
+
+        if origen == Bitacora.ORIGEN_SISTEMA:
+            return queryset.filter(usuario__isnull=True)
+
+        if origen == Bitacora.ORIGEN_USUARIO:
+            return queryset.filter(usuario__isnull=False)
+
+        return queryset
+
 
 class NotificacionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = NotificacionSerializer

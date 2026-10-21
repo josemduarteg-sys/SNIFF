@@ -30,6 +30,12 @@ const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar objetivo general' : 'Crear objetivo general'
 })
 
+// Etapa 1 (A1): con descendencia, el backend rechaza el traslado
+// (ObjetivoGeneralSerializer.validate); acá solo se refleja.
+const planBloqueado = computed(() => {
+  return esEdicion.value && props.objetivo?.puede_cambiar_plan_estrategico === false
+})
+
 const planesDisponibles = computed(() => {
   const planActualId = props.objetivo?.plan_estrategico
 
@@ -142,7 +148,11 @@ function cancelar() {
           placeholder="Seleccionar plan estratégico"
           placeholder-busqueda="Escribí el título del plan..."
           mensaje-vacio="No hay planes estratégicos En uso disponibles."
+          :disabled="planBloqueado"
         />
+        <small v-if="planBloqueado" class="field-hint">
+          No se puede cambiar el Plan estratégico: el objetivo ya tiene objetivos específicos, KPI o ponderaciones asociados.
+        </small>
       </label>
 
       <label class="field field-full">
@@ -246,6 +256,12 @@ function cancelar() {
 .field textarea:focus {
   border-color: #a8dadc;
   box-shadow: 0 0 0 4px rgba(168, 218, 220, 0.25);
+}
+
+.field-hint {
+  color: #9aa8b8;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .help-box {

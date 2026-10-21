@@ -13,7 +13,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['guardar', 'cancelar'])
+const emit = defineEmits(['guardar', 'completar-vigencia', 'cancelar'])
 
 const estado = reactive({
   plan_estrategico: '',
@@ -30,7 +30,23 @@ const esEdicion = computed(() => Boolean(props.planAnual?.id))
 // acción Editar en ese caso; este disabled es un resguardo defensivo.
 const esEnUso = computed(() => props.planAnual?.estado === 'en_uso')
 
+// Etapa 1 (M9): en Borrador, con objetivos específicos o ponderaciones
+// anuales, el backend rechaza cambiar el Plan estratégico.
+const planEstrategicoBloqueado = computed(() => {
+  return esEnUso.value || (esEdicion.value && props.planAnual?.puede_cambiar_plan_estrategico === false)
+})
+
+// Etapa 1 (M9): plan anual antiguo En uso sin fechas. Solo se habilitan
+// las fechas, por única vez (CompletarVigenciaPlanAnualSerializer).
+const modoCompletarVigencia = computed(() => {
+  return esEnUso.value && props.planAnual?.puede_completar_vigencia === true
+})
+
+const fechasBloqueadas = computed(() => esEnUso.value && !modoCompletarVigencia.value)
+
 const tituloBoton = computed(() => {
+  if (modoCompletarVigencia.value) return 'Guardar vigencia'
+
   return esEdicion.value ? 'Actualizar plan anual' : 'Crear plan anual'
 })
 
@@ -71,7 +87,7 @@ function validarFormulario() {
   // validación equivalente y autoritativa en backend:
   // PlanAnualSerializer.validate). En edición, mientras el plan sigue en
   // Borrador, también se revalidan si se tocan.
-  if (!esEdicion.value || !esEnUso.value) {
+  if (!esEdicion.value || !esEnUso.value || modoCompletarVigencia.value) {
     if (!estado.fecha_inicio) {
       estado.error = 'Ingresá la fecha de inicio del plan anual.'
       return false
@@ -103,6 +119,14 @@ function validarFormulario() {
 
 function guardar() {
   if (!validarFormulario()) {
+    return
+  }
+
+  if (modoCompletarVigencia.value) {
+    emit('completar-vigencia', {
+      fecha_inicio: estado.fecha_inicio,
+      fecha_fin: estado.fecha_fin,
+    })
     return
   }
 
@@ -144,7 +168,7 @@ function cancelar() {
           placeholder="Seleccionar plan estratégico"
           placeholder-busqueda="Escribí el título del plan..."
           mensaje-vacio="No hay planes estratégicos En uso disponibles."
-          :disabled="esEnUso"
+          :disabled="planEstrategicoBloqueado"
         />
       </label>
 
@@ -167,7 +191,7 @@ function cancelar() {
         <input
           v-model="estado.fecha_inicio"
           type="date"
-          :disabled="esEnUso"
+          :disabled="fechasBloqueadas"
         />
       </label>
 
@@ -177,11 +201,16 @@ function cancelar() {
         <input
           v-model="estado.fecha_fin"
           type="date"
-          :disabled="esEnUso"
+          :disabled="fechasBloqueadas"
         />
 
         <small class="field-hint">Ambas fechas deben pertenecer al año seleccionado.</small>
       </label>
+
+      <small v-if="modoCompletarVigencia" class="field-hint field-full">
+        Las fechas solo pueden registrarse una vez. Después de guardarlas quedarán bloqueadas
+        mientras el plan anual esté En uso, y no pueden dejar fuera periodos que ya tengan mediciones.
+      </small>
     </div>
 
     <div class="form-actions">

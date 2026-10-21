@@ -1,4 +1,5 @@
 import api from './api'
+import { limpiarSesion } from './sesion'
 
 export async function login(username, password) {
     const response = await api.post('auth/login/', {
@@ -33,11 +34,19 @@ export async function obtenerUsuarioActual() {
     return response.data
 }
 
+// Etapa 4 (M7): deja constancia del cierre de sesión explícito en la
+// bitácora. Si falla (sin red, token ya vencido), se cierra la sesión igual.
+export async function registrarCierreSesion() {
+    try {
+        await api.post('auth/logout/')
+    } catch {
+        // El cierre local no depende del servidor.
+    }
+}
+
 export function logout() {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    localStorage.removeItem('debe_cambiar_password')
-    localStorage.removeItem('rol_nombre')
+    // Etapa 2 (A3): mismas claves que limpia la expiración automática.
+    limpiarSesion(localStorage)
 }
 
 export function estaAutenticado() {

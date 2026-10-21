@@ -658,12 +658,19 @@ class VentanaRegistroTests(MedicionTestsBase):
 
 
 class CierreAutomaticoTests(MedicionTestsBase):
-    """Bloque 4 - casos 14 a 20: cierre automatico en 0.00."""
+    """Bloque 4 - casos 14 a 20: cierre automatico por falta de registro.
+
+    Etapa 3 (C3): el cierre ya no guarda 0.00 sino "Sin registro"
+    (valor_resultado NULL). Ajuste funcional adoptado durante la revisión
+    del sistema; los casos 15 a 20 (trazabilidad, fechas, idempotencia,
+    orden, inmutabilidad) no cambian."""
 
     NOMBRE_USUARIO = 'admin_cierre'
 
-    # 14. Dia +6 sin medicion -> crea 0.00.
-    def test_dia_mas_6_sin_medicion_crea_cero(self):
+    # 14. Dia +6 sin medicion -> crea una medición "Sin registro".
+    # Antes esperaba 0.00; cambia porque una omisión ya no se representa
+    # con un número (Etapa 3, C3).
+    def test_dia_mas_6_sin_medicion_crea_sin_registro(self):
         kpi = self.crear_kpi('Mensual')
 
         with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 2, 6)):
@@ -671,7 +678,9 @@ class CierreAutomaticoTests(MedicionTestsBase):
 
         self.assertEqual(resultado['cierres_creados'], 1)
         medicion = Medicion.objects.get(indicador=kpi)
-        self.assertEqual(medicion.valor_resultado, Decimal('0.0000'))
+        self.assertIsNone(medicion.valor_resultado)
+        self.assertTrue(medicion.sin_registro)
+        self.assertEqual(medicion.estado_cumplimiento.nombre, 'Sin registro')
 
     # 15. cierre_automatico=True.
     def test_cierre_automatico_true(self):
@@ -922,11 +931,12 @@ def registrar_medicion(client, kpi, valor, fecha):
 
 
 def alertas_cumplimiento_pendientes(indicador):
-    """Alertas 'pendiente' del KPI que NO son de tipo periodo vencido —
-    la familia que gestiona `actualizar_alerta_cumplimiento_kpi`."""
+    """Alertas 'pendiente' del KPI que NO son de registro (periodo vencido
+    o, desde la Etapa 3, periodo sin registro) — la familia que gestiona
+    `actualizar_alerta_cumplimiento_kpi`."""
     return Alerta.objects.filter(
         indicador=indicador, estado_alerta='pendiente',
-    ).exclude(tipo_alerta='Periodo vencido sin medición')
+    ).exclude(tipo_alerta__in=('Periodo vencido sin medición', 'Periodo sin registro'))
 
 
 class PromedioAcumuladoTests(MedicionTestsBase):
@@ -962,9 +972,11 @@ class PromedioAcumuladoTests(MedicionTestsBase):
         registrar_medicion(self.client, kpi, '40', date(2027, 3, 31))
         self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('60.00'))
 
-    # 5. 80 + 60 + 0 (cierre automático) -> promedio 46.67.
-    def test_incluye_cierre_automatico_en_cero(self):
-        kpi = self.crear_kpi('Mensual', nombre='KPI con cierre 0')
+    # 5. 80 + 60 + omisión -> promedio 70.00. Antes esperaba 46.67 (la
+    # omisión contaba como 0.00); cambia en la Etapa 3 (C3): el promedio
+    # usa solo resultados reales y la omisión se cuenta aparte.
+    def test_excluye_omision_del_promedio(self):
+        kpi = self.crear_kpi('Mensual', nombre='KPI con omisión')
         registrar_medicion(self.client, kpi, '80', date(2027, 1, 31))
         registrar_medicion(self.client, kpi, '60', date(2027, 2, 28))
 
@@ -972,11 +984,12 @@ class PromedioAcumuladoTests(MedicionTestsBase):
             resultado = cerrar_mediciones_vencidas()
 
         self.assertEqual(resultado['cierres_creados'], 1)
-        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('46.67'))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('70.00'))
 
-    # 6. El cierre automático participa exactamente igual que uno manual
-    # (mismo resultado que si el usuario hubiera registrado 0 a mano).
-    def test_cierre_automatico_participa_igual_que_manual(self):
+    # 6. Antes: "el cierre automático participa igual que un 0 manual".
+    # Etapa 3 (C3) invierte esa regla: un 0 registrado es un resultado real
+    # y entra al promedio; la omisión no.
+    def test_omision_ya_no_equivale_a_cero_manual(self):
         kpi_auto = self.crear_kpi('Mensual', nombre='KPI cierre auto')
         registrar_medicion(self.client, kpi_auto, '80', date(2027, 1, 31))
         registrar_medicion(self.client, kpi_auto, '60', date(2027, 2, 28))
@@ -989,10 +1002,8 @@ class PromedioAcumuladoTests(MedicionTestsBase):
         registrar_medicion(self.client, kpi_manual, '60', date(2027, 2, 28))
         registrar_medicion(self.client, kpi_manual, '0', date(2027, 3, 31))
 
-        self.assertEqual(
-            calcular_promedio_acumulado_kpi(kpi_auto),
-            calcular_promedio_acumulado_kpi(kpi_manual),
-        )
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi_auto), Decimal('70.00'))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi_manual), Decimal('46.67'))
 
     # 7. No mezcla mediciones de otro KPI.
     def test_no_mezcla_con_otro_kpi(self):
@@ -1227,25 +1238,33 @@ class AlertasAcumuladasTests(MedicionTestsBase):
         self.assertEqual(alertas_cumplimiento_pendientes(kpi).count(), 0)
         self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('95.00'))
 
-    # 22. Cierre automático en 0.00 recalcula promedio y alerta igual que
-    # una medición manual.
-    def test_cierre_automatico_recalcula_promedio_y_alerta(self):
+    # 22. Antes: el cierre en 0.00 bajaba el promedio a 37.50 y cambiaba la
+    # alerta de cumplimiento a 'KPI Incumplido'. Etapa 3 (C3): la omisión no
+    # es un resultado, así que el promedio y la alerta de cumplimiento no
+    # cambian; el incumplimiento del registro queda en su propia alerta
+    # 'Periodo sin registro'.
+    def test_omision_no_altera_promedio_ni_alerta_de_cumplimiento(self):
         kpi = self.crear_kpi('Mensual', nombre='KPI cierre auto alerta')
         registrar_medicion(self.client, kpi, '75', date(2027, 1, 31))
-        self.assertEqual(alertas_cumplimiento_pendientes(kpi).first().tipo_alerta, 'KPI En riesgo')
+        alerta_cumplimiento = alertas_cumplimiento_pendientes(kpi).get()
+        self.assertEqual(alerta_cumplimiento.tipo_alerta, 'KPI En riesgo')
 
         # Solo el periodo de febrero vence su ventana a esta fecha (el de
         # marzo todavía no) para cerrar exactamente UN periodo automático.
         with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 3, 6)):
             cerrar_mediciones_vencidas()
 
-        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('37.50'))
+        self.assertEqual(calcular_promedio_acumulado_kpi(kpi), Decimal('75.00'))
         pendientes = alertas_cumplimiento_pendientes(kpi)
-        self.assertEqual(pendientes.count(), 1)
-        self.assertEqual(pendientes.first().tipo_alerta, 'KPI Incumplido')
+        self.assertEqual(list(pendientes), [alerta_cumplimiento])
+        self.assertNotEqual(
+            pendientes.get().medicion_id,
+            Medicion.objects.get(indicador=kpi, cierre_automatico=True).id,
+        )
 
-        medicion_automatica = Medicion.objects.get(indicador=kpi, cierre_automatico=True)
-        self.assertEqual(pendientes.first().medicion_id, medicion_automatica.id)
+        sin_registro = Alerta.objects.get(indicador=kpi, tipo_alerta='Periodo sin registro')
+        self.assertEqual(sin_registro.estado_alerta, 'pendiente')
+        self.assertTrue(sin_registro.medicion.sin_registro)
 
     # 23. La alerta de 'Periodo vencido sin medición' sigue siendo
     # independiente de la alerta de cumplimiento acumulado.

@@ -85,6 +85,21 @@ class EsAdministradorSistema(BasePermission):
         return es_administrador_sistema(request.user)
 
 
+class PermisoIntegracionesSoloLectura(BasePermission):
+    """Etapa 2 (auditoría A4): el módulo de integraciones (CSV / Data
+    Warehouse) está fuera del alcance entregado y no tiene interfaz. Se
+    deja en la alternativa más restrictiva que no rompe dependencias:
+    consulta solo para Administrador del sistema (configuración técnica) y
+    ninguna escritura para nadie — los ViewSets además limitan
+    http_method_names a lectura. Habilitar escrituras requiere una
+    decisión explícita del cliente."""
+
+    message = 'El módulo de integraciones no está habilitado para este perfil.'
+
+    def has_permission(self, request, view):
+        return request.method in SAFE_METHODS and es_administrador_sistema(request.user)
+
+
 class PermisoPlaneacion(BasePermission):
     """Planeación (Área, planes estratégicos/anuales, objetivos): consulta
     libre para cualquier autenticado; crear/editar exclusivo de
@@ -114,7 +129,7 @@ class PermisoEstrategiaObjetivo(PermisoPlaneacion):
     En uso, todo congelado Cerrado) ya los aplica el serializer para
     cualquier rol — ver apps/estrategia/serializers.py."""
 
-    ACCIONES_SOLO_ADMIN_PLANIFICACION = ('poner_en_uso', 'cerrar')
+    ACCIONES_SOLO_ADMIN_PLANIFICACION = ('poner_en_uso', 'cerrar', 'completar_vigencia')
 
     def has_permission(self, request, view):
         if getattr(view, 'action', None) in self.ACCIONES_SOLO_ADMIN_PLANIFICACION:
@@ -149,7 +164,11 @@ class PermisoMedicion(BasePermission):
     operación más sensible del recurso — igual que ya pasaba antes del
     Bloque 2 (DELETE quedaba reservado al rol "admin", más restrictivo
     que crear/editar); acá eso significa que ni siquiera Ejecutor, que sí
-    puede crear/editar, puede borrar."""
+    puede crear/editar, puede borrar.
+
+    Etapa 1 (auditoría M3): MedicionViewSet ya no expone DELETE
+    (http_method_names), así que ninguna medición se borra físicamente; la
+    rama de DELETE de abajo solo decide si el rechazo es 405 o 403."""
 
     message = 'No tenés permisos para registrar o modificar mediciones.'
 
@@ -186,3 +205,34 @@ class PermisoCatalogoSoloAdmin(BasePermission):
             return True
 
         return es_administrador_planificacion(request.user)
+
+
+class PermisoSolicitudAmpliacion(BasePermission):
+    """Etapa 5: solicitudes de días adicionales para registrar mediciones.
+    Solo dos roles participan: el Ejecutor operativo solicita, consulta las
+    suyas y puede retirarlas; el Administrador de planificación consulta
+    todas y las autoriza o rechaza. Administrador del sistema y Usuario de
+    consulta no tienen acceso (ni siquiera de lectura). Qué solicitudes ve
+    cada uno lo filtra el ViewSet."""
+
+    message = 'No tenés permisos para gestionar solicitudes de días adicionales.'
+
+    ACCIONES_EJECUTOR = ('create', 'retirar')
+    ACCIONES_ADMIN_PLANIFICACION = ('autorizar', 'rechazar')
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        accion = getattr(view, 'action', None)
+
+        if accion in self.ACCIONES_EJECUTOR:
+            return es_ejecutor_operativo(request.user)
+
+        if accion in self.ACCIONES_ADMIN_PLANIFICACION:
+            return es_administrador_planificacion(request.user)
+
+        if request.method in SAFE_METHODS:
+            return es_ejecutor_operativo(request.user) or es_administrador_planificacion(request.user)
+
+        return False

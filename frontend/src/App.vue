@@ -5,7 +5,10 @@ import {
   estaAutenticado,
   logout,
   obtenerUsuarioActual,
+  registrarCierreSesion,
 } from './services/authService'
+import { registrarAlExpirarSesion } from './services/api'
+import { esRutaRetornoSegura } from './services/sesion'
 
 const router = useRouter()
 
@@ -36,10 +39,39 @@ async function cargarSesion() {
 
 function manejarLoginExitoso(usuarioAutenticado) {
   usuario.value = usuarioAutenticado
-  router.push(usuarioAutenticado?.debe_cambiar_password ? '/cambio-password-obligatorio' : '/dashboard')
+
+  if (usuarioAutenticado?.debe_cambiar_password) {
+    router.push('/cambio-password-obligatorio')
+    return
+  }
+
+  // Etapa 2 (A3): vuelve a la pantalla que estaba abierta cuando venció la
+  // sesión. Los permisos de esa ruta los vuelve a revisar el guard.
+  const retorno = router.currentRoute.value.query.redirect
+  router.push(esRutaRetornoSegura(retorno) ? retorno : '/dashboard')
 }
 
-function manejarLogout() {
+// Etapa 2 (A3): la sesión venció y no pudo renovarse (ver services/sesion.js).
+registrarAlExpirarSesion(() => {
+  usuario.value = null
+
+  const rutaActual = router.currentRoute.value
+
+  if (rutaActual.meta?.public) {
+    return
+  }
+
+  const query = { sesion: 'expirada' }
+
+  if (esRutaRetornoSegura(rutaActual.fullPath)) {
+    query.redirect = rutaActual.fullPath
+  }
+
+  router.replace({ path: '/login', query })
+})
+
+async function manejarLogout() {
+  await registrarCierreSesion()
   logout()
   usuario.value = null
   router.push('/login')

@@ -134,11 +134,10 @@ const ponderacionPendienteAmbito = computed(() => {
 
 // Objetivos específicos reales (el backend ya excluye los "KPI directo"
 // generados internamente) que pertenecen a la combinación elegida de
-// Plan anual + Objetivo general, más una opción explícita para no elegir
-// ninguno. Es opcional: si se deja en "Sin objetivo específico", el
-// backend crea/reutiliza el objetivo específico implícito de esa misma
-// combinación (Bloque 3) — esta opción también permite volver a un KPI
-// directo después de haber elegido uno real.
+// Plan anual + Objetivo general. Ya no se muestran (están deshabilitados):
+// se usan solo para saber si el objetivo específico real de un KPI que se
+// edita sigue perteneciendo a la combinación elegida; si no, el KPI pasa al
+// objetivo implícito (Bloque 3) al guardarse.
 const OPCION_SIN_OBJETIVO_ESPECIFICO = {
   id: '',
   texto: 'Sin objetivo específico (KPI directo del objetivo general)',
@@ -380,18 +379,10 @@ function cancelar() {
         />
       </label>
 
-      <label class="field field-full">
-        <span>Objetivo específico (opcional)</span>
-
-        <SelectorBuscable
-          v-model="estado.objetivo_especifico"
-          :opciones="opcionesObjetivosEspecificos"
-          placeholder="Sin objetivo específico (KPI directo del objetivo general)"
-          placeholder-busqueda="Escribí el texto del objetivo..."
-          mensaje-vacio="No se encontraron objetivos específicos con ese texto."
-          :disabled="!puedeEditar || !estado.objetivo_general"
-        />
-      </label>
+      <!-- Objetivos específicos deshabilitados (pedido de Hernán, 06/10/2026):
+           sin selector. Un KPI nuevo queda vinculado al objetivo implícito de
+           su plan anual y objetivo general; uno ya vinculado a un objetivo
+           específico real lo conserva al editarse (estado.objetivo_especifico). -->
 
       <label class="field field-full">
         <span>Nombre del KPI</span>

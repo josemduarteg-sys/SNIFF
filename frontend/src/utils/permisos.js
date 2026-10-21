@@ -86,6 +86,20 @@ export function puedeRegistrarMedicion(usuario) {
   return esEjecutorOperativo(usuario)
 }
 
+// Etapa 5: días adicionales. Solicita el Ejecutor operativo; resuelve el
+// Administrador de planificación. Los demás roles no ven esta gestión.
+export function puedeSolicitarAmpliacion(usuario) {
+  return esEjecutorOperativo(usuario)
+}
+
+export function puedeResolverAmpliacion(usuario) {
+  return esAdministradorPlanificacion(usuario)
+}
+
+export function puedeVerSolicitudesAmpliacion(usuario) {
+  return esEjecutorOperativo(usuario) || esAdministradorPlanificacion(usuario)
+}
+
 export function puedeEditarMedicion(usuario, medicion = null) {
   if (!esEjecutorOperativo(usuario)) {
     return false

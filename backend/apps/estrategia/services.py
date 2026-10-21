@@ -51,6 +51,64 @@ def objetivo_especifico_esta_bloqueado(objetivo_especifico):
     return plan_anual_esta_bloqueado(objetivo_especifico.plan_anual)
 
 
+def objetivo_general_tiene_dependencias(objetivo_general):
+    """Etapa 1 (auditoría A1): True si el ObjetivoGeneral ya tiene
+    registros que dependen de su Plan estratégico actual — objetivos
+    específicos (reales o implícitos de KPI directo, que a su vez cuelgan
+    de un Plan anual de ESE plan estratégico) o ponderaciones anuales. Con
+    dependencias, trasladarlo a otro Plan estratégico dejaría esa
+    descendencia apuntando a planes anuales de otra estrategia."""
+    if objetivo_general is None or objetivo_general.pk is None:
+        return False
+
+    return (
+        objetivo_general.objetivos_especificos.exists()
+        or objetivo_general.ponderaciones_anuales.exists()
+    )
+
+
+def objetivo_especifico_tiene_dependencias(objetivo_especifico):
+    """Etapa 1 (auditoría A2): True si el ObjetivoEspecifico ya tiene KPI
+    asociados (en cualquier estado, incluidos los anulados: sus mediciones
+    históricas siguen colgando de él). Con KPI, cambiarle el Plan anual o
+    el Objetivo general movería esos KPI y sus mediciones a otro año u
+    objetivo."""
+    if objetivo_especifico is None or objetivo_especifico.pk is None:
+        return False
+
+    return objetivo_especifico.indicadores.exists()
+
+
+def plan_anual_tiene_dependencias(plan_anual):
+    """Etapa 1 (auditoría M9, parte de integridad): True si el PlanAnual ya
+    tiene objetivos específicos o ponderaciones anuales. Con dependencias,
+    trasladarlo a otro Plan estratégico rompería la coherencia con los
+    objetivos generales de su estrategia original."""
+    if plan_anual is None or plan_anual.pk is None:
+        return False
+
+    return (
+        plan_anual.objetivos_especificos.exists()
+        or plan_anual.ponderaciones_objetivos_generales.exists()
+    )
+
+
+def puede_completar_vigencia_plan_anual(plan_anual):
+    """Etapa 1 (auditoría M9): True si el PlanAnual es uno de los creados
+    antes del Bloque 1 que quedó En uso sin fechas de vigencia. Solo esos
+    admiten el completado único de fechas; Borrador ya las edita por la vía
+    normal y Cerrado (propio o del Plan estratégico) es inmutable."""
+    if plan_anual is None:
+        return False
+
+    return (
+        plan_anual.esta_en_uso()
+        and not plan_anual_esta_bloqueado(plan_anual)
+        and plan_anual.fecha_inicio is None
+        and plan_anual.fecha_fin is None
+    )
+
+
 TEXTO_OBJETIVO_ESPECIFICO_DIRECTO = 'KPI directo del objetivo general'
 """Único lugar donde vive este literal (Bloque 3, KPI directo): lo usa
 tanto la creación/reutilización del objetivo específico implícito como

@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import { useRoute } from 'vue-router'
 import sniffLogo from '../assets/images/sniff-logo.png'
 import {
   login,
@@ -10,7 +11,21 @@ import {
 
 const emit = defineEmits(['login-success'])
 
+const route = useRoute()
+
 const vista = ref('login')
+
+// Etapa 2 (A3): aviso cuando se llega acá porque la sesión venció.
+const sesionExpirada = ref(route.query.sesion === 'expirada')
+
+// Etapa 2 (B2): 429 = demasiados intentos; el backend ya trae el mensaje.
+function mensajeLimiteIntentos(e) {
+  if (e.response?.status === 429) {
+    return e.response.data?.detail || 'Demasiados intentos. Esperá unos minutos e intentá de nuevo.'
+  }
+
+  return ''
+}
 
 const username = ref('')
 const password = ref('')
@@ -38,10 +53,11 @@ async function iniciarSesion() {
     await login(username.value, password.value)
     const usuario = await obtenerUsuarioActual()
 
+    sesionExpirada.value = false
     emit('login-success', usuario)
   } catch (e) {
     logout()
-    error.value = 'Usuario o contraseña incorrectos.'
+    error.value = mensajeLimiteIntentos(e) || 'Usuario o contraseña incorrectos.'
   } finally {
     cargando.value = false
   }
@@ -88,6 +104,7 @@ async function enviarSolicitudRecuperacion() {
     motivoRecuperar.value = ''
   } catch (e) {
     errorRecuperar.value =
+      mensajeLimiteIntentos(e) ||
       'No se pudo enviar la solicitud. Intenta nuevamente o comunícate con administración.'
   } finally {
     enviandoRecuperar.value = false
@@ -221,6 +238,10 @@ async function enviarSolicitudRecuperacion() {
 
           <p v-if="error" class="error">
             {{ error }}
+          </p>
+
+          <p v-else-if="sesionExpirada" class="success">
+            Tu sesión expiró. Iniciá sesión nuevamente para continuar.
           </p>
 
           <button type="submit" class="btn-primary" :disabled="cargando">

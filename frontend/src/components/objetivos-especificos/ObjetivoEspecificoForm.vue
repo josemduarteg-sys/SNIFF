@@ -28,6 +28,12 @@ const estado = reactive({
 
 const esEdicion = computed(() => Boolean(props.objetivo?.id))
 
+// Etapa 1 (A2): con KPI asociados, el backend rechaza el traslado
+// (ObjetivoEspecificoSerializer.validate); acá solo se refleja.
+const relacionesBloqueadas = computed(() => {
+  return esEdicion.value && props.objetivo?.puede_cambiar_relaciones === false
+})
+
 const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar objetivo específico' : 'Crear objetivo específico'
 })
@@ -143,6 +149,7 @@ function cancelar() {
           placeholder="Seleccionar plan anual"
           placeholder-busqueda="Escribí el plan o el año..."
           mensaje-vacio="No hay planes anuales En uso disponibles."
+          :disabled="relacionesBloqueadas"
         />
       </label>
 
@@ -155,8 +162,11 @@ function cancelar() {
           placeholder="Seleccionar objetivo general"
           placeholder-busqueda="Escribí el texto del objetivo..."
           mensaje-vacio="Seleccioná primero un plan anual."
-          :disabled="!estado.plan_anual"
+          :disabled="!estado.plan_anual || relacionesBloqueadas"
         />
+        <small v-if="relacionesBloqueadas" class="field-hint">
+          No se puede cambiar el plan anual ni el objetivo general: el objetivo específico ya tiene KPI asociados.
+        </small>
       </label>
 
       <label class="field field-full">
@@ -253,6 +263,12 @@ function cancelar() {
 .field textarea:focus {
   border-color: #a8dadc;
   box-shadow: 0 0 0 4px rgba(168, 218, 220, 0.25);
+}
+
+.field-hint {
+  color: #9aa8b8;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .help-box {

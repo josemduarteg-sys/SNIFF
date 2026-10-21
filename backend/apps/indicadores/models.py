@@ -526,7 +526,17 @@ class Medicion(models.Model):
     fecha_medicion = models.DateField(
         help_text='Fecha de cierre del periodo medido (no la fecha en que se registró).'
     )
-    valor_resultado = models.DecimalField(max_digits=14, decimal_places=4)
+    # Etapa 3 (auditoría C3): NULL significa "Sin registro" — el periodo se
+    # cerró automáticamente porque nadie registró un resultado. Solo un
+    # cierre automático puede quedar sin valor (ver constraint en Meta); un
+    # 0.00 sigue siendo siempre un resultado real.
+    valor_resultado = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        blank=True,
+        null=True,
+        help_text='Resultado real del periodo. Vacío solo en cierres automáticos por falta de registro.',
+    )
     observacion = models.TextField(blank=True, null=True)
     evidencia = models.FileField(
         upload_to='evidencias/mediciones/%Y/%m/',
@@ -550,7 +560,11 @@ class Medicion(models.Model):
             models.UniqueConstraint(
                 fields=['indicador', 'periodo'],
                 name='unique_medicion_por_indicador_periodo'
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(valor_resultado__isnull=False) | models.Q(cierre_automatico=True),
+                name='medicion_sin_resultado_solo_en_cierre_automatico',
+            ),
         ]
 
     def clean(self):
@@ -559,7 +573,16 @@ class Medicion(models.Model):
                 'La meta seleccionada no pertenece al indicador KPI.'
             )
 
+    @property
+    def sin_registro(self):
+        """True si el periodo se cerró por falta de registro (Etapa 3, C3):
+        no hay un resultado real que evaluar."""
+        return self.valor_resultado is None
+
     def calcular_cumplimiento(self):
+        if self.sin_registro:
+            return None
+
         if self.meta.valor_meta == 0:
             return 0
 
@@ -614,3 +637,128 @@ class Alerta(models.Model):
     def __str__(self):
         return f'{self.tipo_alerta} - {self.indicador.nombre}'
     
+
+
+DIAS_MAXIMOS_AMPLIACION = 10
+"""Etapa 5: máximo fijo de días calendario adicionales que puede autorizarse
+para registrar la medición de un periodo, contados desde su fecha límite
+ordinaria. No es configurable (decisión aprobada)."""
+
+
+class SolicitudAmpliacionPlazo(models.Model):
+    """Etapa 5: solicitud de días adicionales para registrar la medición de
+    un KPI en un periodo concreto. La presenta un Ejecutor operativo y la
+    resuelve el Administrador de planificación. Nunca se borra: cada cambio
+    de estado queda como historial.
+
+    `fecha_limite_ordinaria` es la fecha límite vigente al solicitar y no
+    se recalcula si después cambia el plazo general: de ella salen el tope
+    de 10 días y la fecha extraordinaria."""
+
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_AUTORIZADA = 'autorizada'
+    ESTADO_RECHAZADA = 'rechazada'
+    ESTADO_VENCIDA = 'vencida'
+    ESTADO_SIN_EFECTO = 'sin_efecto'
+    ESTADO_RETIRADA = 'retirada'
+
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_AUTORIZADA, 'Autorizada'),
+        (ESTADO_RECHAZADA, 'Rechazada'),
+        (ESTADO_VENCIDA, 'Vencida'),
+        (ESTADO_SIN_EFECTO, 'Sin efecto'),
+        (ESTADO_RETIRADA, 'Retirada'),
+    ]
+
+    indicador = models.ForeignKey(
+        IndicadorKPI,
+        on_delete=models.PROTECT,
+        related_name='solicitudes_ampliacion',
+    )
+    periodo = models.ForeignKey(
+        PeriodoMedicion,
+        on_delete=models.PROTECT,
+        related_name='solicitudes_ampliacion',
+    )
+    solicitante = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='solicitudes_ampliacion_realizadas',
+    )
+    revisado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='solicitudes_ampliacion_revisadas',
+        blank=True,
+        null=True,
+        help_text='Administrador de planificación que autorizó o rechazó la solicitud.',
+    )
+    motivo = models.TextField()
+    dias_solicitados = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(DIAS_MAXIMOS_AMPLIACION)],
+    )
+    dias_autorizados = models.PositiveSmallIntegerField(blank=True, null=True)
+    fecha_limite_ordinaria = models.DateField(
+        help_text='Fecha límite ordinaria del periodo al momento de solicitar.',
+    )
+    fecha_limite_extraordinaria = models.DateField(
+        blank=True,
+        null=True,
+        help_text='Fecha límite ordinaria + días autorizados. Solo en solicitudes autorizadas.',
+    )
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    observacion_revision = models.TextField(blank=True, default='')
+    fecha_solicitud = models.DateTimeField(auto_now_add=True)
+    fecha_resolucion = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'solicitud_ampliacion_plazo'
+        verbose_name = 'Solicitud de ampliación de plazo'
+        verbose_name_plural = 'Solicitudes de ampliación de plazo'
+        ordering = ['-fecha_solicitud', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['indicador', 'periodo'],
+                condition=models.Q(estado='pendiente'),
+                name='unique_solicitud_ampliacion_pendiente',
+            ),
+            models.UniqueConstraint(
+                fields=['indicador', 'periodo'],
+                condition=models.Q(estado='autorizada'),
+                name='unique_ampliacion_autorizada',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(dias_solicitados__gte=1, dias_solicitados__lte=DIAS_MAXIMOS_AMPLIACION),
+                name='ampliacion_dias_solicitados_1_a_10',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(dias_autorizados__isnull=True)
+                    | models.Q(dias_autorizados__gte=1, dias_autorizados__lte=models.F('dias_solicitados'))
+                ),
+                name='ampliacion_dias_autorizados_hasta_lo_solicitado',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(estado='autorizada')
+                    | models.Q(
+                        dias_autorizados__isnull=False,
+                        fecha_limite_extraordinaria__gt=models.F('fecha_limite_ordinaria'),
+                        revisado_por__isnull=False,
+                    )
+                ),
+                name='ampliacion_autorizada_completa',
+            ),
+        ]
+
+    @property
+    def fecha_limite_maxima(self):
+        """Último día en que la solicitud puede resolverse (y en que una
+        solicitud pendiente detiene el cierre automático)."""
+        from datetime import timedelta
+
+        return self.fecha_limite_ordinaria + timedelta(days=DIAS_MAXIMOS_AMPLIACION)
+
+    def __str__(self):
+        return f'Ampliación #{self.id} - {self.indicador.nombre} ({self.get_estado_display()})'

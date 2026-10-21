@@ -12,6 +12,7 @@ from .views import (
     PeriodoMedicionViewSet,
     MedicionViewSet,
     AlertaViewSet,
+    SolicitudAmpliacionPlazoViewSet,
 )
 
 router = DefaultRouter()
@@ -24,6 +25,7 @@ router.register(r'rangos-kpi', RangoKPIViewSet, basename='rangos-kpi')
 router.register(r'periodos-medicion', PeriodoMedicionViewSet, basename='periodos-medicion')
 router.register(r'mediciones', MedicionViewSet, basename='mediciones')
 router.register(r'alertas', AlertaViewSet, basename='alertas')
+router.register(r'solicitudes-ampliacion', SolicitudAmpliacionPlazoViewSet, basename='solicitudes-ampliacion')
 
 urlpatterns = [
     path('configuracion-mediciones/', ConfiguracionMedicionesView.as_view(), name='configuracion-mediciones'),

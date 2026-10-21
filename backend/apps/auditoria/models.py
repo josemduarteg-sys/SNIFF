@@ -15,10 +15,17 @@ class Bitacora(models.Model):
         ('error', 'Error'),
     ]
 
+    # Etapa 4 (auditoría M7): NULL solo en eventos ejecutados por el propio
+    # sistema (tareas automáticas), registrados con
+    # services.registrar_bitacora_sistema(). Las acciones de usuarios
+    # siempre llevan usuario (registrar_bitacora lo exige).
     usuario = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='registros_bitacora'
+        related_name='registros_bitacora',
+        null=True,
+        blank=True,
+        help_text='Vacío únicamente en eventos ejecutados automáticamente por el sistema.',
     )
     accion = models.CharField(
         max_length=50,
@@ -35,8 +42,20 @@ class Bitacora(models.Model):
         verbose_name_plural = 'Bitácoras'
         ordering = ['-fecha_hora']
 
+    ORIGEN_USUARIO = 'usuario'
+    ORIGEN_SISTEMA = 'sistema'
+    NOMBRE_SISTEMA = 'Sistema'
+
+    @property
+    def origen(self):
+        return self.ORIGEN_SISTEMA if self.usuario_id is None else self.ORIGEN_USUARIO
+
+    @property
+    def autor(self):
+        return self.NOMBRE_SISTEMA if self.usuario_id is None else self.usuario.username
+
     def __str__(self):
-        return f'{self.usuario} - {self.accion} - {self.modulo}'
+        return f'{self.autor} - {self.accion} - {self.modulo}'
 
 
 class Notificacion(models.Model):

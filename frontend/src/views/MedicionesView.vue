@@ -1,10 +1,19 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import MedicionForm from '../components/mediciones/MedicionForm.vue'
 import MedicionDetalle from '../components/mediciones/MedicionDetalle.vue'
+import SolicitudAmpliacionForm from '../components/mediciones/SolicitudAmpliacionForm.vue'
+import SolicitudesAmpliacion from '../components/mediciones/SolicitudesAmpliacion.vue'
+import { obtenerSolicitudesAmpliacion } from '../services/solicitudAmpliacionService'
+import { obtenerAlerta } from '../services/alertaService'
+import {
+  alertaCorresponde,
+  kpiDisponible,
+  leerParametrosNotificacion,
+} from '../utils/navegacionNotificaciones'
 import {
   obtenerDatosFormularioMedicion,
   obtenerMediciones,
@@ -17,9 +26,16 @@ import {
   esAdministradorPlanificacion,
   puedeEditarMedicion,
   puedeRegistrarMedicion,
+  puedeSolicitarAmpliacion,
+  puedeVerSolicitudesAmpliacion,
 } from '../utils/permisos'
 import { formatearNumero, formatearDiferencia } from '../utils/formato'
-import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
+import {
+  SIN_REGISTRO,
+  claseColorCumplimiento,
+  esMedicionSinRegistro,
+  textoEstadoCumplimiento,
+} from '../utils/cumplimiento'
 import { useResaltado } from '../composables/useResaltado'
 import { usePaginacion } from '../composables/usePaginacion'
 import Paginacion from '../components/common/Paginacion.vue'
@@ -55,6 +71,134 @@ const medicionDetalle = ref(null)
 
 const puedeRegistrar = computed(() => puedeRegistrarMedicion(props.usuario))
 const esAdmin = computed(() => esAdministradorPlanificacion(props.usuario))
+
+// Etapa 5: días adicionales. Pestaña propia en esta misma pantalla, solo
+// para Ejecutor operativo (sus solicitudes) y Administrador de
+// planificación (todas); los demás roles no la ven.
+const router = useRouter()
+const puedeSolicitar = computed(() => puedeSolicitarAmpliacion(props.usuario))
+const verSolicitudes = computed(() => puedeVerSolicitudesAmpliacion(props.usuario))
+const tabActiva = ref('mediciones')
+const solicitudesPendientes = ref(0)
+const mostrarModalAmpliacion = ref(false)
+const claveSolicitudes = ref(0)
+const solicitudResaltada = computed(() => Number(route.query.solicitud) || null)
+const tituloTabSolicitudes = computed(() => (esAdmin.value ? 'Solicitudes de ampliación' : 'Mis solicitudes'))
+
+async function contarSolicitudesPendientes() {
+  if (!verSolicitudes.value) return
+
+  try {
+    solicitudesPendientes.value = (await obtenerSolicitudesAmpliacion({ estado: 'pendiente' })).length
+  } catch (e) {
+    solicitudesPendientes.value = 0
+  }
+}
+
+function actualizarConteoSolicitudes(conteos) {
+  solicitudesPendientes.value = conteos.pendiente
+}
+
+async function cambiarTab(tab) {
+  tabActiva.value = tab
+  await router.replace({ path: '/mediciones', query: tab === 'solicitudes' ? { tab: 'solicitudes' } : {} })
+}
+
+function abrirModalAmpliacion() {
+  mensajeExito.value = ''
+  mostrarModalAmpliacion.value = true
+}
+
+async function manejarSolicitudEnviada() {
+  mostrarModalAmpliacion.value = false
+  mensajeExito.value = 'Solicitud de días adicionales enviada. Te vamos a avisar cuando se resuelva.'
+  await contarSolicitudesPendientes()
+  claveSolicitudes.value += 1
+  await cambiarTab('solicitudes')
+}
+
+// Etapa 6: enlaces de las notificaciones (/mediciones?indicador=X&alerta=Y).
+// Aplica el filtro del KPI y muestra la alerta relacionada. Un parámetro
+// inválido, un KPI que el usuario no ve o una alerta inexistente (o de otro
+// KPI) solo producen un aviso genérico: no se muestra nada que no esté ya
+// disponible para el usuario.
+const alertaNotificacion = ref(null)
+const avisoNotificacion = ref('')
+
+async function aplicarParametrosNotificacion() {
+  const parametros = leerParametrosNotificacion(route.query)
+
+  alertaNotificacion.value = null
+  avisoNotificacion.value = ''
+
+  if (!parametros.hayParametros) return
+
+  if (parametros.invalidos) {
+    avisoNotificacion.value = 'El enlace de la notificación no es válido. Se muestran todas las mediciones.'
+    return
+  }
+
+  if (parametros.indicador) {
+    if (kpiDisponible(parametros.indicador, indicadores.value, mediciones.value)) {
+      indicadorSeleccionado.value = parametros.indicador
+    } else {
+      avisoNotificacion.value = 'El KPI de la notificación no está disponible. Se muestran todas las mediciones.'
+      return
+    }
+  }
+
+  if (parametros.alerta) {
+    try {
+      const alerta = await obtenerAlerta(parametros.alerta)
+
+      if (alertaCorresponde(alerta, parametros.indicador)) {
+        alertaNotificacion.value = alerta
+      } else {
+        avisoNotificacion.value = 'La alerta de la notificación no corresponde a este KPI.'
+      }
+    } catch (e) {
+      avisoNotificacion.value = 'La alerta de la notificación ya no está disponible.'
+    }
+  }
+}
+
+function cerrarContextoNotificacion() {
+  alertaNotificacion.value = null
+  avisoNotificacion.value = ''
+  limpiarFiltros()
+
+  const { indicador, alerta, ...resto } = route.query
+  router.replace({ path: '/mediciones', query: resto })
+}
+
+// Nombre del KPI filtrado desde la notificación (de los datos ya cargados).
+const kpiNotificacionNombre = computed(() => {
+  const id = leerParametrosNotificacion(route.query).indicador
+
+  if (!id || Number(indicadorSeleccionado.value) !== id) return ''
+
+  const kpi = indicadores.value.find((item) => Number(item.id) === id)
+  const medicion = mediciones.value.find((item) => Number(item.indicador) === id)
+
+  return kpi?.nombre || medicion?.indicador_nombre || ''
+})
+
+// Si se abre otra notificación estando ya en Mediciones. La carga inicial
+// la hace onMounted, cuando ya están los datos.
+watch(
+  () => [route.query.indicador, route.query.alerta],
+  async () => {
+    if (!cargando.value) await aplicarParametrosNotificacion()
+  },
+)
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    tabActiva.value = tab === 'solicitudes' && verSolicitudes.value ? 'solicitudes' : 'mediciones'
+  },
+  { immediate: true },
+)
 
 // Bloque 4 (periodos y plazos): plazo de registro configurable, singleton.
 const configuracionMediciones = ref(null)
@@ -253,7 +397,8 @@ function cerrarSesion() {
 }
 
 onMounted(async () => {
-  await cargarDatos()
+  await Promise.all([cargarDatos(), contarSolicitudesPendientes()])
+  await aplicarParametrosNotificacion()
   await aplicarResaltadoDesdeRuta()
 })
 </script>
@@ -284,8 +429,51 @@ onMounted(async () => {
 
         Nueva medición
       </button>
+
+      <button v-if="puedeSolicitar" class="btn-secondary-page" type="button" @click="abrirModalAmpliacion">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+        Solicitar días adicionales
+      </button>
     </template>
 
+    <div v-if="verSolicitudes" class="tabs">
+      <button
+        class="tab-btn"
+        type="button"
+        :class="{ active: tabActiva === 'mediciones' }"
+        @click="cambiarTab('mediciones')"
+      >
+        Mediciones
+      </button>
+      <button
+        class="tab-btn"
+        type="button"
+        :class="{ active: tabActiva === 'solicitudes' }"
+        @click="cambiarTab('solicitudes')"
+      >
+        {{ tituloTabSolicitudes }}
+        <span v-if="solicitudesPendientes" class="tab-count" :title="`${solicitudesPendientes} pendiente(s)`">
+          {{ solicitudesPendientes }}
+        </span>
+      </button>
+    </div>
+
+    <div v-if="mensajeExito && tabActiva === 'solicitudes'" class="alert success">
+      {{ mensajeExito }}
+    </div>
+
+    <SolicitudesAmpliacion
+      v-if="verSolicitudes && tabActiva === 'solicitudes'"
+      :key="claveSolicitudes"
+      :es-admin="esAdmin"
+      :resaltar-id="solicitudResaltada"
+      @actualizado="actualizarConteoSolicitudes"
+    />
+
+    <template v-if="tabActiva === 'mediciones'">
     <section class="summary-grid">
       <article class="kpi-card">
         <div class="kpi-top">
@@ -331,8 +519,8 @@ onMounted(async () => {
         </div>
 
         <div class="kpi-value">{{ medicionesAutomaticas }}</div>
-        <div class="kpi-label">Cierres automáticos</div>
-        <div class="kpi-foot">Generados por vencimiento de periodo</div>
+        <div class="kpi-label">Periodos sin registro</div>
+        <div class="kpi-foot">Cerrados por el sistema sin resultado</div>
       </article>
     </section>
 
@@ -372,6 +560,30 @@ onMounted(async () => {
 
     <div v-if="mensajeExito" class="alert success">
       {{ mensajeExito }}
+    </div>
+
+    <!-- Etapa 6: contexto abierto desde una notificación. -->
+    <div v-if="avisoNotificacion" class="alert aviso">
+      {{ avisoNotificacion }}
+    </div>
+
+    <div v-if="kpiNotificacionNombre || alertaNotificacion" class="contexto-notificacion">
+      <div>
+        <div v-if="kpiNotificacionNombre" class="contexto-titulo">
+          Mediciones del KPI <strong>{{ kpiNotificacionNombre }}</strong>, desde una notificación.
+        </div>
+        <div v-if="alertaNotificacion" class="contexto-alerta">
+          <span class="contexto-tipo">{{ alertaNotificacion.tipo_alerta }}</span>
+          <span class="contexto-estado">
+            {{ alertaNotificacion.estado_alerta === 'pendiente' ? 'Pendiente' : alertaNotificacion.estado_alerta === 'revisada' ? 'Revisada' : 'Resuelta' }}
+            · {{ formatearFecha(alertaNotificacion.fecha_generacion) }}
+          </span>
+          <p>{{ alertaNotificacion.mensaje }}</p>
+        </div>
+      </div>
+      <button type="button" class="btn-secondary btn-small" @click="cerrarContextoNotificacion">
+        Ver todas las mediciones
+      </button>
     </div>
 
     <div class="toolbar">
@@ -501,17 +713,25 @@ onMounted(async () => {
             </td>
 
             <td>
-              <div class="meta-value">
+              <!-- Etapa 3 (C3): una omisión no tiene resultado. -->
+              <div v-if="esMedicionSinRegistro(medicion)" class="meta-value sin-registro">
+                {{ SIN_REGISTRO }}
+              </div>
+              <div v-else class="meta-value">
                 {{ formatearNumero(medicion.valor_resultado, { unidad: medicion.unidad_medida }) }}
               </div>
               <div class="cell-sub">
-                Resultado del periodo
+                {{ esMedicionSinRegistro(medicion) ? 'No se registró resultado' : 'Resultado del periodo' }}
               </div>
             </td>
 
             <td>
               <div class="meta-value">
-                {{ formatearDiferencia(medicion.valor_resultado, medicion.valor_meta, { unidad: medicion.unidad_medida }) }}
+                {{
+                  esMedicionSinRegistro(medicion)
+                    ? '-'
+                    : formatearDiferencia(medicion.valor_resultado, medicion.valor_meta, { unidad: medicion.unidad_medida })
+                }}
               </div>
               <div class="cell-sub">
                 Resultado vs. meta
@@ -599,6 +819,21 @@ onMounted(async () => {
         @cambiar-por-pagina="cambiarPorPagina"
       />
     </section>
+    </template>
+
+    <ModalBase
+      :abierto="mostrarModalAmpliacion"
+      titulo="Solicitar días adicionales"
+      subtitulo="Pedí hasta 10 días calendario más para registrar la medición del periodo pendiente de un KPI. La solicitud la resuelve el Administrador de planificación."
+      @cerrar="mostrarModalAmpliacion = false"
+    >
+      <SolicitudAmpliacionForm
+        v-if="mostrarModalAmpliacion"
+        :indicadores="indicadores"
+        @guardado="manejarSolicitudEnviada"
+        @cancelar="mostrarModalAmpliacion = false"
+      />
+    </ModalBase>
 
     <ModalBase
       :abierto="mostrarModal"
@@ -796,6 +1031,91 @@ onMounted(async () => {
 }
 
 .btn-primary-page:hover { background: #152840; }
+
+/* Etapa 6: contexto abierto desde una notificación. */
+.alert.aviso {
+  background: rgba(244, 162, 97, 0.14);
+  color: #b9701e;
+}
+
+.contexto-notificacion {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #eaf5f5;
+  border: 1px solid #a8dadc;
+  color: #1d3557;
+  font-size: 13px;
+}
+
+.contexto-titulo { font-weight: 600; }
+.contexto-alerta { margin-top: 6px; }
+.contexto-alerta p { margin: 4px 0 0; color: #5e6e82; font-size: 12.5px; }
+.contexto-tipo { font-weight: 800; margin-right: 8px; }
+.contexto-estado { font-size: 11.5px; color: #7f8fa3; font-weight: 700; }
+
+/* Etapa 5: días adicionales. */
+.btn-secondary-page {
+  height: 40px;
+  padding: 0 15px;
+  border: 1.5px solid #e4eaef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1d3557;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-secondary-page:hover { background: #f4f7f9; }
+
+.tabs {
+  display: flex;
+  gap: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #e4eaef;
+}
+
+.tab-btn {
+  height: 40px;
+  padding: 0 4px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #9aa8b8;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.tab-btn:hover { color: #457b9d; }
+.tab-btn.active { color: #1d3557; border-bottom-color: #1d3557; }
+
+.tab-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: #f4a261;
+  color: #ffffff;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 .alert {
   padding: 12px 14px;
@@ -1000,6 +1320,9 @@ tbody tr:hover { background: #fafcfd; }
 }
 .source-chip.manual { background: rgba(69, 123, 157, 0.12); color: #457b9d; }
 .source-chip.csv { background: rgba(244, 162, 97, 0.16); color: #b9701e; }
+
+/* Etapa 3 (C3): resultado ausente de una omisión. */
+.meta-value.sin-registro { color: #55657a; font-style: italic; }
 .source-chip.dw { background: rgba(42, 157, 143, 0.12); color: #2a9d8f; }
 
 .actions-cell { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }

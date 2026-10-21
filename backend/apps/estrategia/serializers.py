@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
@@ -11,10 +12,25 @@ from .models import (
 )
 from .services import (
     objetivo_especifico_esta_bloqueado,
+    objetivo_especifico_tiene_dependencias,
+    objetivo_general_tiene_dependencias,
     plan_anual_esta_bloqueado,
+    plan_anual_tiene_dependencias,
     plan_estrategico_esta_cerrado,
+    puede_completar_vigencia_plan_anual,
     resumen_ponderacion_anual,
 )
+
+
+def _cambia_relacion(data, instance, campo):
+    """True si el payload trae `campo` apuntando a un registro distinto del
+    actual de `instance`. Reenviar el mismo id (lo que hace el formulario
+    al editar solo el texto) no cuenta como cambio."""
+    if instance is None or campo not in data:
+        return False
+
+    nuevo = data[campo]
+    return getattr(nuevo, 'pk', nuevo) != getattr(instance, f'{campo}_id')
 
 
 class AreaSerializer(serializers.ModelSerializer):
@@ -115,6 +131,9 @@ class ObjetivoGeneralSerializer(serializers.ModelSerializer):
         source='creado_por.username',
         read_only=True
     )
+    # Etapa 1 (A1): solo para que el frontend desactive el selector de
+    # Plan estratégico; el bloqueo real lo aplica validate().
+    puede_cambiar_plan_estrategico = serializers.SerializerMethodField()
 
     class Meta:
         model = ObjetivoGeneral
@@ -124,11 +143,15 @@ class ObjetivoGeneralSerializer(serializers.ModelSerializer):
             'plan_estrategico_titulo',
             'plan_estrategico_estado',
             'texto_objetivo',
+            'puede_cambiar_plan_estrategico',
             'creado_por',
             'creado_por_username',
             'fecha_creacion',
         ]
         read_only_fields = ['id', 'fecha_creacion', 'creado_por']
+
+    def get_puede_cambiar_plan_estrategico(self, obj):
+        return not objetivo_general_tiene_dependencias(obj)
 
     def validate(self, data):
         instance = self.instance
@@ -155,6 +178,33 @@ class ObjetivoGeneralSerializer(serializers.ModelSerializer):
                     'El Plan estratégico está Cerrado y no permite modificar sus '
                     'objetivos generales.'
                 )
+
+            # Etapa 1 (A1): traslado a otro Plan estratégico. Prohibido si
+            # ya tiene descendencia; sin ella, el destino debe cumplir la
+            # misma regla que una creación (Plan estratégico En uso).
+            if _cambia_relacion(data, instance, 'plan_estrategico'):
+                if plan_estrategico_esta_cerrado(instance.plan_estrategico):
+                    raise serializers.ValidationError(
+                        'El Plan estratégico actual está Cerrado y no permite '
+                        'trasladar sus objetivos generales.'
+                    )
+
+                if objetivo_general_tiene_dependencias(instance):
+                    raise serializers.ValidationError({
+                        'plan_estrategico': (
+                            'No se puede cambiar el Plan estratégico de un objetivo '
+                            'general que ya tiene objetivos específicos, KPI o '
+                            'ponderaciones anuales asociados.'
+                        )
+                    })
+
+                if not plan.esta_en_uso():
+                    raise serializers.ValidationError({
+                        'plan_estrategico': (
+                            'Solo se puede trasladar un objetivo general a un '
+                            'Plan estratégico En uso.'
+                        )
+                    })
 
         return data
 
@@ -189,6 +239,8 @@ class PlanAnualSerializer(serializers.ModelSerializer):
             'fecha_inicio',
             'fecha_fin',
             'estado',
+            'puede_cambiar_plan_estrategico',
+            'puede_completar_vigencia',
             'creado_por',
             'creado_por_username',
             'fecha_creacion',
@@ -206,8 +258,21 @@ class PlanAnualSerializer(serializers.ModelSerializer):
         # esto solo evita que DRF la revalide con su mensaje genérico.
         validators = []
 
+    # Etapa 1 (M9): solo UX; el bloqueo real lo aplica validate().
+    puede_cambiar_plan_estrategico = serializers.SerializerMethodField()
+
     def get_nombre(self, obj):
         return obj.nombre
+
+    def get_puede_cambiar_plan_estrategico(self, obj):
+        return obj.esta_en_borrador() and not plan_anual_tiene_dependencias(obj)
+
+    # Etapa 1 (M9): solo UX; la regla real la aplica
+    # CompletarVigenciaPlanAnualSerializer.
+    puede_completar_vigencia = serializers.SerializerMethodField()
+
+    def get_puede_completar_vigencia(self, obj):
+        return puede_completar_vigencia_plan_anual(obj)
 
     def validate(self, data):
         instance = self.instance
@@ -243,6 +308,21 @@ class PlanAnualSerializer(serializers.ModelSerializer):
                     'El plan estratégico, el año y las fechas de vigencia no pueden '
                     'modificarse mientras el Plan anual está En uso.'
                 )
+
+            # Etapa 1 (M9, integridad): en Borrador ya puede tener
+            # ponderaciones anuales; trasladarlo dejaría esas filas
+            # mezclando objetivos generales de otra estrategia.
+            if (
+                _cambia_relacion(data, instance, 'plan_estrategico')
+                and plan_anual_tiene_dependencias(instance)
+            ):
+                raise serializers.ValidationError({
+                    'plan_estrategico': (
+                        'No se puede cambiar el Plan estratégico de un plan anual '
+                        'que ya tiene objetivos específicos o ponderaciones anuales '
+                        'asociados.'
+                    )
+                })
 
         if anio is None:
             raise serializers.ValidationError({'anio': 'Ingresá el año del plan anual.'})
@@ -284,37 +364,113 @@ class PlanAnualSerializer(serializers.ModelSerializer):
                     'fecha_fin': 'Ingresá la fecha de finalización del plan anual.'
                 })
 
-        if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
-            raise serializers.ValidationError({
-                'fecha_fin': 'La fecha de finalización no puede ser anterior a la fecha de inicio.'
-            })
-
-        if fecha_inicio and plan_estrategico.fecha_inicio and fecha_inicio < plan_estrategico.fecha_inicio:
-            raise serializers.ValidationError({
-                'fecha_inicio': 'La fecha de inicio debe estar dentro de la vigencia del Plan estratégico.'
-            })
-
-        if fecha_fin and plan_estrategico.fecha_fin and fecha_fin > plan_estrategico.fecha_fin:
-            raise serializers.ValidationError({
-                'fecha_fin': 'La fecha de finalización debe estar dentro de la vigencia del Plan estratégico.'
-            })
+        validar_rango_fechas_plan_anual(plan_estrategico, fecha_inicio, fecha_fin)
 
         # Coherencia fecha <-> año: solo se exige en registros nuevos (en
         # edición, ni anio ni las fechas pueden tocarse por separado salvo
         # que el plan siga en Borrador, en cuyo caso ambos se revalidan
         # igual con los valores finales ya combinados arriba).
         if instance is None or 'anio' in data or 'fecha_inicio' in data or 'fecha_fin' in data:
-            if fecha_inicio and fecha_inicio.year != anio:
-                raise serializers.ValidationError({
-                    'fecha_inicio': 'La fecha de inicio debe pertenecer al año seleccionado.'
-                })
-
-            if fecha_fin and fecha_fin.year != anio:
-                raise serializers.ValidationError({
-                    'fecha_fin': 'La fecha de finalización debe pertenecer al año seleccionado.'
-                })
+            validar_fechas_en_anio_plan_anual(anio, fecha_inicio, fecha_fin)
 
         return data
+
+
+def validar_rango_fechas_plan_anual(plan_estrategico, fecha_inicio, fecha_fin):
+    """Reglas de vigencia del Plan anual (Bloque 1), compartidas entre la
+    edición normal (PlanAnualSerializer) y el completado único de fechas de
+    planes antiguos (CompletarVigenciaPlanAnualSerializer)."""
+    if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
+        raise serializers.ValidationError({
+            'fecha_fin': 'La fecha de finalización no puede ser anterior a la fecha de inicio.'
+        })
+
+    if fecha_inicio and plan_estrategico.fecha_inicio and fecha_inicio < plan_estrategico.fecha_inicio:
+        raise serializers.ValidationError({
+            'fecha_inicio': 'La fecha de inicio debe estar dentro de la vigencia del Plan estratégico.'
+        })
+
+    if fecha_fin and plan_estrategico.fecha_fin and fecha_fin > plan_estrategico.fecha_fin:
+        raise serializers.ValidationError({
+            'fecha_fin': 'La fecha de finalización debe estar dentro de la vigencia del Plan estratégico.'
+        })
+
+
+def validar_fechas_en_anio_plan_anual(anio, fecha_inicio, fecha_fin):
+    if fecha_inicio and fecha_inicio.year != anio:
+        raise serializers.ValidationError({
+            'fecha_inicio': 'La fecha de inicio debe pertenecer al año seleccionado.'
+        })
+
+    if fecha_fin and fecha_fin.year != anio:
+        raise serializers.ValidationError({
+            'fecha_fin': 'La fecha de finalización debe pertenecer al año seleccionado.'
+        })
+
+
+class CompletarVigenciaPlanAnualSerializer(serializers.Serializer):
+    """Etapa 1 (auditoría M9, autorizado el 20/10/2026): completa POR ÚNICA
+    VEZ las fechas de vigencia de un Plan anual En uso creado antes del
+    Bloque 1 (ambas fechas NULL). Una vez guardadas, la regla normal de
+    PlanAnualSerializer (fechas bloqueadas En uso) vuelve a aplicar, así
+    que no existe un segundo completado.
+
+    Las fechas las ingresa una persona: nunca se asignan automáticamente."""
+
+    fecha_inicio = serializers.DateField(
+        error_messages={'required': 'Ingresá la fecha de inicio del plan anual.'},
+    )
+    fecha_fin = serializers.DateField(
+        error_messages={'required': 'Ingresá la fecha de finalización del plan anual.'},
+    )
+
+    def validate(self, data):
+        plan_anual = self.instance
+
+        if not puede_completar_vigencia_plan_anual(plan_anual):
+            raise serializers.ValidationError(
+                'Solo se pueden completar las fechas de un Plan anual En uso, con '
+                'su Plan estratégico abierto y sin fechas de vigencia registradas.'
+            )
+
+        fecha_inicio = data['fecha_inicio']
+        fecha_fin = data['fecha_fin']
+
+        validar_rango_fechas_plan_anual(plan_anual.plan_estrategico, fecha_inicio, fecha_fin)
+        validar_fechas_en_anio_plan_anual(plan_anual.anio, fecha_inicio, fecha_fin)
+
+        # Los periodos de un KPI se cuentan por mes desde el mes de
+        # fecha_inicio hasta el mes de fecha_fin (ver
+        # IndicadorKPI.fecha_inicio_vigencia y
+        # services.obtener_info_siguiente_periodo); una medición cuyo
+        # periodo empiece fuera de ese rango quedaría excluida.
+        from datetime import date
+
+        from apps.indicadores.models import Medicion
+
+        primer_mes = date(fecha_inicio.year, fecha_inicio.month, 1)
+        ultimo_mes = date(fecha_fin.year, fecha_fin.month, 1)
+
+        excluidas = Medicion.objects.filter(
+            indicador__objetivo_especifico__plan_anual=plan_anual,
+        ).filter(
+            Q(periodo__fecha_inicio__lt=primer_mes) | Q(periodo__fecha_inicio__gt=ultimo_mes)
+        )
+
+        if excluidas.exists():
+            raise serializers.ValidationError(
+                'Las fechas dejan fuera de la vigencia periodos que ya tienen '
+                f'mediciones registradas ({excluidas.count()}). Ajustá la vigencia '
+                'para que los incluya.'
+            )
+
+        return data
+
+    def update(self, instance, validated_data):
+        instance.fecha_inicio = validated_data['fecha_inicio']
+        instance.fecha_fin = validated_data['fecha_fin']
+        instance.save(update_fields=['fecha_inicio', 'fecha_fin'])
+        return instance
 
 
 class ObjetivoEspecificoSerializer(serializers.ModelSerializer):
@@ -355,14 +511,24 @@ class ObjetivoEspecificoSerializer(serializers.ModelSerializer):
             'objetivo_general_texto',
             'texto_objetivo',
             'es_generado_automaticamente',
+            'puede_cambiar_relaciones',
             'creado_por',
             'creado_por_username',
             'fecha_creacion',
         ]
         read_only_fields = ['id', 'fecha_creacion', 'creado_por', 'es_generado_automaticamente']
 
+    # Etapa 1 (A2): solo UX; el bloqueo real lo aplica validate().
+    puede_cambiar_relaciones = serializers.SerializerMethodField()
+
     def get_plan_anual_nombre(self, obj):
         return obj.plan_anual.nombre if obj.plan_anual_id else None
+
+    def get_puede_cambiar_relaciones(self, obj):
+        return (
+            not obj.es_generado_automaticamente
+            and not objetivo_especifico_tiene_dependencias(obj)
+        )
 
     def validate(self, data):
         instance = self.instance
@@ -403,6 +569,37 @@ class ObjetivoEspecificoSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     'El objetivo específico está bloqueado y no permite modificaciones.'
                 )
+
+            # Etapa 1 (A2): los objetivos implícitos de KPI directo ya
+            # quedan fuera del queryset del ViewSet; esto es el resguardo
+            # por si el serializer se reutiliza en otro lugar.
+            if instance.es_generado_automaticamente:
+                raise serializers.ValidationError(
+                    'Este objetivo específico es interno del sistema (KPI directo) '
+                    'y no puede modificarse.'
+                )
+
+            cambia_plan_anual = _cambia_relacion(data, instance, 'plan_anual')
+            cambia_objetivo_general = _cambia_relacion(data, instance, 'objetivo_general')
+
+            if cambia_plan_anual or cambia_objetivo_general:
+                if objetivo_especifico_tiene_dependencias(instance):
+                    raise serializers.ValidationError({
+                        'plan_anual' if cambia_plan_anual else 'objetivo_general': (
+                            'No se puede cambiar el plan anual ni el objetivo general '
+                            'de un objetivo específico que ya tiene KPI asociados.'
+                        )
+                    })
+
+                # Sin KPI, el traslado debe cumplir la misma regla que una
+                # creación: destino En uso y no bloqueado.
+                if not plan_anual.esta_en_uso() or plan_anual_esta_bloqueado(plan_anual):
+                    raise serializers.ValidationError({
+                        'plan_anual': (
+                            'Solo se puede trasladar un objetivo específico a un '
+                            'Plan anual En uso.'
+                        )
+                    })
 
         return data
 
@@ -479,6 +676,16 @@ class PonderacionAnualObjetivoGeneralSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'plan_anual': 'Seleccioná un plan anual.'
             })
+
+        # Etapa 1 (integridad): una ponderación existente solo corrige su
+        # porcentaje; trasladarla a otro objetivo/año es crear otra fila.
+        if _cambia_relacion(data, instance, 'objetivo_general') or _cambia_relacion(
+            data, instance, 'plan_anual'
+        ):
+            raise serializers.ValidationError(
+                'Una ponderación existente no puede trasladarse a otro objetivo '
+                'general ni a otro plan anual. Solo puede corregirse su porcentaje.'
+            )
 
         if objetivo_general.plan_estrategico_id != plan_anual.plan_estrategico_id:
             raise serializers.ValidationError({

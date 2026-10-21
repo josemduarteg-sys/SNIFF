@@ -13,6 +13,23 @@ alertas de periodo vencido (Bloque 4) como el nuevo cálculo de alerta de
 cumplimiento acumulado, para que este último pueda ignorar sin ambigüedad
 las alertas de la otra familia al buscar la alerta pendiente del KPI."""
 
+TIPO_ALERTA_PERIODO_SIN_REGISTRO = 'Periodo sin registro'
+"""Etapa 3 (auditoría C3): alerta que deja el cierre automático cuando un
+periodo venció sin resultado. Es un incumplimiento del registro oportuno,
+no un resultado de desempeño."""
+
+TIPOS_ALERTA_REGISTRO = (TIPO_ALERTA_PERIODO_VENCIDO, TIPO_ALERTA_PERIODO_SIN_REGISTRO)
+"""Alertas sobre el REGISTRO (no sobre el cumplimiento del KPI): la alerta de
+cumplimiento acumulado las ignora al buscar su propia alerta pendiente."""
+
+ESTADO_SIN_REGISTRO = 'Sin registro'
+"""Estado del catálogo (migración indicadores.0015) para los cierres
+automáticos por falta de registro. Ningún RangoKPI lo usa."""
+
+
+def obtener_estado_sin_registro():
+    return EstadoCumplimiento.objects.filter(nombre__iexact=ESTADO_SIN_REGISTRO).first()
+
 
 def hoy():
     """Punto único de acceso a la fecha 'actual' del sistema (Bloque 4).
@@ -29,6 +46,18 @@ def calcular_porcentaje_cumplimiento(valor_resultado, valor_meta):
     return (Decimal(valor_resultado) / Decimal(valor_meta)) * Decimal('100')
 
 
+def precargado(instancia, relacion):
+    """Etapa 6 (M8): lista ya cargada con prefetch_related (o None). Las
+    funciones de abajo la usan si existe — mismo resultado, sin una consulta
+    por cada fila de un listado — y si no, consultan como siempre."""
+    cache = getattr(instancia, '_prefetched_objects_cache', None) or {}
+
+    if relacion in cache:
+        return list(cache[relacion])
+
+    return None
+
+
 def obtener_estado_por_cumplimiento(indicador, porcentaje_cumplimiento):
     """Clasifica un porcentaje de cumplimiento usando ÚNICAMENTE los RangoKPI
     reales del indicador (fuente de verdad). No hardcodea umbrales (85/70,
@@ -40,6 +69,28 @@ def obtener_estado_por_cumplimiento(indicador, porcentaje_cumplimiento):
     coincide con el máximo del anterior) esto cubre el eje sin huecos ni
     solapamientos, a cualquier precisión.
     """
+    rangos = precargado(indicador, 'rangos')
+
+    if rangos is not None:
+        # Etapa 6 (M8): misma condición y mismo orden (valor_minimo) que la
+        # consulta de abajo, sobre los rangos ya cargados del KPI.
+        valor = Decimal(porcentaje_cumplimiento)
+        aplicables = [
+            r for r in sorted(rangos, key=lambda r: (r.valor_minimo, r.id))
+            if r.estado and r.valor_minimo <= valor and (r.valor_maximo is None or r.valor_maximo > valor)
+        ]
+
+        if aplicables:
+            return aplicables[0].estado_cumplimiento
+
+        if not hasattr(indicador, '_estado_pendiente_cache'):
+            indicador._estado_pendiente_cache = EstadoCumplimiento.objects.filter(
+                nombre__iexact='Pendiente de actualización',
+                estado=True,
+            ).first()
+
+        return indicador._estado_pendiente_cache
+
     rango = RangoKPI.objects.select_related(
         'estado_cumplimiento'
     ).filter(
@@ -265,6 +316,7 @@ def recalcular_mediciones_pendientes():
 
     mediciones = Medicion.objects.filter(
         estado_cumplimiento=estado_pendiente,
+        valor_resultado__isnull=False,
     ).select_related('indicador', 'meta', 'estado_cumplimiento')
 
     revisadas = 0
@@ -316,9 +368,16 @@ def calcular_promedio_acumulado_kpi(indicador, hasta_periodo=None):
     de meta como 70.58/68.42).
 
     Se aplica igual para todas las frecuencias (cada Medicion cuenta como
-    UNA observación, sin importar cuántos meses cubra su periodo) y las
-    mediciones de cierre automático en 0.00 participan como una más, sin
-    exclusión ni ponderación distinta.
+    UNA observación, sin importar cuántos meses cubra su periodo).
+
+    Etapa 3 (auditoría C3), ajuste funcional adoptado durante la revisión
+    del sistema: SUSTITUYE el criterio anterior por el que toda omisión se
+    cerraba en 0.00 y participaba del promedio como una medición más. Ahora
+    una omisión ("Sin registro", valor_resultado NULL) no es un resultado y
+    queda fuera del promedio; se cuenta aparte (contar_omisiones_kpi). Un
+    0.00 registrado sigue siendo un resultado real y sí participa. Los
+    cierres automáticos anteriores guardados con 0.00, si existieran, se
+    conservan tal cual (no se reinterpreta el historial).
 
     No se persiste en base de datos (no existe un campo
     `promedio_acumulado` en IndicadorKPI): se calcula al vuelo cada vez que
@@ -335,12 +394,22 @@ def calcular_promedio_acumulado_kpi(indicador, hasta_periodo=None):
     sería un resultado real y no puede usarse para representar "sin
     datos"), o el promedio redondeado a 2 decimales en caso contrario.
     """
-    mediciones = Medicion.objects.filter(indicador=indicador)
+    precargadas = precargado(indicador, 'mediciones')
 
-    if hasta_periodo is not None:
-        mediciones = mediciones.filter(periodo__fecha_inicio__lte=hasta_periodo.fecha_inicio)
+    if precargadas is not None:
+        # Etapa 6 (M8): mismos filtros que la consulta de abajo.
+        valores = [
+            m.valor_resultado for m in precargadas
+            if m.valor_resultado is not None
+            and (hasta_periodo is None or m.periodo.fecha_inicio <= hasta_periodo.fecha_inicio)
+        ]
+    else:
+        mediciones = Medicion.objects.filter(indicador=indicador, valor_resultado__isnull=False)
 
-    valores = list(mediciones.values_list('valor_resultado', flat=True))
+        if hasta_periodo is not None:
+            mediciones = mediciones.filter(periodo__fecha_inicio__lte=hasta_periodo.fecha_inicio)
+
+        valores = list(mediciones.values_list('valor_resultado', flat=True))
 
     if not valores:
         return None
@@ -352,7 +421,23 @@ def calcular_promedio_acumulado_kpi(indicador, hasta_periodo=None):
 
 
 def contar_mediciones_kpi(indicador):
-    return Medicion.objects.filter(indicador=indicador).count()
+    """Mediciones con resultado real (Etapa 3, C3: excluye las omisiones)."""
+    precargadas = precargado(indicador, 'mediciones')
+
+    if precargadas is not None:
+        return sum(1 for m in precargadas if m.valor_resultado is not None)
+
+    return Medicion.objects.filter(indicador=indicador, valor_resultado__isnull=False).count()
+
+
+def contar_omisiones_kpi(indicador):
+    """Periodos cerrados automáticamente por falta de registro."""
+    precargadas = precargado(indicador, 'mediciones')
+
+    if precargadas is not None:
+        return sum(1 for m in precargadas if m.valor_resultado is None)
+
+    return Medicion.objects.filter(indicador=indicador, valor_resultado__isnull=True).count()
 
 
 def obtener_estado_acumulado_kpi(indicador, promedio_acumulado):
@@ -420,7 +505,7 @@ def actualizar_alerta_cumplimiento_kpi(indicador, medicion_actual=None):
     alerta_pendiente = Alerta.objects.filter(
         indicador=indicador,
         estado_alerta='pendiente',
-    ).exclude(tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO).first()
+    ).exclude(tipo_alerta__in=TIPOS_ALERTA_REGISTRO).first()
 
     def descartar_pendiente():
         alerta_pendiente.estado_alerta = 'descartada'
@@ -496,19 +581,50 @@ def marcar_alerta_revisada(alerta, usuario=None):
     return alerta
 
 
-def marcar_todas_alertas_revisadas(usuario=None):
+def filtrar_alertas_vigentes(queryset):
+    """Etapa 4 (auditoría M6): alertas que todavía requieren atención —
+    excluye las de KPI anulados y las de KPI cuyo Plan anual o Plan
+    estratégico está Cerrado. No modifica ninguna alerta: las excluidas
+    siguen guardadas como historial con su estado original."""
+    return queryset.exclude(indicador__estado='anulado').exclude(
+        indicador__objetivo_especifico__plan_anual__estado='cerrado',
+    ).exclude(
+        indicador__objetivo_especifico__plan_anual__plan_estrategico__estado='cerrado',
+    )
+
+
+def marcar_todas_alertas_revisadas(usuario=None, solo_vigentes=False):
     """Marca como revisadas TODAS las Alerta actualmente 'pendiente' (Bloque
     5.1 — Centro de notificaciones). Alerta no está asociada a un usuario
     destino (a diferencia de Notificacion): es información de KPI visible
     para cualquiera con permiso de verla, así que "marcar todas" aplica al
     total de alertas pendientes del sistema, sin distinguir tipo_alerta
     (cumplimiento y 'Periodo vencido sin medición' comparten el mismo
-    ciclo de vida de estado_alerta)."""
-    return Alerta.objects.filter(estado_alerta='pendiente').update(
+    ciclo de vida de estado_alerta).
+
+    Etapa 4: con solo_vigentes=True (lo que usa la API) se limita a las
+    alertas que todavía requieren atención (ver filtrar_alertas_vigentes)."""
+    pendientes = Alerta.objects.filter(estado_alerta='pendiente')
+
+    if solo_vigentes:
+        pendientes = filtrar_alertas_vigentes(pendientes)
+
+    # update() sobre un queryset con exclude() a través de relaciones usa
+    # una subconsulta por id; se materializan los ids para que sea portable.
+    return Alerta.objects.filter(id__in=list(pendientes.values_list('id', flat=True))).update(
         estado_alerta='revisada',
         fecha_revision=timezone.now(),
         revisado_por=usuario,
     )
+
+
+def marca_periodo_en_mensaje(periodo_nombre):
+    """Etapa 4 (M6): fragmento con el que la alerta de periodo vencido
+    identifica su periodo ("periodo de enero 2027 ("). Antes se buscaba solo
+    el nombre del periodo, que también podía aparecer en el nombre del KPI
+    (p. ej. "Meta enero 2027") y confundir la deduplicación. El formato de
+    los mensajes anteriores ya contenía este fragmento."""
+    return f'periodo de {periodo_nombre} ('
 
 
 def resolver_alertas_periodo_vencido(medicion, usuario=None):
@@ -540,7 +656,7 @@ def resolver_alertas_periodo_vencido(medicion, usuario=None):
         indicador=medicion.indicador,
         tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO,
         estado_alerta='pendiente',
-        mensaje__icontains=periodo_nombre,
+        mensaje__icontains=marca_periodo_en_mensaje(periodo_nombre),
     ).update(
         estado_alerta='descartada',
         fecha_revision=timezone.now(),
@@ -633,14 +749,22 @@ def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
         1,
     )
 
-    ultima_medicion = (
-        Medicion.objects
-        .filter(indicador=indicador)
-        .exclude(id=excluir_medicion_id)
-        .select_related('periodo')
-        .order_by('-periodo__fecha_inicio')
-        .first()
-    )
+    precargadas = precargado(indicador, 'mediciones') if excluir_medicion_id is None else None
+
+    if precargadas is not None:
+        # Etapa 6 (M8): la de periodo más reciente entre las ya cargadas.
+        ultima_medicion = max(
+            (m for m in precargadas if m.periodo), key=lambda m: m.periodo.fecha_inicio, default=None,
+        )
+    else:
+        ultima_medicion = (
+            Medicion.objects
+            .filter(indicador=indicador)
+            .exclude(id=excluir_medicion_id)
+            .select_related('periodo')
+            .order_by('-periodo__fecha_inicio')
+            .first()
+        )
 
     if not ultima_medicion or not ultima_medicion.periodo:
         return primer_periodo
@@ -669,17 +793,81 @@ def calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo_meses):
     return obtener_ultimo_dia_mes(mes_final)
 
 
-def calcular_fecha_limite_registro(fecha_cierre):
+def calcular_fecha_limite_registro(fecha_cierre, dias_plazo=None):
     """Última fecha en la que todavía se puede registrar manualmente la
     medición de un periodo (Bloque 4, regla 6/7): el mismo día del cierre
     del periodo y durante los N días calendario siguientes, donde N es el
     plazo configurado por la administración (ver
-    ConfiguracionMediciones.obtener() — nunca un número fijo en código)."""
+    ConfiguracionMediciones.obtener() — nunca un número fijo en código).
+
+    Etapa 6 (M8): `dias_plazo` permite a un listado leer la configuración
+    una sola vez y reutilizarla para todos sus KPI."""
     from .models import ConfiguracionMediciones
 
-    dias = ConfiguracionMediciones.obtener().dias_plazo_registro
+    dias = dias_plazo if dias_plazo is not None else ConfiguracionMediciones.obtener().dias_plazo_registro
 
     return fecha_cierre + timedelta(days=dias)
+
+
+def obtener_ampliaciones_del_periodo(indicador, fecha_inicio_periodo):
+    """Etapa 5: solicitud autorizada y solicitud pendiente (como máximo una
+    de cada una, por las restricciones únicas) del KPI en ese periodo."""
+    from .models import SolicitudAmpliacionPlazo
+
+    autorizada = None
+    pendiente = None
+    tipo_periodo = obtener_tipo_periodo(indicador)
+    estados = [SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA, SolicitudAmpliacionPlazo.ESTADO_PENDIENTE]
+    precargadas = precargado(indicador, 'solicitudes_ampliacion')
+
+    if precargadas is not None:
+        # Etapa 6 (M8): mismos filtros, sobre las solicitudes ya cargadas.
+        solicitudes = [
+            s for s in precargadas
+            if s.estado in estados
+            and s.periodo.tipo_periodo == tipo_periodo
+            and s.periodo.fecha_inicio == fecha_inicio_periodo
+        ]
+    else:
+        solicitudes = SolicitudAmpliacionPlazo.objects.filter(
+            indicador=indicador,
+            periodo__tipo_periodo=tipo_periodo,
+            periodo__fecha_inicio=fecha_inicio_periodo,
+            estado__in=estados,
+        )
+
+    for solicitud in solicitudes:
+        if solicitud.estado == SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA:
+            autorizada = solicitud
+        else:
+            pendiente = solicitud
+
+    return autorizada, pendiente
+
+
+def obtener_fecha_limite_efectiva(indicador, fecha_inicio_periodo, fecha_cierre, dias_plazo=None):
+    """Etapa 5: punto ÚNICO que decide hasta cuándo puede registrarse la
+    medición de un KPI en un periodo. Lo usan el registro, la consulta del
+    siguiente periodo, las alertas y el cierre automático.
+
+    Sin ampliación autorizada es el límite ordinario (cierre + plazo
+    general). Con una ampliación autorizada es el mayor entre el límite
+    ordinario actual y la fecha extraordinaria guardada al autorizar: un
+    cambio posterior del plazo general nunca acorta una ampliación ya
+    concedida. Solo afecta a ese KPI y ese periodo."""
+    fecha_limite_ordinaria = calcular_fecha_limite_registro(fecha_cierre, dias_plazo)
+    autorizada, pendiente = obtener_ampliaciones_del_periodo(indicador, fecha_inicio_periodo)
+    fecha_limite = fecha_limite_ordinaria
+
+    if autorizada and autorizada.fecha_limite_extraordinaria > fecha_limite:
+        fecha_limite = autorizada.fecha_limite_extraordinaria
+
+    return {
+        'fecha_limite_registro': fecha_limite,
+        'fecha_limite_ordinaria': fecha_limite_ordinaria,
+        'ampliacion_autorizada': autorizada,
+        'ampliacion_pendiente': pendiente,
+    }
 
 
 def obtener_o_crear_periodo(indicador, fecha_inicio_periodo):
@@ -735,7 +923,7 @@ def obtener_o_crear_meta_vigente(indicador):
     return meta
 
 
-def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
+def obtener_info_siguiente_periodo(indicador, fecha_referencia=None, dias_plazo=None):
     """Fuente ÚNICA de verdad (Bloque 4) sobre qué periodo corresponde
     registrar para un KPI y si está disponible ahora mismo. La usan tanto
     el endpoint `GET /mediciones/siguiente-periodo/` como la creación de
@@ -744,7 +932,13 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
 
     Devuelve siempre las mismas claves:
       disponible, motivo, periodo_nombre, tipo_periodo,
-      fecha_inicio_periodo, fecha_cierre, fecha_limite_registro.
+      fecha_inicio_periodo, fecha_cierre, fecha_limite_registro,
+      fecha_limite_ordinaria, ampliacion_autorizada, ampliacion_pendiente.
+
+    Etapa 5: `fecha_limite_registro` es la fecha límite EFECTIVA (incluye
+    una ampliación autorizada, ver obtener_fecha_limite_efectiva);
+    `fecha_limite_ordinaria` es la del plazo general. Las dos ampliaciones
+    son instancias de SolicitudAmpliacionPlazo o None.
 
     `fecha_cierre` es None únicamente cuando no hay un periodo concreto que
     evaluar todavía (KPI no autorizado, sin meta, o sin más periodos dentro
@@ -761,6 +955,9 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
         'fecha_inicio_periodo': None,
         'fecha_cierre': None,
         'fecha_limite_registro': None,
+        'fecha_limite_ordinaria': None,
+        'ampliacion_autorizada': None,
+        'ampliacion_pendiente': None,
     }
 
     if indicador.estado != 'autorizado':
@@ -793,7 +990,8 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
         }
 
     fecha_cierre = calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo)
-    fecha_limite = calcular_fecha_limite_registro(fecha_cierre)
+    limites = obtener_fecha_limite_efectiva(indicador, fecha_inicio_periodo, fecha_cierre, dias_plazo)
+    fecha_limite = limites['fecha_limite_registro']
     periodo_nombre = formatear_periodo(fecha_inicio_periodo, intervalo)
 
     info = {
@@ -803,7 +1001,7 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
         'tipo_periodo': tipo_periodo,
         'fecha_inicio_periodo': fecha_inicio_periodo,
         'fecha_cierre': fecha_cierre,
-        'fecha_limite_registro': fecha_limite,
+        **limites,
     }
 
     if fecha_referencia < fecha_cierre:
@@ -814,6 +1012,18 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
         info['disponible'] = True
         return info
 
+    pendiente = limites['ampliacion_pendiente']
+
+    if pendiente and fecha_referencia <= pendiente.fecha_limite_maxima:
+        # Etapa 5 (regla 7): vencido el plazo ordinario, una solicitud
+        # pendiente no habilita el registro hasta que se autorice.
+        info['motivo'] = (
+            f'El plazo de registro del periodo {periodo_nombre} terminó el '
+            f'{fecha_limite.strftime("%d/%m/%Y")}. La solicitud de días adicionales '
+            'está pendiente de resolución: vas a poder registrar si se autoriza.'
+        )
+        return info
+
     info['motivo'] = (
         f'El periodo {periodo_nombre} venció su ventana de registro y está '
         'pendiente de cierre automático.'
@@ -821,16 +1031,293 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None):
     return info
 
 
+def evaluar_solicitud_ampliacion(indicador, fecha_referencia=None):
+    """Etapa 5: decide si hoy puede pedirse una ampliación para el siguiente
+    periodo del KPI (el único que puede estar pendiente, porque el registro
+    es secuencial). Devuelve (info, motivo): motivo vacío si se puede.
+
+    Reglas aprobadas: KPI que hoy admite registro (autorizado, con meta,
+    plan no Cerrado), desde el cierre del periodo hasta el último día del
+    plazo ordinario inclusive, sin otra solicitud pendiente ni una
+    ampliación ya autorizada para ese periodo."""
+    fecha_referencia = fecha_referencia or hoy()
+    info = obtener_info_siguiente_periodo(indicador, fecha_referencia=fecha_referencia)
+
+    if indicador.estado != 'autorizado' or info['fecha_cierre'] is None:
+        return info, info['motivo']
+
+    if indicador.esta_bloqueado():
+        return info, 'El Plan anual o el Plan estratégico de este KPI están Cerrados.'
+
+    periodo = info['periodo_nombre']
+
+    if fecha_referencia < info['fecha_cierre']:
+        return info, (
+            f'Los días adicionales para el periodo {periodo} solo pueden pedirse desde '
+            f'su cierre, el {info["fecha_cierre"].strftime("%d/%m/%Y")}.'
+        )
+
+    if info['ampliacion_autorizada']:
+        return info, (
+            f'El periodo {periodo} ya tiene una ampliación autorizada hasta el '
+            f'{info["ampliacion_autorizada"].fecha_limite_extraordinaria.strftime("%d/%m/%Y")}.'
+        )
+
+    if info['ampliacion_pendiente']:
+        return info, f'Ya existe una solicitud pendiente de días adicionales para el periodo {periodo}.'
+
+    if fecha_referencia > info['fecha_limite_ordinaria']:
+        return info, (
+            f'El plazo ordinario del periodo {periodo} terminó el '
+            f'{info["fecha_limite_ordinaria"].strftime("%d/%m/%Y")}: ya no pueden pedirse días adicionales.'
+        )
+
+    return info, ''
+
+
+def responsables_vigentes(indicador):
+    """Etapa 4 (auditoría M6): Ejecutores operativos asignados al KPI que
+    siguen habilitados. Se recalcula al momento de notificar: una
+    asignación cuyo usuario se inactivó o cambió de rol deja de recibir
+    avisos sin necesidad de tocar la asignación."""
+    from apps.usuarios.models import Usuario
+    from apps.usuarios.permissions import ROL_EJECUTOR_OPERATIVO
+
+    return Usuario.objects.filter(
+        kpis_responsables__indicador=indicador,
+        kpis_responsables__estado=True,
+        is_active=True,
+        estado=True,
+        rol__nombre__iexact=ROL_EJECUTOR_OPERATIVO,
+    ).distinct()
+
+
+def notificar_sin_duplicar(usuario, tipo, titulo, mensaje, enlace):
+    """Crea la notificación salvo que ese usuario ya tenga una igual (mismo
+    tipo y enlace). Devuelve la notificación creada o None."""
+    from apps.auditoria.models import Notificacion
+    from apps.auditoria.services import crear_notificacion
+
+    if usuario is None or Notificacion.objects.filter(usuario_destino=usuario, tipo=tipo, enlace=enlace).exists():
+        return None
+
+    return crear_notificacion(usuario_destino=usuario, tipo=tipo, titulo=titulo, mensaje=mensaje, enlace=enlace)
+
+
+MODULO_AMPLIACIONES = 'Ampliaciones de plazo'
+
+
+def enlace_solicitud_ampliacion(solicitud):
+    return f'/mediciones?tab=solicitudes&solicitud={solicitud.id}'
+
+
+def describir_solicitud_ampliacion(solicitud):
+    return (
+        f'la solicitud de ampliación #{solicitud.id} del KPI {solicitud.indicador.nombre} '
+        f'(periodo {solicitud.periodo.descripcion})'
+    )
+
+
+def finalizar_solicitud_ampliacion(solicitud, estado, motivo, usuario=None, request=None):
+    """Etapa 5: cierra una solicitud PENDIENTE como Vencida o Sin efecto,
+    con su bitácora (del usuario que provocó el cambio o del Sistema) y el
+    aviso al solicitante. Nunca borra la solicitud ni toca mediciones."""
+    from apps.auditoria.services import registrar_bitacora_obligatoria, registrar_bitacora_sistema
+    from .models import SolicitudAmpliacionPlazo
+
+    solicitud.estado = estado
+    solicitud.fecha_resolucion = timezone.now()
+    solicitud.observacion_revision = motivo
+    solicitud.save(update_fields=['estado', 'fecha_resolucion', 'observacion_revision'])
+
+    texto_estado = 'vencida' if estado == SolicitudAmpliacionPlazo.ESTADO_VENCIDA else 'sin efecto'
+    descripcion = f'L{describir_solicitud_ampliacion(solicitud)[1:]} quedó {texto_estado}: {motivo}'
+
+    if usuario is None:
+        registrar_bitacora_sistema('actualizar', MODULO_AMPLIACIONES, descripcion)
+    else:
+        registrar_bitacora_obligatoria(
+            usuario=usuario, accion='actualizar', modulo=MODULO_AMPLIACIONES, descripcion=descripcion, request=request,
+        )
+
+    if usuario is None or solicitud.solicitante_id != usuario.id:
+        notificar_sin_duplicar(
+            solicitud.solicitante,
+            tipo=f'ampliacion_{estado}',
+            titulo='Solicitud de días adicionales vencida' if texto_estado == 'vencida' else 'Solicitud de días adicionales sin efecto',
+            mensaje=(
+                f'Tu solicitud de días adicionales para el KPI "{solicitud.indicador.nombre}" '
+                f'(periodo {solicitud.periodo.descripcion}) quedó {texto_estado}: {motivo}'
+            ),
+            enlace=enlace_solicitud_ampliacion(solicitud),
+        )
+
+    return solicitud
+
+
+def dejar_sin_efecto_solicitudes_pendientes(indicador, motivo, periodo=None, usuario=None, request=None):
+    """Etapa 5: las solicitudes pendientes del KPI (o de uno de sus
+    periodos) que perdieron su objeto — se registró la medición o el KPI
+    fue anulado — pasan a Sin efecto. Devuelve cuántas cambió."""
+    from .models import SolicitudAmpliacionPlazo
+
+    pendientes = SolicitudAmpliacionPlazo.objects.filter(indicador=indicador)
+
+    if periodo is not None:
+        pendientes = pendientes.filter(periodo=periodo)
+
+    return _dejar_sin_efecto(pendientes, motivo, usuario, request)
+
+
+def dejar_sin_efecto_por_cierre_de_plan(motivo, usuario, request=None, plan_anual=None, plan_estrategico=None):
+    """Ajuste de la Etapa 5: al Cerrar un Plan anual o un Plan estratégico,
+    sus solicitudes PENDIENTES pasan a Sin efecto dentro de la misma
+    operación de cierre (misma transacción de la petición). No toca las que
+    ya están Autorizadas, Rechazadas, Vencidas, Retiradas o Sin efecto."""
+    from .models import SolicitudAmpliacionPlazo
+
+    pendientes = SolicitudAmpliacionPlazo.objects.all()
+
+    if plan_anual is not None:
+        pendientes = pendientes.filter(indicador__objetivo_especifico__plan_anual=plan_anual)
+
+    if plan_estrategico is not None:
+        pendientes = pendientes.filter(indicador__objetivo_especifico__plan_anual__plan_estrategico=plan_estrategico)
+
+    return _dejar_sin_efecto(pendientes, motivo, usuario, request)
+
+
+def _dejar_sin_efecto(solicitudes, motivo, usuario, request):
+    from .models import SolicitudAmpliacionPlazo
+
+    # Solo pendientes, bloqueadas: un cierre repetido o simultáneo no las
+    # procesa dos veces (ya no estarán pendientes).
+    ids = list(solicitudes.filter(estado=SolicitudAmpliacionPlazo.ESTADO_PENDIENTE).values_list('id', flat=True))
+    # FOR UPDATE OF solo la solicitud: no bloquea el KPI, el periodo ni el usuario.
+    pendientes = SolicitudAmpliacionPlazo.objects.select_for_update(of=('self',)).select_related(
+        'indicador', 'periodo', 'solicitante',
+    ).filter(id__in=ids, estado=SolicitudAmpliacionPlazo.ESTADO_PENDIENTE).order_by('id')
+
+    cantidad = 0
+
+    for solicitud in pendientes:
+        finalizar_solicitud_ampliacion(
+            solicitud, SolicitudAmpliacionPlazo.ESTADO_SIN_EFECTO, motivo, usuario=usuario, request=request,
+        )
+        cantidad += 1
+
+    return cantidad
+
+
+def procesar_solicitudes_ampliacion(fecha_referencia=None):
+    """Etapa 5: paso previo del cierre automático (tarea del Sistema).
+    - Pendiente después de su fecha máxima (límite ordinario + 10 días)
+      -> Vencida (regla 9).
+    - Pendiente de un KPI anulado, de un plan Cerrado o de un periodo que
+      ya tiene medición -> Sin efecto.
+    Cada solicitud se procesa en su propia transacción: si falla, queda
+    como estaba y se informa el error, sin frenar las demás."""
+    from .models import SolicitudAmpliacionPlazo
+
+    fecha_referencia = fecha_referencia or hoy()
+    vencidas = 0
+    sin_efecto = 0
+    errores = []
+
+    pendientes = SolicitudAmpliacionPlazo.objects.select_related(
+        'indicador',
+        'indicador__objetivo_especifico__plan_anual__plan_estrategico',
+        'periodo',
+        'solicitante',
+    ).filter(estado=SolicitudAmpliacionPlazo.ESTADO_PENDIENTE).order_by('id')
+
+    for solicitud in pendientes:
+        indicador = solicitud.indicador
+
+        if fecha_referencia > solicitud.fecha_limite_maxima:
+            estado = SolicitudAmpliacionPlazo.ESTADO_VENCIDA
+            motivo = (
+                'no se resolvió dentro del plazo máximo, que terminó el '
+                f'{solicitud.fecha_limite_maxima.strftime("%d/%m/%Y")}.'
+            )
+        elif indicador.estado == 'anulado':
+            estado, motivo = SolicitudAmpliacionPlazo.ESTADO_SIN_EFECTO, 'el KPI fue anulado.'
+        elif indicador.esta_bloqueado():
+            estado = SolicitudAmpliacionPlazo.ESTADO_SIN_EFECTO
+            motivo = 'el Plan anual o el Plan estratégico del KPI está Cerrado.'
+        elif Medicion.objects.filter(indicador=indicador, periodo=solicitud.periodo).exists():
+            estado, motivo = SolicitudAmpliacionPlazo.ESTADO_SIN_EFECTO, 'el periodo ya tiene una medición.'
+        else:
+            continue
+
+        try:
+            with transaction.atomic():
+                actual = SolicitudAmpliacionPlazo.objects.select_for_update().get(pk=solicitud.pk)
+
+                if actual.estado != SolicitudAmpliacionPlazo.ESTADO_PENDIENTE:
+                    continue
+
+                finalizar_solicitud_ampliacion(solicitud, estado, motivo)
+        except Exception as error:
+            errores.append({
+                'indicador_id': indicador.id,
+                'indicador': indicador.nombre,
+                'periodo': solicitud.periodo.descripcion,
+                'error': f'Solicitud de ampliación #{solicitud.id}: {error}',
+            })
+            continue
+
+        if estado == SolicitudAmpliacionPlazo.ESTADO_VENCIDA:
+            vencidas += 1
+        else:
+            sin_efecto += 1
+
+    return {'vencidas': vencidas, 'sin_efecto': sin_efecto, 'errores': errores}
+
+
+def registrar_alerta_periodo_sin_registro(medicion, info):
+    """Etapa 3 (auditoría C3): una alerta pendiente por cada omisión, ligada
+    a su Medicion. Idempotente: si ya existe para esa medición, no la
+    duplica. No modifica ninguna alerta existente."""
+    existente = Alerta.objects.filter(
+        medicion=medicion,
+        tipo_alerta=TIPO_ALERTA_PERIODO_SIN_REGISTRO,
+    ).first()
+
+    if existente:
+        return existente
+
+    alerta = Alerta.objects.create(
+        indicador=medicion.indicador,
+        medicion=medicion,
+        tipo_alerta=TIPO_ALERTA_PERIODO_SIN_REGISTRO,
+        mensaje=(
+            f'El indicador "{medicion.indicador.nombre}" quedó sin registro en el periodo '
+            f'{info["periodo_nombre"]} (cierre {info["fecha_cierre"].strftime("%d/%m/%Y")}, '
+            f'plazo vencido el {info["fecha_limite_registro"].strftime("%d/%m/%Y")}'
+            f'{", incluida la ampliación autorizada" if info["fecha_limite_registro"] != info.get("fecha_limite_ordinaria", info["fecha_limite_registro"]) else ""}). '
+            'El sistema lo cerró automáticamente sin resultado.'
+        ),
+        estado_alerta='pendiente',
+    )
+
+    # Los avisos individuales a responsables de KPI (Etapa 4) se retiraron
+    # del flujo junto con esa función: la alerta sigue visible en el centro
+    # de notificaciones, como antes de la Etapa 4.
+    return alerta
+
+
 def cerrar_mediciones_vencidas(fecha_referencia=None):
     """Servicio central del management command `cerrar_mediciones_vencidas`
     (Bloque 4). Por cada KPI autorizado, cierra EN ORDEN todos los periodos
     cuyo plazo de registro configurado (ver ConfiguracionMediciones) ya
-    venció sin medición manual, creando una Medicion con
-    valor_resultado=0.00 y cierre_automatico=True.
+    venció sin medición manual, creando una Medicion "Sin registro"
+    (valor_resultado=NULL, cierre_automatico=True, registrado_por=NULL) y su
+    alerta "Periodo sin registro" — Etapa 3 (C3), en lugar del 0.00 de antes.
 
     Idempotente: se apoya en `obtener_info_siguiente_periodo`, que siempre
-    calcula el siguiente periodo a partir de la última Medicion real ya
-    guardada — si un periodo ya fue cerrado (automática o manualmente), la
+    calcula el siguiente periodo a partir de la última Medicion ya
+    guardada (real u omisión) — si un periodo ya fue cerrado (automática o manualmente), la
     siguiente llamada directamente evalúa el periodo posterior. Además
     verifica explícitamente que no exista ya una Medicion para ese
     (indicador, periodo) antes de crear, sin depender únicamente de que la
@@ -840,8 +1327,13 @@ def cerrar_mediciones_vencidas(fecha_referencia=None):
     kpi_revisados = 0
     cierres_creados = 0
     kpi_bloqueados = 0
-    errores = []
+    kpi_en_espera = 0
     detalle = []
+
+    # Etapa 5: antes de cerrar, las solicitudes de ampliación sin resolver
+    # a tiempo pasan a Vencida y las que perdieron su objeto, a Sin efecto.
+    solicitudes = procesar_solicitudes_ampliacion(fecha_referencia)
+    errores = list(solicitudes['errores'])
 
     indicadores = IndicadorKPI.objects.filter(estado='autorizado').select_related(
         'frecuencia',
@@ -870,7 +1362,18 @@ def cerrar_mediciones_vencidas(fecha_referencia=None):
 
             if fecha_referencia <= info['fecha_limite_registro']:
                 # Ventana aún no vence: se detiene, tal como exige la regla
-                # de no saltar/adelantar periodos.
+                # de no saltar/adelantar periodos. Etapa 5: es la fecha
+                # límite efectiva (incluye una ampliación autorizada).
+                break
+
+            pendiente = info['ampliacion_pendiente']
+
+            if pendiente and fecha_referencia <= pendiente.fecha_limite_maxima:
+                # Etapa 5 (regla 6): una solicitud pendiente detiene el
+                # cierre de este periodo hasta su fecha máxima inclusive.
+                # Pasada esa fecha ya no detiene nada, aunque no se haya
+                # podido marcar como Vencida.
+                kpi_en_espera += 1
                 break
 
             try:
@@ -890,30 +1393,36 @@ def cerrar_mediciones_vencidas(fecha_referencia=None):
                         break
 
                     meta = obtener_o_crear_meta_vigente(indicador)
-                    estado_cumplimiento = obtener_estado_para_medicion(
-                        indicador=indicador,
-                        meta=meta,
-                        valor_resultado=Decimal('0.00'),
-                    )
 
-                    if estado_cumplimiento is None:
+                    # Etapa 3 (auditoría C3): la omisión no tiene
+                    # resultado (NULL) ni se clasifica con los rangos del
+                    # KPI; queda en "Sin registro". Sustituye el criterio
+                    # anterior de cerrar toda omisión en 0.00.
+                    estado_sin_registro = obtener_estado_sin_registro()
+
+                    if estado_sin_registro is None:
                         raise ValueError(
-                            'No se encontró un estado de cumplimiento válido para clasificar el cierre automático.'
+                            f'No existe el estado "{ESTADO_SIN_REGISTRO}" en el catálogo '
+                            '(migración indicadores.0015).'
                         )
 
                     medicion = Medicion.objects.create(
                         indicador=indicador,
                         meta=meta,
-                        estado_cumplimiento=estado_cumplimiento,
+                        estado_cumplimiento=estado_sin_registro,
                         periodo=periodo,
                         registrado_por=None,
                         fecha_medicion=info['fecha_cierre'],
-                        valor_resultado=Decimal('0.00'),
+                        valor_resultado=None,
                         cierre_automatico=True,
                     )
 
-                    actualizar_alerta_cumplimiento_kpi(indicador, medicion_actual=medicion)
+                    # El promedio acumulado no cambia (las omisiones no
+                    # participan), así que la alerta de cumplimiento no se
+                    # toca. La de periodo vencido se resuelve y la
+                    # trazabilidad pasa a la alerta "Periodo sin registro".
                     resolver_alertas_periodo_vencido(medicion, usuario=None)
+                    registrar_alerta_periodo_sin_registro(medicion, info)
             except Exception as error:
                 errores.append({
                     'indicador_id': indicador.id,
@@ -938,9 +1447,91 @@ def cerrar_mediciones_vencidas(fecha_referencia=None):
         'kpi_revisados': kpi_revisados,
         'cierres_creados': cierres_creados,
         'kpi_bloqueados': kpi_bloqueados,
+        'kpi_en_espera': kpi_en_espera,
+        'solicitudes_vencidas': solicitudes['vencidas'],
+        'solicitudes_sin_efecto': solicitudes['sin_efecto'],
         'errores': errores,
         'detalle': detalle,
     }
+
+
+def redactar_alerta_periodo_pendiente(indicador, periodo_nombre, fecha_cierre, limites, fecha_referencia):
+    """Mensaje y título de la alerta 'Periodo vencido sin medición' según la
+    fecha límite efectiva (Etapa 5). Siempre incluye
+    marca_periodo_en_mensaje(periodo_nombre), que la deduplica y resuelve."""
+    fecha_limite = limites['fecha_limite_registro']
+    ampliado = fecha_limite != limites['fecha_limite_ordinaria']
+    pendiente = limites['ampliacion_pendiente']
+    cierre_texto = fecha_cierre.strftime('%d/%m/%Y')
+    limite_texto = fecha_limite.strftime('%d/%m/%Y')
+
+    if fecha_referencia <= fecha_limite:
+        if ampliado:
+            return (
+                f'El indicador "{indicador.nombre}" tiene pendiente el registro del '
+                f'periodo de {periodo_nombre} (cierre {cierre_texto}). Tiene una ampliación '
+                f'autorizada: puede registrarse hasta el {limite_texto}.'
+            ), 'Periodo pendiente de registro (plazo ampliado)'
+
+        return (
+            f'El indicador "{indicador.nombre}" tiene pendiente el registro del '
+            f'periodo de {periodo_nombre} (cierre {cierre_texto}). Puede registrarse '
+            f'hasta el {limite_texto}.'
+        ), 'Periodo pendiente de registro'
+
+    if pendiente and fecha_referencia <= pendiente.fecha_limite_maxima:
+        return (
+            f'El indicador "{indicador.nombre}" tiene vencido el periodo de {periodo_nombre} '
+            f'(cierre {cierre_texto}): el plazo de registro terminó el {limite_texto}. Hay una '
+            'solicitud de días adicionales pendiente de resolución; si no se autoriza, el '
+            'sistema cerrará el periodo como "Sin registro".'
+        ), 'Periodo con plazo vencido y ampliación pendiente'
+
+    return (
+        f'El indicador "{indicador.nombre}" tiene vencido el periodo de {periodo_nombre} '
+        f'(cierre {cierre_texto}): el plazo de registro terminó el {limite_texto} y '
+        'el sistema lo cerrará como "Sin registro".'
+    ), 'Periodo con plazo de registro vencido'
+
+
+def actualizar_alertas_por_ampliacion(solicitud, usuario, fecha_referencia=None):
+    """Etapa 5: al autorizar una ampliación, la alerta pendiente del periodo
+    deja de estar vigente (se descarta, sin reescribir su mensaje: queda
+    como historial) y se crea otra con la fecha límite extraordinaria. Si
+    el periodo todavía no tenía alerta, no se crea ninguna: la tarea diaria
+    la generará ya con la fecha efectiva."""
+    fecha_referencia = fecha_referencia or hoy()
+    indicador = solicitud.indicador
+    intervalo = obtener_intervalo_meses(indicador)
+    inicio = solicitud.periodo.fecha_inicio
+    periodo_nombre = formatear_periodo(date(inicio.year, inicio.month, 1), intervalo)
+    marca = marca_periodo_en_mensaje(periodo_nombre)
+
+    anteriores = Alerta.objects.filter(
+        indicador=indicador, tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO, mensaje__icontains=marca,
+    )
+
+    if not anteriores.exists():
+        return None
+
+    anteriores.filter(estado_alerta='pendiente').update(
+        estado_alerta='descartada', fecha_revision=timezone.now(), revisado_por=usuario,
+    )
+
+    fecha_cierre = calcular_fecha_cierre_periodo(date(inicio.year, inicio.month, 1), intervalo)
+    limites = obtener_fecha_limite_efectiva(indicador, inicio, fecha_cierre)
+    mensaje, _ = redactar_alerta_periodo_pendiente(
+        indicador, periodo_nombre, fecha_cierre, limites, fecha_referencia,
+    )
+
+    # El solicitante recibe su propio aviso de la autorización (en la vista).
+    return Alerta.objects.create(
+        indicador=indicador,
+        medicion=None,
+        tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO,
+        mensaje=mensaje,
+        estado_alerta='pendiente',
+    )
 
 
 def generar_alertas_periodos_vencidos(fecha_referencia=None):
@@ -960,6 +1551,13 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
 
     for indicador in indicadores:
         total_kpi_revisados += 1
+
+        # Etapa 4 (M6): un KPI de un Plan anual o Plan estratégico Cerrado
+        # ya no admite registros; no tiene sentido alertar por él (mismo
+        # criterio que cerrar_mediciones_vencidas). Los anulados y en
+        # borrador ya quedan fuera por el filtro estado='autorizado'.
+        if indicador.esta_bloqueado():
+            continue
 
         periodo_esperado = obtener_siguiente_periodo_esperado(indicador)
 
@@ -986,7 +1584,7 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
         ya_existe = Alerta.objects.filter(
             indicador=indicador,
             tipo_alerta=TIPO_ALERTA_PERIODO_VENCIDO,
-            mensaje__icontains=periodo_nombre,
+            mensaje__icontains=marca_periodo_en_mensaje(periodo_nombre),
         ).exists()
 
         if ya_existe:
@@ -999,9 +1597,13 @@ def generar_alertas_periodos_vencidos(fecha_referencia=None):
             })
             continue
 
-        mensaje = (
-            f'El indicador "{indicador.nombre}" tiene vencido el periodo de {periodo_nombre} '
-            f'(cierre {fecha_cierre.strftime("%d/%m/%Y")}) y no se registró ninguna medición.'
+        # Etapa 4 (M6): el mensaje respeta el plazo adicional configurado.
+        # Antes decía "vencido" desde el día siguiente al cierre, aunque el
+        # periodo todavía podía registrarse. Etapa 5: usa la fecha límite
+        # efectiva (con una ampliación autorizada, si existe).
+        limites = obtener_fecha_limite_efectiva(indicador, periodo_esperado, fecha_cierre)
+        mensaje, _ = redactar_alerta_periodo_pendiente(
+            indicador, periodo_nombre, fecha_cierre, limites, fecha_referencia,
         )
 
         Alerta.objects.create(
@@ -1040,14 +1642,19 @@ def resumen_ponderacion_kpi_ambito(plan_anual, objetivo_general, excluir_id=None
 
     Un KPI sin ponderacion asignada (None) NO cuenta como 0%: queda fuera
     de la suma, como "pendiente de ponderar" (distribución en
-    preparación), nunca como parte ya distribuida."""
+    preparación), nunca como parte ya distribuida.
+
+    Etapa 1 (auditoría M1): un KPI anulado conserva su `ponderacion`
+    guardada como dato histórico, pero ya no es vigente — queda fuera de
+    la suma y libera ese porcentaje para los KPI que siguen en Borrador o
+    Autorizado."""
     from decimal import Decimal
 
     kpis = IndicadorKPI.objects.filter(
         objetivo_especifico__plan_anual=plan_anual,
         objetivo_especifico__objetivo_general=objetivo_general,
         ponderacion__isnull=False,
-    )
+    ).exclude(estado='anulado')
 
     if excluir_id is not None:
         kpis = kpis.exclude(id=excluir_id)

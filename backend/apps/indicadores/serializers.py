@@ -14,6 +14,8 @@ from .models import (
     PeriodoMedicion,
     Medicion,
     Alerta,
+    DIAS_MAXIMOS_AMPLIACION,
+    SolicitudAmpliacionPlazo,
     validar_archivo_evidencia,
 )
 
@@ -109,7 +111,12 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
     # serialización a partir de las Mediciones reales (nunca almacenados
     # en el modelo, ver services.calcular_promedio_acumulado_kpi).
     promedio_acumulado = serializers.SerializerMethodField()
+    # Etapa 3 (C3): cantidad_mediciones = resultados reales (los que entran
+    # al promedio); cantidad_omisiones = periodos cerrados "Sin registro".
     cantidad_mediciones = serializers.SerializerMethodField()
+    cantidad_omisiones = serializers.SerializerMethodField()
+    # Etapa 4 (M6): responsables vigentes (Ejecutores activos asignados).
+    cantidad_responsables = serializers.SerializerMethodField()
     estado_acumulado_id = serializers.SerializerMethodField()
     estado_acumulado_nombre = serializers.SerializerMethodField()
     estado_acumulado_color = serializers.SerializerMethodField()
@@ -153,6 +160,8 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'puede_modificarse',
             'promedio_acumulado',
             'cantidad_mediciones',
+            'cantidad_omisiones',
+            'cantidad_responsables',
             'estado_acumulado_id',
             'estado_acumulado_nombre',
             'estado_acumulado_color',
@@ -170,6 +179,8 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'puede_modificarse',
             'promedio_acumulado',
             'cantidad_mediciones',
+            'cantidad_omisiones',
+            'cantidad_responsables',
             'estado_acumulado_id',
             'estado_acumulado_nombre',
             'estado_acumulado_color',
@@ -199,33 +210,77 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
 
     def _resumen_ponderacion_ambito_cacheado(self, obj):
         if not hasattr(obj, '_resumen_ponderacion_ambito_cache'):
-            from .services import resumen_ponderacion_kpi_ambito
+            if self.context.get('listado_kpi'):
+                obj._resumen_ponderacion_ambito_cache = self._resumen_ponderacion_desde_listado(obj)
+            else:
+                from .services import resumen_ponderacion_kpi_ambito
 
-            obj._resumen_ponderacion_ambito_cache = resumen_ponderacion_kpi_ambito(
-                obj.plan_anual, obj.objetivo_general, excluir_id=obj.pk,
-            )
+                obj._resumen_ponderacion_ambito_cache = resumen_ponderacion_kpi_ambito(
+                    obj.plan_anual, obj.objetivo_general, excluir_id=obj.pk,
+                )
 
         return obj._resumen_ponderacion_ambito_cache
 
-    def get_ponderacion_total_ambito(self, obj):
+    def _resumen_ponderacion_desde_listado(self, obj):
+        """Etapa 6 (M8): en un listado, las ponderaciones de cada ámbito
+        (plan anual, objetivo general) se leen una sola vez y se reutilizan
+        para todos sus KPI. Mismos filtros que resumen_ponderacion_kpi_ambito."""
         from decimal import Decimal
 
+        ambitos = self.context.setdefault('_ponderaciones_por_ambito', {})
+        clave = (obj.objetivo_especifico.plan_anual_id, obj.objetivo_especifico.objetivo_general_id)
+
+        if clave not in ambitos:
+            ambitos[clave] = list(
+                IndicadorKPI.objects.filter(
+                    objetivo_especifico__plan_anual_id=clave[0],
+                    objetivo_especifico__objetivo_general_id=clave[1],
+                    ponderacion__isnull=False,
+                ).exclude(estado='anulado').values_list('id', 'ponderacion')
+            )
+
+        total_asignado = sum((p for kpi_id, p in ambitos[clave] if kpi_id != obj.pk), Decimal('0'))
+
+        return {
+            'total_asignado': total_asignado,
+            'pendiente': Decimal('100') - total_asignado,
+            'completo': total_asignado == Decimal('100'),
+        }
+
+    def _ponderacion_vigente(self, obj):
+        # Etapa 1 (M1): la ponderación de un KPI anulado se conserva en el
+        # registro, pero no forma parte de la distribución vigente.
+        from decimal import Decimal
+
+        if obj.estado == 'anulado':
+            return Decimal('0')
+
+        return obj.ponderacion or Decimal('0')
+
+    def get_ponderacion_total_ambito(self, obj):
         resumen = self._resumen_ponderacion_ambito_cacheado(obj)
-        return resumen['total_asignado'] + (obj.ponderacion or Decimal('0'))
+        return resumen['total_asignado'] + self._ponderacion_vigente(obj)
 
     def get_ponderacion_pendiente_ambito(self, obj):
-        from decimal import Decimal
-
         resumen = self._resumen_ponderacion_ambito_cacheado(obj)
-        return resumen['pendiente'] - (obj.ponderacion or Decimal('0'))
+        return resumen['pendiente'] - self._ponderacion_vigente(obj)
 
     def _info_siguiente_periodo_cacheada(self, obj):
         if not hasattr(obj, '_info_siguiente_periodo_cache'):
             from .services import obtener_info_siguiente_periodo
 
-            obj._info_siguiente_periodo_cache = obtener_info_siguiente_periodo(obj)
+            obj._info_siguiente_periodo_cache = obtener_info_siguiente_periodo(
+                obj, dias_plazo=self._dias_plazo_registro(),
+            )
 
         return obj._info_siguiente_periodo_cache
+
+    def _dias_plazo_registro(self):
+        """Etapa 6 (M8): el plazo general se lee una vez por petición."""
+        if '_dias_plazo_registro' not in self.context:
+            self.context['_dias_plazo_registro'] = ConfiguracionMediciones.obtener().dias_plazo_registro
+
+        return self.context['_dias_plazo_registro']
 
     def get_periodo_disponible(self, obj):
         return self._info_siguiente_periodo_cacheada(obj)['disponible']
@@ -274,6 +329,21 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
         from .services import contar_mediciones_kpi
 
         return contar_mediciones_kpi(obj)
+
+    def get_cantidad_omisiones(self, obj):
+        from .services import contar_omisiones_kpi
+
+        return contar_omisiones_kpi(obj)
+
+    def get_cantidad_responsables(self, obj):
+        # Etapa 6 (M8): el listado la trae anotada (mismo criterio que
+        # responsables_vigentes, ver IndicadorKPIViewSet.get_queryset).
+        if hasattr(obj, 'cantidad_responsables_vigentes'):
+            return obj.cantidad_responsables_vigentes
+
+        from .services import responsables_vigentes
+
+        return responsables_vigentes(obj).count()
 
     def get_estado_acumulado_id(self, obj):
         estado = self._estado_acumulado_cacheado(obj)
@@ -502,6 +572,20 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
         # meta/el resultado/el promedio acumulado, y la mayoría de los KPI
         # reales ya están autorizados cuando se empiezan a ponderar.
         if 'ponderacion' in attrs:
+            # Etapa 1 (M1): la ponderación de un KPI anulado queda como
+            # dato histórico congelado (ya no participa del 100% vigente).
+            if (
+                instance is not None
+                and instance.estado == 'anulado'
+                and attrs['ponderacion'] != instance.ponderacion
+            ):
+                raise serializers.ValidationError({
+                    'ponderacion': (
+                        'El KPI está anulado: su ponderación se conserva como dato '
+                        'histórico y no puede modificarse.'
+                    )
+                })
+
             ponderacion = attrs['ponderacion']
 
             if ponderacion is not None:
@@ -546,7 +630,43 @@ class MetaKPISerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
+OPORTUNIDAD_A_TIEMPO = 'A tiempo'
+OPORTUNIDAD_CON_RETRASO = 'Con retraso'
+OPORTUNIDAD_CON_AMPLIACION = 'Con ampliación'
+ESTADO_SIN_REGISTRO_OPORTUNIDAD = 'Sin registro'
+
+
+def validar_asignacion_responsable(indicador, usuario):
+    """Etapa 4 (auditoría M6): reglas para asignar (o reactivar) un
+    responsable. Compartida por la creación y la reactivación."""
+    from apps.usuarios.permissions import es_ejecutor_operativo
+
+    if not usuario.is_active or usuario.estado is False:
+        raise serializers.ValidationError({'usuario': 'El usuario está inactivo.'})
+
+    if not es_ejecutor_operativo(usuario):
+        raise serializers.ValidationError({
+            'usuario': 'Solo un Ejecutor operativo puede ser responsable de un KPI.'
+        })
+
+    if indicador.estado == 'anulado':
+        raise serializers.ValidationError({
+            'indicador': 'No se pueden asignar responsables a un KPI anulado.'
+        })
+
+    if indicador.esta_bloqueado():
+        raise serializers.ValidationError({
+            'indicador': 'El Plan anual o el Plan estratégico de este KPI están Cerrados.'
+        })
+
+
 class ResponsableKPISerializer(serializers.ModelSerializer):
+    """Etapa 4 (auditoría M6): asignación de Ejecutores operativos a un KPI.
+    Un KPI puede tener varios responsables y una persona puede ser
+    responsable de varios KPI; el par (KPI, usuario) es único, así que una
+    asignación desactivada se reactiva en lugar de duplicarse (ver
+    ResponsableKPIViewSet.create). Sin borrado: se desactiva con estado."""
+
     indicador_nombre = serializers.CharField(
         source='indicador.nombre',
         read_only=True
@@ -555,6 +675,7 @@ class ResponsableKPISerializer(serializers.ModelSerializer):
         source='usuario.username',
         read_only=True
     )
+    usuario_nombre = serializers.SerializerMethodField()
 
     class Meta:
         model = ResponsableKPI
@@ -564,10 +685,35 @@ class ResponsableKPISerializer(serializers.ModelSerializer):
             'indicador_nombre',
             'usuario',
             'usuario_username',
+            'usuario_nombre',
             'fecha_asignacion',
             'estado',
         ]
         read_only_fields = ['id', 'fecha_asignacion']
+        # La unicidad (indicador, usuario) la resuelve el ViewSet: un par ya
+        # existente se reactiva o se informa en español.
+        validators = []
+
+    def get_usuario_nombre(self, obj):
+        return obj.usuario.get_full_name() or obj.usuario.username
+
+    def validate(self, attrs):
+        instance = self.instance
+
+        if instance is None:
+            validar_asignacion_responsable(attrs['indicador'], attrs['usuario'])
+            return attrs
+
+        for campo in ('indicador', 'usuario'):
+            if campo in attrs and attrs[campo].pk != getattr(instance, f'{campo}_id'):
+                raise serializers.ValidationError(
+                    'Una asignación no puede cambiar de KPI ni de usuario: desactivala y creá otra.'
+                )
+
+        if attrs.get('estado') is True and not instance.estado:
+            validar_asignacion_responsable(instance.indicador, instance.usuario)
+
+        return attrs
 
 
 class EstadoCumplimientoSerializer(serializers.ModelSerializer):
@@ -606,6 +752,18 @@ class RangoKPISerializer(serializers.ModelSerializer):
             'estado',
         ]
         read_only_fields = ['id']
+
+    def validate_estado_cumplimiento(self, estado):
+        # Etapa 3 (C3): "Sin registro" solo se asigna a omisiones; nunca
+        # puede clasificar un resultado real a través de un rango.
+        from .services import ESTADO_SIN_REGISTRO
+
+        if estado and estado.nombre.strip().lower() == ESTADO_SIN_REGISTRO.lower():
+            raise serializers.ValidationError(
+                f'El estado "{ESTADO_SIN_REGISTRO}" no puede usarse como rango de clasificación.'
+            )
+
+        return estado
 
 
 class PeriodoMedicionSerializer(serializers.ModelSerializer):
@@ -664,6 +822,20 @@ class MedicionSerializer(serializers.ModelSerializer):
         default=None,
     )
     porcentaje_cumplimiento = serializers.SerializerMethodField()
+    # Etapa 3 (C3): el modelo admite NULL solo para cierres automáticos; una
+    # medición registrada por una persona siempre trae resultado.
+    valor_resultado = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        required=True,
+        allow_null=False,
+        error_messages={
+            'required': 'Ingresá el resultado obtenido.',
+            'null': 'Ingresá el resultado obtenido.',
+            'invalid': 'Ingresá un número válido.',
+        },
+    )
+    sin_registro = serializers.BooleanField(read_only=True)
     evidencia = serializers.FileField(
         required=False,
         allow_null=True,
@@ -679,6 +851,11 @@ class MedicionSerializer(serializers.ModelSerializer):
     promedio_acumulado_hasta_medicion = serializers.SerializerMethodField()
     estado_acumulado_hasta_medicion_nombre = serializers.SerializerMethodField()
     estado_acumulado_hasta_medicion_color = serializers.SerializerMethodField()
+    # Etapa 5: registrada después del plazo ordinario gracias a una
+    # ampliación autorizada (categoría "Con ampliación" del dashboard).
+    registrada_con_ampliacion = serializers.SerializerMethodField()
+    # Etapa 6 (M5): A tiempo / Con retraso / Con ampliación / Sin registro.
+    oportunidad_registro = serializers.SerializerMethodField()
 
     class Meta:
         model = Medicion
@@ -704,6 +881,7 @@ class MedicionSerializer(serializers.ModelSerializer):
             'consulta_dw',
             'fecha_medicion',
             'valor_resultado',
+            'sin_registro',
             'porcentaje_cumplimiento',
             'promedio_acumulado_hasta_medicion',
             'estado_acumulado_hasta_medicion_nombre',
@@ -715,6 +893,8 @@ class MedicionSerializer(serializers.ModelSerializer):
             'tiene_evidencia',
             'cierre_automatico',
             'puede_modificarse',
+            'registrada_con_ampliacion',
+            'oportunidad_registro',
             'fecha_registro',
         ]
         read_only_fields = [
@@ -735,6 +915,11 @@ class MedicionSerializer(serializers.ModelSerializer):
             'registrado_por_username',
             'cierre_automatico',
             'puede_modificarse',
+            # Etapa 2 (A4): el vínculo con una importación CSV o consulta DW
+            # no se asigna desde el registro manual (integraciones fuera de
+            # alcance); el formulario nunca los envía.
+            'archivo_importado',
+            'consulta_dw',
         ]
         # Mismo motivo que en los demás serializers de este proyecto desde
         # Bloque 2: se desactiva el UniqueTogetherValidator automático de
@@ -768,7 +953,10 @@ class MedicionSerializer(serializers.ModelSerializer):
         return None
 
     def get_porcentaje_cumplimiento(self, obj):
-        return round(obj.calcular_cumplimiento(), 2)
+        cumplimiento = obj.calcular_cumplimiento()
+
+        # Etapa 3 (C3): una omisión no tiene resultado, tampoco porcentaje.
+        return None if cumplimiento is None else round(cumplimiento, 2)
 
     def _estado_acumulado_hasta_medicion_cacheado(self, obj):
         # Comparte el cálculo entre los 3 campos "..._hasta_medicion" de
@@ -808,6 +996,64 @@ class MedicionSerializer(serializers.ModelSerializer):
             return False
 
         return not obj.indicador.esta_bloqueado()
+
+    def get_registrada_con_ampliacion(self, obj):
+        return self.get_oportunidad_registro(obj) == OPORTUNIDAD_CON_AMPLIACION
+
+    def get_oportunidad_registro(self, obj):
+        """Etapa 6 (M5): categoría de oportunidad de registro, una sola por
+        medición (criterio "por plazo" aprobado):
+          - Sin registro: cierre automático (el periodo venció sin resultado).
+          - A tiempo: registrada hasta el límite ordinario inclusive (cierre
+            del periodo + plazo general vigente).
+          - Con ampliación: después del límite ordinario y hasta la fecha
+            extraordinaria de una ampliación autorizada, inclusive.
+          - Con retraso: después del límite efectivo (hoy solo es posible en
+            cargas históricas anteriores a las reglas de plazo).
+        La fecha de registro se toma en la zona horaria del sistema."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        if hasattr(obj, '_oportunidad_registro_cache'):
+            return obj._oportunidad_registro_cache
+
+        if obj.cierre_automatico:
+            categoria = ESTADO_SIN_REGISTRO_OPORTUNIDAD
+        else:
+            registro = timezone.localtime(obj.fecha_registro).date()
+            limite_ordinario = obj.fecha_medicion + timedelta(days=self._dias_plazo_registro())
+
+            if registro <= limite_ordinario:
+                categoria = OPORTUNIDAD_A_TIEMPO
+            else:
+                extraordinaria = self._fecha_extraordinaria(obj)
+                categoria = (
+                    OPORTUNIDAD_CON_AMPLIACION
+                    if extraordinaria is not None and registro <= extraordinaria
+                    else OPORTUNIDAD_CON_RETRASO
+                )
+
+        obj._oportunidad_registro_cache = categoria
+        return categoria
+
+    def _fecha_extraordinaria(self, obj):
+        # MedicionViewSet la anota con una subconsulta para no consultar
+        # por cada medición del listado.
+        if hasattr(obj, 'fecha_extraordinaria_ampliacion'):
+            return obj.fecha_extraordinaria_ampliacion
+
+        return SolicitudAmpliacionPlazo.objects.filter(
+            indicador_id=obj.indicador_id,
+            periodo_id=obj.periodo_id,
+            estado=SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA,
+        ).values_list('fecha_limite_extraordinaria', flat=True).first()
+
+    def _dias_plazo_registro(self):
+        if '_dias_plazo_registro' not in self.context:
+            self.context['_dias_plazo_registro'] = ConfiguracionMediciones.obtener().dias_plazo_registro
+
+        return self.context['_dias_plazo_registro']
 
     def validate(self, attrs):
         from .services import obtener_info_siguiente_periodo
@@ -893,7 +1139,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        from apps.auditoria.services import registrar_bitacora
+        from apps.auditoria.services import registrar_bitacora_obligatoria as registrar_bitacora
         from .services import (
             actualizar_alerta_cumplimiento_kpi,
             obtener_estado_para_medicion,
@@ -926,7 +1172,18 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         validated_data['estado_cumplimiento'] = estado
 
-        medicion = super().create(validated_data)
+        # Etapa 4 (M7): dos registros simultáneos del mismo periodo (doble
+        # clic, reintento) chocan con unique_medicion_por_indicador_periodo;
+        # se responde 400 en lugar de 500 y sin romper la transacción.
+        from django.db import IntegrityError, transaction
+
+        try:
+            with transaction.atomic():
+                medicion = super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError({
+                'indicador': 'Ya se registró una medición para este periodo.'
+            })
 
         request = self.context.get('request')
         usuario = (
@@ -937,6 +1194,18 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         alerta = actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
         resolver_alertas_periodo_vencido(medicion, usuario=usuario)
+
+        # Etapa 5: una solicitud de días adicionales aún pendiente para este
+        # periodo ya no tiene objeto.
+        from .services import dejar_sin_efecto_solicitudes_pendientes
+
+        dejar_sin_efecto_solicitudes_pendientes(
+            medicion.indicador,
+            'se registró la medición del periodo.',
+            periodo=medicion.periodo,
+            usuario=usuario,
+            request=request,
+        )
 
         registrar_bitacora(
             usuario=usuario,
@@ -965,7 +1234,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         return medicion
 
     def update(self, instance, validated_data):
-        from apps.auditoria.services import registrar_bitacora
+        from apps.auditoria.services import registrar_bitacora_obligatoria as registrar_bitacora
         from .services import (
             actualizar_alerta_cumplimiento_kpi,
             obtener_estado_para_medicion,
@@ -1057,3 +1326,141 @@ class AlertaSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'fecha_generacion']
 
+
+
+class SolicitudAmpliacionPlazoSerializer(serializers.ModelSerializer):
+    """Etapa 5: solicitud de días adicionales para registrar la medición de
+    un periodo. Al crear, el Ejecutor envía solo el KPI, los días y el
+    motivo: el periodo y la fecha límite ordinaria los fija el backend
+    (siempre el siguiente periodo esperado del KPI). Las resoluciones van
+    por las acciones autorizar / rechazar / retirar del ViewSet."""
+
+    indicador_nombre = serializers.CharField(source='indicador.nombre', read_only=True)
+    periodo_nombre = serializers.CharField(source='periodo.descripcion', read_only=True)
+    periodo_fecha_cierre = serializers.DateField(source='periodo.fecha_fin', read_only=True)
+    solicitante_username = serializers.CharField(source='solicitante.username', read_only=True)
+    solicitante_nombre = serializers.SerializerMethodField()
+    revisado_por_username = serializers.CharField(source='revisado_por.username', read_only=True, default=None)
+    estado_nombre = serializers.CharField(source='get_estado_display', read_only=True)
+    fecha_limite_solicitada = serializers.SerializerMethodField()
+    fecha_limite_maxima = serializers.DateField(read_only=True)
+    plazo_resolucion_vencido = serializers.SerializerMethodField()
+    dias_minimos_autorizables = serializers.SerializerMethodField()
+    dias_solicitados = serializers.IntegerField(
+        min_value=1,
+        max_value=DIAS_MAXIMOS_AMPLIACION,
+        error_messages={
+            'required': 'Indicá cuántos días adicionales necesitás.',
+            'invalid': 'Ingresá un número entero de días.',
+            'min_value': 'Pedí al menos 1 día.',
+            'max_value': f'No se pueden pedir más de {DIAS_MAXIMOS_AMPLIACION} días adicionales.',
+        },
+    )
+    motivo = serializers.CharField(
+        error_messages={
+            'required': 'Explicá el motivo de la solicitud.',
+            'blank': 'Explicá el motivo de la solicitud.',
+        },
+    )
+
+    class Meta:
+        model = SolicitudAmpliacionPlazo
+        fields = [
+            'id',
+            'indicador',
+            'indicador_nombre',
+            'periodo',
+            'periodo_nombre',
+            'periodo_fecha_cierre',
+            'solicitante',
+            'solicitante_username',
+            'solicitante_nombre',
+            'revisado_por',
+            'revisado_por_username',
+            'motivo',
+            'dias_solicitados',
+            'dias_autorizados',
+            'fecha_limite_ordinaria',
+            'fecha_limite_solicitada',
+            'fecha_limite_extraordinaria',
+            'fecha_limite_maxima',
+            'estado',
+            'estado_nombre',
+            'observacion_revision',
+            'fecha_solicitud',
+            'fecha_resolucion',
+            'plazo_resolucion_vencido',
+            'dias_minimos_autorizables',
+        ]
+        read_only_fields = [
+            'id',
+            'periodo',
+            'solicitante',
+            'revisado_por',
+            'dias_autorizados',
+            'fecha_limite_ordinaria',
+            'fecha_limite_extraordinaria',
+            'estado',
+            'observacion_revision',
+            'fecha_solicitud',
+            'fecha_resolucion',
+        ]
+
+    def get_solicitante_nombre(self, obj):
+        return obj.solicitante.get_full_name() or obj.solicitante.username
+
+    def get_fecha_limite_solicitada(self, obj):
+        from datetime import timedelta
+
+        return (obj.fecha_limite_ordinaria + timedelta(days=obj.dias_solicitados)).isoformat()
+
+    def get_plazo_resolucion_vencido(self, obj):
+        """Pendiente cuyo plazo máximo ya pasó: ya no puede resolverse y la
+        tarea diaria la marcará Vencida."""
+        from .services import hoy
+
+        return obj.estado == SolicitudAmpliacionPlazo.ESTADO_PENDIENTE and hoy() > obj.fecha_limite_maxima
+
+    def get_dias_minimos_autorizables(self, obj):
+        """Menor cantidad de días que todavía deja un plazo vigente hoy
+        (regla 8). None si la solicitud ya no está pendiente."""
+        from .services import hoy
+
+        if obj.estado != SolicitudAmpliacionPlazo.ESTADO_PENDIENTE:
+            return None
+
+        return max(1, (hoy() - obj.fecha_limite_ordinaria).days)
+
+    def validate_motivo(self, valor):
+        valor = (valor or '').strip()
+
+        if not valor:
+            raise serializers.ValidationError('Explicá el motivo de la solicitud.')
+
+        return valor
+
+    def validate(self, attrs):
+        from .services import evaluar_solicitud_ampliacion
+
+        indicador = attrs.get('indicador')
+
+        if not indicador:
+            raise serializers.ValidationError({'indicador': 'Seleccioná un KPI.'})
+
+        info, motivo = evaluar_solicitud_ampliacion(indicador)
+
+        if motivo:
+            raise serializers.ValidationError({'indicador': motivo})
+
+        attrs['_info_periodo'] = info
+        return attrs
+
+    def create(self, validated_data):
+        from .services import obtener_o_crear_periodo
+
+        info = validated_data.pop('_info_periodo')
+        validated_data['periodo'] = obtener_o_crear_periodo(validated_data['indicador'], info['fecha_inicio_periodo'])
+        validated_data['fecha_limite_ordinaria'] = info['fecha_limite_ordinaria']
+        validated_data['estado'] = SolicitudAmpliacionPlazo.ESTADO_PENDIENTE
+
+        return super().create(validated_data)

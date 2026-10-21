@@ -26,8 +26,16 @@ const busqueda = ref('')
 const filtroModulo = ref('')
 const filtroAccion = ref('')
 const filtroUsuario = ref('')
+// Etapa 4 (M7): acciones de usuarios frente a eventos automáticos del sistema.
+const filtroOrigen = ref('')
 const fechaInicio = ref('')
 const fechaFin = ref('')
+
+function autorRegistro(item) {
+  if (item.origen === 'sistema') return 'Sistema'
+
+  return item.usuario_username || item.autor || 'Sin usuario'
+}
 
 function normalizarLista(data) {
   if (Array.isArray(data)) {
@@ -83,7 +91,7 @@ const registrosFiltrados = computed(() => {
   const usuarioTermino = filtroUsuario.value.trim().toLowerCase()
 
   return registros.value.filter((item) => {
-    const username = String(item.usuario_username || '').toLowerCase()
+    const username = autorRegistro(item).toLowerCase()
     const modulo = String(item.modulo || '').toLowerCase()
     const accionTexto = textoAccion(item.accion, item).toLowerCase()
     const descripcion = String(item.descripcion || '').toLowerCase()
@@ -99,6 +107,7 @@ const registrosFiltrados = computed(() => {
     const coincideModulo = !filtroModulo.value || item.modulo === filtroModulo.value
     const coincideAccion = !filtroAccion.value || item.accion === filtroAccion.value
     const coincideUsuario = !usuarioTermino || username.includes(usuarioTermino)
+    const coincideOrigen = !filtroOrigen.value || (item.origen || 'usuario') === filtroOrigen.value
 
     const fechaRegistro = soloFecha(item.fecha_hora)
     const coincideFechaInicio = !fechaInicio.value || (fechaRegistro && fechaRegistro >= fechaInicio.value)
@@ -109,6 +118,7 @@ const registrosFiltrados = computed(() => {
       coincideModulo &&
       coincideAccion &&
       coincideUsuario &&
+      coincideOrigen &&
       coincideFechaInicio &&
       coincideFechaFin
     )
@@ -121,6 +131,7 @@ const hayFiltrosActivos = computed(() => {
     filtroModulo.value !== '' ||
     filtroAccion.value !== '' ||
     filtroUsuario.value.trim() !== '' ||
+    filtroOrigen.value !== '' ||
     fechaInicio.value !== '' ||
     fechaFin.value !== ''
   )
@@ -131,6 +142,7 @@ function limpiarFiltros() {
   filtroModulo.value = ''
   filtroAccion.value = ''
   filtroUsuario.value = ''
+  filtroOrigen.value = ''
   fechaInicio.value = ''
   fechaFin.value = ''
 }
@@ -157,8 +169,14 @@ const registrosHoy = computed(() => {
   return registros.value.filter((item) => soloFecha(item.fecha_hora) === hoy).length
 })
 
+// Solo personas: los eventos del "Sistema" no cuentan como usuario.
 const totalUsuariosUnicos = computed(() => {
-  return new Set(registros.value.map((item) => item.usuario_username).filter(Boolean)).size
+  return new Set(
+    registros.value
+      .filter((item) => item.origen !== 'sistema')
+      .map((item) => item.usuario_username)
+      .filter(Boolean)
+  ).size
 })
 
 const totalModulosUnicos = computed(() => modulosDisponibles.value.length)
@@ -273,7 +291,7 @@ onMounted(() => {
         <article class="summary-card">
           <span>Usuarios</span>
           <strong>{{ totalUsuariosUnicos }}</strong>
-          <p>Usuarios distintos con actividad</p>
+          <p>Personas distintas con actividad (sin contar al Sistema)</p>
         </article>
 
         <article class="summary-card">
@@ -352,6 +370,16 @@ onMounted(() => {
           </label>
 
           <label class="field">
+            <span>Origen</span>
+
+            <select v-model="filtroOrigen">
+              <option value="">Usuarios y sistema</option>
+              <option value="usuario">Usuarios</option>
+              <option value="sistema">Sistema</option>
+            </select>
+          </label>
+
+          <label class="field">
             <span>Desde</span>
 
             <input v-model="fechaInicio" type="date" />
@@ -414,7 +442,10 @@ onMounted(() => {
               <td>{{ formatearFechaHora(item.fecha_hora) }}</td>
 
               <td>
-                <div class="cell-main" :title="item.usuario_username || 'Sin usuario'">{{ item.usuario_username || 'Sin usuario' }}</div>
+                <div class="cell-main" :title="autorRegistro(item)">
+                  {{ autorRegistro(item) }}
+                  <span v-if="item.origen === 'sistema'" class="chip-sistema">Automático</span>
+                </div>
               </td>
 
               <td>
@@ -688,6 +719,19 @@ td {
   font-weight: 600;
   vertical-align: top;
   overflow: hidden;
+}
+
+/* Etapa 4 (M7): eventos ejecutados por el sistema. */
+.chip-sistema {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(69, 123, 157, 0.12);
+  color: #457b9d;
+  font-size: 10.5px;
+  font-weight: 800;
+  vertical-align: middle;
 }
 
 .cell-main {

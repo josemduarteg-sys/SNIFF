@@ -1,7 +1,12 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { formatearNumero, formatearDiferencia } from '../../utils/formato'
-import { claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
+import {
+  SIN_REGISTRO,
+  claseColorCumplimiento,
+  esMedicionSinRegistro,
+  textoEstadoCumplimiento,
+} from '../../utils/cumplimiento'
 import { descargarEvidencia, descargarArchivoEvidencia } from '../../services/medicionService'
 
 const props = defineProps({
@@ -28,7 +33,18 @@ const textoPromedioAcumulado = computed(() => {
 
 const claseEstadoAcumulado = computed(() => claseColorCumplimiento(props.medicion.estado_acumulado_hasta_medicion_color))
 
+// Etapa 3 (C3): una omisión no tiene resultado ni diferencia con la meta.
+const sinRegistro = computed(() => esMedicionSinRegistro(props.medicion))
+
+const textoResultado = computed(() => {
+  if (sinRegistro.value) return SIN_REGISTRO
+
+  return formatearNumero(props.medicion.valor_resultado, { unidad: props.medicion.unidad_medida })
+})
+
 const diferencia = computed(() => {
+  if (sinRegistro.value) return '-'
+
   return formatearDiferencia(props.medicion.valor_resultado, props.medicion.valor_meta, {
     unidad: props.medicion.unidad_medida,
   })
@@ -112,7 +128,11 @@ function formatearFecha(fecha) {
       <div>
         <span class="eyebrow">Indicador KPI</span>
         <h3>{{ medicion.indicador_nombre || 'Sin KPI' }}</h3>
-        <p>{{ medicion.observacion || medicion.observaciones || 'Sin observaciones registradas.' }}</p>
+        <p v-if="sinRegistro">
+          Este periodo venció sin que se registrara un resultado y el sistema lo cerró automáticamente.
+          No es un resultado del KPI: no forma parte del promedio acumulado.
+        </p>
+        <p v-else>{{ medicion.observacion || medicion.observaciones || 'Sin observaciones registradas.' }}</p>
       </div>
 
       <div class="estado-periodo-resumen">
@@ -141,7 +161,7 @@ function formatearFecha(fecha) {
       </div>
 
       <div class="detail-item">
-        <span>Objetivo específico</span>
+        <span>Objetivo</span>
         <strong>{{ medicion.indicador_objetivo_especifico_texto || 'No definido' }}</strong>
       </div>
 
@@ -162,7 +182,7 @@ function formatearFecha(fecha) {
 
       <div class="detail-item">
         <span>Resultado</span>
-        <strong>{{ formatearNumero(medicion.valor_resultado, { unidad: medicion.unidad_medida }) }}</strong>
+        <strong>{{ textoResultado }}</strong>
       </div>
 
       <div class="detail-item">

@@ -92,6 +92,9 @@ function cancelar() {
       </div>
 
       <small v-if="estado.errorPassword" class="field-error">{{ estado.errorPassword }}</small>
+      <small v-else class="password-hint">
+        Mínimo 8 caracteres. No puede ser una contraseña común, solo números ni parecerse a los datos del usuario.
+      </small>
     </label>
 
     <label class="field">
@@ -234,6 +237,12 @@ function cancelar() {
 .password-toggle:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.password-hint {
+  color: #9aa8b8;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .field-error {

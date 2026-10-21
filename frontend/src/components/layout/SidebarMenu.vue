@@ -86,13 +86,9 @@ const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
         <span>Planes anuales</span>
       </RouterLink>
 
-      <RouterLink to="/objetivos-especificos" class="nav-item" active-class="active">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7v5l3 3" />
-        </svg>
-        <span>Objetivos específicos</span>
-      </RouterLink>
+      <!-- Objetivos específicos: deshabilitados temporalmente por pedido de
+           Hernán (reunión del 06/10/2026). La pantalla y el backend se
+           conservan, pero no forman parte del flujo actual. -->
 
       <RouterLink to="/indicadores" class="nav-item" active-class="active">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">

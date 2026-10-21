@@ -17,7 +17,12 @@ import {
   obtenerRangosKpi,
 } from '../services/indicadorService'
 import { formatearNumero } from '../utils/formato'
-import { claseColorCumplimiento, textoEstadoCumplimiento } from '../utils/cumplimiento'
+import {
+  SIN_REGISTRO,
+  claseColorCumplimiento,
+  textoEstadoCumplimiento,
+  textoOmisiones,
+} from '../utils/cumplimiento'
 import { useConfirmacion } from '../composables/useConfirmacion'
 import { usePaginacion } from '../composables/usePaginacion'
 import Paginacion from '../components/common/Paginacion.vue'
@@ -27,6 +32,7 @@ import {
   puedeCrearKpi,
   puedeEditarKpi,
 } from '../utils/permisos'
+import { esObjetivoImplicito, textoObjetivoKpi } from '../utils/objetivos'
 
 const props = defineProps({
   usuario: {
@@ -170,6 +176,8 @@ const indicadoresFiltrados = computed(() => {
       !estadoSeleccionado.value ||
       indicador.estado === estadoSeleccionado.value
 
+    // Los responsables individuales (Etapa 4) ya no forman parte del flujo:
+    // sin filtro ni contador.
     return (
       coincideBusqueda &&
       coincideObjetivo &&
@@ -224,7 +232,8 @@ const indicadoresAnulados = computed(() => {
 
 function textoPromedioAcumulado(indicador) {
   if (indicador.promedio_acumulado === null || indicador.promedio_acumulado === undefined) {
-    return 'Sin mediciones'
+    // Etapa 3 (C3): sin resultados reales pero con periodos omitidos.
+    return indicador.cantidad_omisiones ? SIN_REGISTRO : 'Sin mediciones'
   }
 
   return formatearNumero(indicador.promedio_acumulado, { unidad: indicador.unidad_medida })
@@ -680,7 +689,7 @@ onBeforeUnmount(() => {
         <thead>
           <tr>
             <th>Indicador KPI</th>
-            <th>Objetivo específico</th>
+            <th>Objetivo</th>
             <th>Meta</th>
             <th>Plan anual</th>
             <th>Frecuencia</th>
@@ -712,10 +721,12 @@ onBeforeUnmount(() => {
             </td>
 
             <td>
-              <span class="code-chip" :title="indicador.objetivo_especifico_texto || 'Sin objetivo'">
-                {{ indicador.objetivo_especifico_texto || 'Sin objetivo' }}
+              <span class="code-chip" :title="textoObjetivoKpi(indicador)">
+                {{ textoObjetivoKpi(indicador) }}
               </span>
-              <div class="cell-sub" :title="indicador.objetivo_general_texto || ''">
+              <!-- KPI vinculado a un objetivo específico real (anterior): se
+                   muestra también su objetivo general. -->
+              <div v-if="!esObjetivoImplicito(indicador)" class="cell-sub" :title="indicador.objetivo_general_texto || ''">
                 {{ indicador.objetivo_general_texto || '' }}
               </div>
             </td>
@@ -760,6 +771,10 @@ onBeforeUnmount(() => {
 
               <div v-else class="cell-sub">
                 {{ indicador.cantidad_mediciones }} mediciones
+              </div>
+
+              <div v-if="indicador.cantidad_omisiones" class="cell-sub texto-omision">
+                {{ textoOmisiones(indicador.cantidad_omisiones) }}
               </div>
             </td>
 
@@ -1252,6 +1267,12 @@ tbody tr:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Etapa 3 (C3): periodos sin registro del KPI. */
+.texto-omision {
+  color: #55657a;
+  font-weight: 700;
 }
 
 .cell-sub {

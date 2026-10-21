@@ -3,6 +3,9 @@ import { computed, reactive, ref, watch } from 'vue'
 import SelectorBuscable from '../common/SelectorBuscable.vue'
 import { actualizarMedicion, crearMedicion, obtenerSiguientePeriodo } from '../../services/medicionService'
 import { formatearNumero } from '../../utils/formato'
+import { formatearFechaIso } from '../../utils/ampliaciones'
+import { textoObjetivoKpi } from '../../utils/objetivos'
+import { MENSAJE_SIN_KPI_DISPONIBLES, kpisDisponiblesParaRegistro } from '../../utils/registroMediciones'
 
 const props = defineProps({
   indicadores: {
@@ -50,16 +53,18 @@ const tituloBoton = computed(() => {
   return esEdicion.value ? 'Actualizar medición' : 'Guardar medición'
 })
 
-// Bloque 4 (periodos y plazos), regla 8: identifica en el propio selector
-// qué KPI tienen un periodo disponible para registrar ahora mismo, sin
-// ocultar los demás (el usuario puede seguir viendo por qué uno no está
-// disponible — pendiente o vencido — en vez de que simplemente desaparezca).
+// Solo los KPI que hoy tienen un periodo disponible para registrar (pedido
+// de Hernán: "que le aparezcan solo los que tocan"). Antes se listaban todos
+// los autorizados, marcados "(Disponible)" / "(No disponible)". El backend
+// vuelve a validar el periodo al guardar.
 const opcionesKpi = computed(() => {
-  return props.indicadores.map((indicador) => ({
+  return kpisDisponiblesParaRegistro(props.indicadores).map((indicador) => ({
     id: indicador.id,
-    texto: `${indicador.nombre} — ${indicador.plan_anual_nombre || 'Sin plan anual'} — ${indicador.objetivo_especifico_texto || 'Sin objetivo'} ${indicador.periodo_disponible ? '(Disponible)' : '(No disponible)'}`,
+    texto: `${indicador.nombre} — ${indicador.plan_anual_nombre || 'Sin plan anual'} — ${textoObjetivoKpi(indicador)}`,
   }))
 })
+
+const sinKpiDisponibles = computed(() => !esEdicion.value && !opcionesKpi.value.length)
 
 const indicadorSeleccionado = computed(() => {
   if (!form.indicador) return null
@@ -96,7 +101,7 @@ const contexto = computed(() => {
   return {
     planEstrategico: indicador.plan_estrategico_titulo,
     planAnual: indicador.plan_anual_nombre,
-    objetivoEspecifico: indicador.objetivo_especifico_texto,
+    objetivoEspecifico: textoObjetivoKpi(indicador),
     nombreKpi: indicador.nombre,
     formula: indicador.formula_medicion,
     unidad: indicador.unidad_medida,
@@ -318,14 +323,18 @@ async function guardar() {
 
 <template>
   <form class="medicion-form" @submit.prevent="guardar">
-    <div v-if="!esEdicion" class="form-group full">
+    <div v-if="sinKpiDisponibles" class="form-group full">
+      <p class="field-hint error sin-kpi">{{ MENSAJE_SIN_KPI_DISPONIBLES }}</p>
+    </div>
+
+    <div v-else-if="!esEdicion" class="form-group full">
       <label>KPI</label>
       <SelectorBuscable
         v-model="form.indicador"
         :opciones="opcionesKpi"
         placeholder="Seleccionar KPI"
         placeholder-busqueda="Escribí el nombre del KPI..."
-        mensaje-vacio="No hay KPI autorizados disponibles."
+        mensaje-vacio="Ningún KPI disponible coincide con ese texto."
       />
     </div>
 
@@ -341,7 +350,7 @@ async function guardar() {
       </div>
 
       <div class="context-item">
-        <span>Objetivo específico</span>
+        <span>Objetivo</span>
         <strong>{{ contexto.objetivoEspecifico || 'No definido' }}</strong>
       </div>
 
@@ -378,8 +387,15 @@ async function guardar() {
       >
         <template v-if="estado.periodo.disponible">
           Podés registrar la medición de <strong>{{ estado.periodo.periodo_nombre }}</strong>.
-          Fecha de cierre: {{ estado.periodo.fecha_cierre }}. Fecha límite de registro:
-          {{ estado.periodo.fecha_limite_registro }}.
+          Fecha de cierre: {{ formatearFechaIso(estado.periodo.fecha_cierre) }}.
+          <template v-if="estado.periodo.fecha_limite_extraordinaria">
+            <strong>Plazo ampliado hasta el {{ formatearFechaIso(estado.periodo.fecha_limite_extraordinaria) }}</strong>
+            (días adicionales autorizados; el plazo ordinario terminó el
+            {{ formatearFechaIso(estado.periodo.fecha_limite_ordinaria) }}).
+          </template>
+          <template v-else>
+            Fecha límite de registro: {{ formatearFechaIso(estado.periodo.fecha_limite_registro) }}.
+          </template>
         </template>
         <template v-else>
           {{ estado.periodo.motivo }}

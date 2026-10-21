@@ -5,9 +5,19 @@ export async function obtenerAlertas() {
   return normalizarRespuesta(response)
 }
 
+// Etapa 4 (M6): el backend filtra las pendientes y excluye las de KPI
+// anulados o de planes Cerrados (siguen guardadas como historial).
 export async function obtenerAlertasPendientes() {
-  const alertas = await obtenerAlertas()
-  return alertas.filter((alerta) => alerta.estado_alerta === 'pendiente')
+  const response = await api.get('alertas/', {
+    params: { estado_alerta: 'pendiente', vigentes: 1 },
+  })
+  return normalizarRespuesta(response).filter((alerta) => alerta.estado_alerta === 'pendiente')
+}
+
+// Etapa 6: alerta citada en el enlace de una notificación.
+export async function obtenerAlerta(id) {
+  const response = await api.get(`alertas/${id}/`)
+  return response.data
 }
 
 export async function marcarAlertaRevisada(id) {

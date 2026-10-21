@@ -199,6 +199,10 @@ function cancelar() {
             {{ mostrarPassword ? 'Ocultar' : 'Ver' }}
           </button>
         </div>
+
+        <small class="password-hint">
+          Mínimo 8 caracteres. No puede ser una contraseña común, solo números ni parecerse al usuario, nombre o correo.
+        </small>
       </label>
     </div>
 
@@ -292,6 +296,12 @@ function cancelar() {
   background: #f4f7f9;
   color: #9aa8b8;
   cursor: not-allowed;
+}
+
+.password-hint {
+  color: #9aa8b8;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .password-wrapper {

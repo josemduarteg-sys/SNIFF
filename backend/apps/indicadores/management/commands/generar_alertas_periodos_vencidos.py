@@ -1,12 +1,13 @@
 from django.core.management.base import BaseCommand
 
+from apps.auditoria.services import registrar_ejecucion_tarea_automatica
 from apps.indicadores.services import generar_alertas_periodos_vencidos
 
 
 class Command(BaseCommand):
     help = (
         'Genera alertas para KPI autorizados cuyo siguiente periodo esperado '
-        'de medición ya venció sin que exista una medición registrada.'
+        'de medición ya cerró sin que exista una medición registrada.'
     )
 
     def handle(self, *args, **kwargs):
@@ -24,10 +25,13 @@ class Command(BaseCommand):
                     f"  · Ya existía alerta: {item['indicador']} — periodo {item['periodo']}"
                 )
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"KPI revisados: {resultado['revisados']} | "
-                f"Alertas creadas: {resultado['creadas']} | "
-                f"Omitidas: {resultado['omitidas']}"
-            )
+        resumen = (
+            f"KPI revisados: {resultado['revisados']} | "
+            f"Alertas creadas: {resultado['creadas']} | "
+            f"Omitidas: {resultado['omitidas']}"
         )
+
+        self.stdout.write(self.style.SUCCESS(resumen))
+
+        # Etapa 4 (M7): registro de la ejecución en bitácora como "Sistema".
+        registrar_ejecucion_tarea_automatica('Alertas de periodos vencidos', resumen)

@@ -1,7 +1,12 @@
 <script setup>
 import { computed } from 'vue'
 import { formatearNumero } from '../../utils/formato'
-import { claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
+import { SIN_REGISTRO, claseColorCumplimiento, textoEstadoCumplimiento } from '../../utils/cumplimiento'
+import { esObjetivoImplicito } from '../../utils/objetivos'
+
+// Los responsables individuales de KPI (Etapa 4) se retiraron del flujo: la
+// sección ya no se muestra. ResponsablesKpi.vue, el modelo y la API se
+// conservan sin uso.
 
 const props = defineProps({
   indicador: {
@@ -21,7 +26,8 @@ const tieneMediciones = computed(() => {
 
 const textoPromedioAcumulado = computed(() => {
   if (!tieneMediciones.value) {
-    return 'Sin mediciones'
+    // Etapa 3 (C3): solo omisiones -> "Sin registro".
+    return props.indicador.cantidad_omisiones ? SIN_REGISTRO : 'Sin mediciones'
   }
 
   return formatearNumero(props.indicador.promedio_acumulado, { unidad: props.indicador.unidad_medida })
@@ -85,9 +91,11 @@ function formatearCriterio(rango) {
         <strong>{{ indicador.objetivo_general_texto || 'Sin objetivo general' }}</strong>
       </div>
 
-      <div class="detail-item detail-full">
-        <span>Objetivo específico</span>
-        <strong>{{ indicador.objetivo_especifico_texto || 'Sin objetivo específico' }}</strong>
+      <!-- Solo para KPI vinculados a un objetivo específico real (anterior a
+           su deshabilitación); un KPI directo ya muestra su objetivo arriba. -->
+      <div v-if="!esObjetivoImplicito(indicador)" class="detail-item detail-full">
+        <span>Objetivo</span>
+        <strong>{{ indicador.objetivo_especifico_texto || 'Sin objetivo' }}</strong>
       </div>
 
       <div class="detail-item">
@@ -149,8 +157,14 @@ function formatearCriterio(rango) {
         </div>
 
         <div class="detail-item">
-          <span>Cantidad de mediciones</span>
+          <span>Mediciones con resultado</span>
           <strong>{{ indicador.cantidad_mediciones ?? 0 }}</strong>
+        </div>
+
+        <!-- Etapa 3 (C3): no forman parte del promedio acumulado. -->
+        <div class="detail-item">
+          <span>Periodos sin registro</span>
+          <strong>{{ indicador.cantidad_omisiones ?? 0 }}</strong>
         </div>
 
         <div class="detail-item">
@@ -161,7 +175,7 @@ function formatearCriterio(rango) {
               {{ textoEstadoCumplimiento(indicador.estado_acumulado_nombre) }}
             </span>
           </strong>
-          <strong v-else>Sin mediciones</strong>
+          <strong v-else>{{ textoPromedioAcumulado }}</strong>
         </div>
       </div>
     </div>

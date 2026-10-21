@@ -1,23 +1,54 @@
+import ipaddress
 import logging
+
+from django.db import transaction
+from rest_framework import status
+from rest_framework.exceptions import APIException
+from rest_framework.throttling import BaseThrottle
 
 from .models import Bitacora, Notificacion
 
 logger = logging.getLogger(__name__)
 
 
+class BitacoraNoDisponible(APIException):
+    """Etapa 4 (auditoría M7): la operación no puede quedar sin su registro
+    de auditoría. Como cada petición es atómica (ATOMIC_REQUESTS), al
+    lanzarse se revierte TODO lo que la petición había guardado: no queda
+    una operación a medias y reintentar es seguro."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = (
+        'No se pudo registrar la operación en la bitácora, así que no se guardó '
+        'ningún cambio. Intentá nuevamente en unos minutos.'
+    )
+    default_code = 'bitacora_no_disponible'
+
+
 def obtener_ip_usuario(request):
+    """Etapa 4 (auditoría M7): mismo criterio que los límites de intentos de
+    la Etapa 2 (SimpleRateThrottle.get_ident, que respeta
+    REST_FRAMEWORK['NUM_PROXIES']). Con 0 proxies usa REMOTE_ADDR e ignora
+    X-Forwarded-For, que el cliente puede falsificar; detrás de N proxies de
+    confianza toma la dirección que agregó el más cercano. Si el valor no es
+    una IP válida, se guarda vacío en lugar de un texto arbitrario."""
     if not request:
         return None
 
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    ident = BaseThrottle().get_ident(request)
 
-    if x_forwarded_for:
-        return x_forwarded_for.split(',')[0].strip()
-
-    return request.META.get('REMOTE_ADDR')
+    try:
+        return str(ipaddress.ip_address((ident or '').strip()))
+    except ValueError:
+        return None
 
 
 def registrar_bitacora(usuario, accion, modulo, descripcion, request=None):
+    # Etapa 4 (M7): una acción de usuario siempre lleva un usuario real. Los
+    # eventos del sistema usan registrar_bitacora_sistema().
+    if usuario is None or getattr(usuario, 'pk', None) is None:
+        raise ValueError('Una acción de usuario requiere un usuario válido para la bitácora.')
+
     ip_usuario = obtener_ip_usuario(request)
 
     return Bitacora.objects.create(
@@ -29,9 +60,85 @@ def registrar_bitacora(usuario, accion, modulo, descripcion, request=None):
     )
 
 
+def registrar_bitacora_sistema(accion, modulo, descripcion):
+    """Etapa 4 (auditoría M7): evento ejecutado automáticamente por el sistema
+    (tareas programadas). Queda con usuario NULL y sin IP, y se muestra como
+    "Sistema". Lanza la excepción si no puede guardarse: el llamador decide
+    cómo informarlo (ver registrar_ejecucion_tarea_automatica)."""
+    return Bitacora.objects.create(
+        usuario=None,
+        accion=accion,
+        modulo=modulo,
+        descripcion=descripcion,
+        ip_usuario=None,
+    )
+
+
+MODULO_TAREAS_AUTOMATICAS = 'Tareas automáticas'
+
+
+def registrar_ejecucion_tarea_automatica(nombre_tarea, resumen, con_errores=False):
+    """Registra en bitácora una ejecución REAL de una tarea automática (las
+    simulaciones no llaman a esta función). Si el registro falla, lanza
+    CommandError con constancia de que las operaciones de la tarea YA
+    quedaron confirmadas: no se revierten ni se repiten."""
+    from django.core.management.base import CommandError
+
+    try:
+        with transaction.atomic():
+            registrar_bitacora_sistema(
+                accion='error' if con_errores else 'actualizar',
+                modulo=MODULO_TAREAS_AUTOMATICAS,
+                descripcion=f'{nombre_tarea}: {resumen}',
+            )
+    except Exception as error:
+        logger.exception('No se pudo registrar en bitácora la ejecución de %s.', nombre_tarea)
+        raise CommandError(
+            f'La tarea "{nombre_tarea}" terminó y sus operaciones ya quedaron guardadas '
+            f'({resumen}), pero no se pudo registrar su ejecución en la bitácora: {error}. '
+            'No se revirtió ni se repitió nada; revisá la bitácora y el log del servidor.'
+        ) from error
+
+
+def registrar_bitacora_obligatoria(usuario, accion, modulo, descripcion, request=None):
+    """Etapa 4 (auditoría M7): registro de bitácora de una operación hecha en
+    una petición. Si falla, lanza BitacoraNoDisponible (503) y la petición
+    completa se revierte (ATOMIC_REQUESTS): nunca queda guardada una
+    operación sin su registro, ni el usuario ve un 500.
+
+    Se ejecuta en un savepoint propio para que un error de base de datos
+    no deje rota la transacción de la petición."""
+    if usuario is None or getattr(usuario, 'pk', None) is None:
+        # Error de programación, no una caída de la bitácora: no se disfraza de 503.
+        raise ValueError('Una acción de usuario requiere un usuario válido para la bitácora.')
+
+    try:
+        with transaction.atomic():
+            return registrar_bitacora(
+                usuario=usuario,
+                accion=accion,
+                modulo=modulo,
+                descripcion=descripcion,
+                request=request,
+            )
+    except Exception as error:
+        logger.exception(
+            'No se pudo registrar en bitácora (usuario=%s, accion=%s, modulo=%s); '
+            'la operación se revierte.',
+            getattr(usuario, 'username', usuario),
+            accion,
+            modulo,
+        )
+        raise BitacoraNoDisponible() from error
+
+
 def registrar_bitacora_seguro(usuario, accion, modulo, descripcion, request=None):
     """Igual que registrar_bitacora, pero nunca interrumpe la acción principal
-    si el registro falla — solo lo deja loggeado."""
+    si el registro falla — solo lo deja loggeado.
+
+    Etapa 4: ya no se usa dentro de peticiones (ahí se usa
+    registrar_bitacora_obligatoria). Queda solo para procesos fuera de una
+    petición donde perder el registro sea preferible a detener el proceso."""
     try:
         return registrar_bitacora(
             usuario=usuario,

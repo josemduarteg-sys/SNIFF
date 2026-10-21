@@ -20,6 +20,7 @@ import {
   rechazarSolicitudRestablecimiento,
 } from '../services/solicitudRestablecimientoService'
 import { puedeGestionarUsuarios } from '../utils/permisos'
+import { accionesSolicitud, tieneAcciones } from '../utils/solicitudesRestablecimiento'
 import { useConfirmacion } from '../composables/useConfirmacion'
 import { usePaginacion } from '../composables/usePaginacion'
 import Paginacion from '../components/common/Paginacion.vue'
@@ -314,57 +315,70 @@ function claseEstadoSolicitud(estado) {
   }
 }
 
-function manejarAprobarSolicitud(solicitud) {
-  solicitarConfirmacion({
-    titulo: 'Aprobar solicitud',
-    mensaje: `¿Confirmás aprobar la solicitud de "${solicitud.usuario_username}"?`,
-    textoConfirmar: 'Aprobar',
-    variante: 'normal',
-    accion: () => ejecutarAprobarSolicitud(solicitud),
-  })
-}
+// La aprobación y el rechazo usan solo el modal de confirmación: no piden
+// observaciones (antes se abría un window.prompt nativo después de
+// confirmar) ni asignan contraseña. Mientras una acción está en curso, los
+// botones de esa solicitud quedan deshabilitados para no repetirla.
+const solicitudEnProceso = ref(null)
 
-async function ejecutarAprobarSolicitud(solicitud) {
-  const observacion = window.prompt('Observación administrativa opcional:', '')
+async function ejecutarAccionSolicitud(solicitud, operacion, textoExito, textoError) {
+  if (solicitudEnProceso.value) return
 
+  solicitudEnProceso.value = solicitud.id
   error.value = ''
   mensaje.value = ''
 
   try {
-    await aprobarSolicitudRestablecimiento(solicitud.id, { observacion_admin: observacion || '' })
-    mensaje.value = 'Solicitud aprobada correctamente.'
-    await cargarSolicitudesRestablecimiento()
+    await operacion(solicitud.id)
+    mensaje.value = textoExito
   } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo aprobar la solicitud.')
+    error.value = obtenerMensajeError(e, textoError)
+  } finally {
+    solicitudEnProceso.value = null
+    // También tras un error: si otro administrador ya la resolvió, el
+    // listado muestra el estado real.
+    await cargarSolicitudesRestablecimiento()
   }
 }
 
+function manejarAprobarSolicitud(solicitud) {
+  if (!accionesSolicitud(solicitud.estado).aprobar) return
+
+  solicitarConfirmacion({
+    titulo: 'Aprobar solicitud',
+    mensaje: `¿Confirmás aprobar la solicitud de "${solicitud.usuario_username}"?`,
+    textoSecundario: 'La contraseña temporal se asigna después, como un paso aparte.',
+    textoConfirmar: 'Aprobar',
+    variante: 'normal',
+    accion: () => ejecutarAccionSolicitud(
+      solicitud,
+      (id) => aprobarSolicitudRestablecimiento(id),
+      `Solicitud de "${solicitud.usuario_username}" aprobada. Ya podés asignarle una contraseña temporal.`,
+      'No se pudo aprobar la solicitud.',
+    ),
+  })
+}
+
 function manejarRechazarSolicitud(solicitud) {
+  if (!accionesSolicitud(solicitud.estado).rechazar) return
+
   solicitarConfirmacion({
     titulo: 'Rechazar solicitud',
     mensaje: `¿Confirmás rechazar la solicitud de "${solicitud.usuario_username}"?`,
     textoConfirmar: 'Rechazar',
     variante: 'advertencia',
-    accion: () => ejecutarRechazarSolicitud(solicitud),
+    accion: () => ejecutarAccionSolicitud(
+      solicitud,
+      (id) => rechazarSolicitudRestablecimiento(id),
+      `Solicitud de "${solicitud.usuario_username}" rechazada.`,
+      'No se pudo rechazar la solicitud.',
+    ),
   })
 }
 
-async function ejecutarRechazarSolicitud(solicitud) {
-  const observacion = window.prompt('Motivo del rechazo:', '')
-
-  error.value = ''
-  mensaje.value = ''
-
-  try {
-    await rechazarSolicitudRestablecimiento(solicitud.id, { observacion_admin: observacion || '' })
-    mensaje.value = 'Solicitud rechazada correctamente.'
-    await cargarSolicitudesRestablecimiento()
-  } catch (e) {
-    error.value = obtenerMensajeError(e, 'No se pudo rechazar la solicitud.')
-  }
-}
-
 function manejarAsignarPasswordTemporal(solicitud) {
+  if (!accionesSolicitud(solicitud.estado).asignarPassword || solicitudEnProceso.value) return
+
   solicitudPasswordTemporal.value = solicitud
   errorModalPasswordTemporal.value = ''
   modalPasswordTemporalAbierto.value = true
@@ -899,42 +913,39 @@ onBeforeUnmount(() => {
 
               <td class="td-acciones">
                 <div class="actions-cell">
-                  <template v-if="solicitud.estado === 'pendiente'">
-                    <button
-                      class="action-btn"
-                      type="button"
-                      @click="manejarAprobarSolicitud(solicitud)"
-                    >
-                      Aprobar
-                    </button>
-
-                    <button
-                      class="action-btn danger"
-                      type="button"
-                      @click="manejarRechazarSolicitud(solicitud)"
-                    >
-                      Rechazar
-                    </button>
-
-                    <button
-                      class="action-btn"
-                      type="button"
-                      @click="manejarAsignarPasswordTemporal(solicitud)"
-                    >
-                      Asignar contraseña temporal
-                    </button>
-                  </template>
-
+                  <!-- Acciones según el estado real (utils/solicitudesRestablecimiento.js):
+                       antes "Asignar contraseña temporal" también aparecía en Pendiente. -->
                   <button
-                    v-else-if="solicitud.estado === 'aprobada'"
+                    v-if="accionesSolicitud(solicitud.estado).aprobar"
                     class="action-btn"
                     type="button"
+                    :disabled="solicitudEnProceso === solicitud.id"
+                    @click="manejarAprobarSolicitud(solicitud)"
+                  >
+                    Aprobar
+                  </button>
+
+                  <button
+                    v-if="accionesSolicitud(solicitud.estado).rechazar"
+                    class="action-btn danger"
+                    type="button"
+                    :disabled="solicitudEnProceso === solicitud.id"
+                    @click="manejarRechazarSolicitud(solicitud)"
+                  >
+                    Rechazar
+                  </button>
+
+                  <button
+                    v-if="accionesSolicitud(solicitud.estado).asignarPassword"
+                    class="action-btn"
+                    type="button"
+                    :disabled="solicitudEnProceso === solicitud.id"
                     @click="manejarAsignarPasswordTemporal(solicitud)"
                   >
                     Asignar contraseña temporal
                   </button>
 
-                  <span v-else class="cell-sub">Sin acciones disponibles</span>
+                  <span v-if="!tieneAcciones(solicitud.estado)" class="cell-sub">Sin acciones disponibles</span>
                 </div>
               </td>
             </tr>

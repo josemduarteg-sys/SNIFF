@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -32,6 +33,8 @@ class CambioObligatorioPasswordTests(APITestCase):
     contraseña inicial en el primer inicio de sesión (casos 1 a 10)."""
 
     def setUp(self):
+        # Etapa 2 (B2): contadores de límites de intentos aislados por prueba.
+        cache.clear()
         self.admin = crear_usuario_admin('admin_usuarios')
 
     # ------------------------------------------------------------ helpers
@@ -189,7 +192,7 @@ class CambioObligatorioPasswordTests(APITestCase):
         usuario.correo = 'olvido@sniff.test'
         usuario.save()
         solicitud = SolicitudRestablecimientoPassword.objects.create(
-            usuario=usuario, identificador_ingresado='olvido'
+            usuario=usuario, identificador_ingresado='olvido', estado='aprobada',
         )
 
         self.client.force_authenticate(user=self.admin)

@@ -9,6 +9,7 @@ import PlanAnualDetalle from '../components/planes-anuales/PlanAnualDetalle.vue'
 import {
   actualizarPlanAnual,
   cerrarPlanAnual,
+  completarVigenciaPlanAnual,
   crearPlanAnual,
   obtenerDatosFormularioPlanAnual,
   obtenerPlanesAnuales,
@@ -180,6 +181,40 @@ function puedePonerEnUso(plan) {
 
 function puedeCerrar(plan) {
   return esAdmin.value && plan.estado === 'en_uso' && !planPadreCerrado(plan)
+}
+
+// Etapa 1 (M9): planes anuales antiguos En uso sin fechas de vigencia.
+function puedeCompletarVigencia(plan) {
+  return esAdmin.value && plan.puede_completar_vigencia === true
+}
+
+function abrirCompletarVigencia(plan) {
+  if (!puedeCompletarVigencia(plan)) {
+    return
+  }
+
+  planSeleccionado.value = plan
+  modalPlanAbierto.value = true
+  error.value = ''
+  mensaje.value = ''
+  errorModalPlan.value = ''
+}
+
+async function guardarVigencia(payload) {
+  guardandoPlan.value = true
+  errorModalPlan.value = ''
+  mensaje.value = ''
+
+  try {
+    await completarVigenciaPlanAnual(planSeleccionado.value.id, payload)
+    mensaje.value = 'Vigencia del plan anual registrada correctamente.'
+    cerrarModalPlan()
+    await cargarDatos()
+  } catch (e) {
+    errorModalPlan.value = obtenerMensajeError(e, 'No se pudo registrar la vigencia del plan anual.')
+  } finally {
+    guardandoPlan.value = false
+  }
 }
 
 function abrirNuevoPlan() {
@@ -496,6 +531,15 @@ onMounted(async () => {
                 </button>
 
                 <button
+                  v-if="puedeCompletarVigencia(plan)"
+                  class="action-btn"
+                  type="button"
+                  @click="abrirCompletarVigencia(plan)"
+                >
+                  Completar vigencia
+                </button>
+
+                <button
                   v-if="puedePonerEnUso(plan)"
                   class="action-btn"
                   type="button"
@@ -535,11 +579,17 @@ onMounted(async () => {
 
     <ModalBase
       :abierto="modalPlanAbierto"
-      :titulo="planSeleccionado ? 'Editar plan anual' : 'Nuevo plan anual'"
+      :titulo="
+        planSeleccionado?.puede_completar_vigencia
+          ? 'Completar vigencia del plan anual'
+          : planSeleccionado ? 'Editar plan anual' : 'Nuevo plan anual'
+      "
       :subtitulo="
-        planSeleccionado
-          ? 'Actualiza el plan estratégico y el año del plan anual.'
-          : 'Registra un plan anual sobre un plan estratégico En uso.'
+        planSeleccionado?.puede_completar_vigencia
+          ? 'Registra por única vez las fechas de vigencia de este plan anual En uso.'
+          : planSeleccionado
+            ? 'Actualiza el plan estratégico y el año del plan anual.'
+            : 'Registra un plan anual sobre un plan estratégico En uso.'
       "
       @cerrar="cerrarModalPlan"
     >
@@ -551,6 +601,7 @@ onMounted(async () => {
         :plan-anual="planSeleccionado"
         :planes="planesFormulario"
         @guardar="guardarPlan"
+        @completar-vigencia="guardarVigencia"
         @cancelar="cerrarModalPlan"
       />
 

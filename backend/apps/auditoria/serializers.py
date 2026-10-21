@@ -4,10 +4,15 @@ from .models import Bitacora, Notificacion
 
 
 class BitacoraSerializer(serializers.ModelSerializer):
+    # Etapa 4 (M7): en eventos del sistema usuario es NULL; sin default, DRF
+    # omitiría el campo en lugar de devolverlo vacío.
     usuario_username = serializers.CharField(
         source='usuario.username',
-        read_only=True
+        read_only=True,
+        default=None,
     )
+    origen = serializers.CharField(read_only=True)
+    autor = serializers.CharField(read_only=True)
 
     class Meta:
         model = Bitacora
@@ -15,6 +20,8 @@ class BitacoraSerializer(serializers.ModelSerializer):
             'id',
             'usuario',
             'usuario_username',
+            'origen',
+            'autor',
             'accion',
             'modulo',
             'descripcion',

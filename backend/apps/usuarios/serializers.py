@@ -1,4 +1,5 @@
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import Rol, SolicitudRestablecimientoPassword, Usuario
@@ -49,6 +50,9 @@ class UsuarioSerializer(serializers.ModelSerializer):
             'nombre_completo',
             'rol_nombre',
             'is_superuser',
+            # Etapa 2 (M10): privilegio técnico del admin de Django, no un
+            # rol de SNIFF; no se concede desde el módulo de Usuarios.
+            'is_staff',
             'debe_cambiar_password',
         ]
 
@@ -73,6 +77,23 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
         if email and not correo:
             attrs['correo'] = email
+
+        # Etapa 2 (B5): la contraseña inicial cumple la misma política que la
+        # definitiva (AUTH_PASSWORD_VALIDATORS), incluida la similitud con
+        # los datos del usuario que se está creando.
+        if self.instance is None and attrs.get('password'):
+            usuario_provisorio = Usuario(
+                username=attrs.get('username', ''),
+                first_name=attrs.get('first_name', ''),
+                last_name=attrs.get('last_name', ''),
+                email=attrs.get('email', ''),
+                correo=attrs.get('correo', ''),
+            )
+
+            try:
+                validate_password(attrs['password'], user=usuario_provisorio)
+            except DjangoValidationError as error:
+                raise serializers.ValidationError({'password': list(error.messages)})
 
         return attrs
 
@@ -199,7 +220,7 @@ class CambiarPasswordSerializer(serializers.Serializer):
         return attrs
 
     def save(self, **kwargs):
-        from apps.auditoria.services import registrar_bitacora_seguro
+        from apps.auditoria.services import registrar_bitacora_obligatoria
 
         request = self.context.get('request')
         usuario = request.user
@@ -217,7 +238,7 @@ class CambiarPasswordSerializer(serializers.Serializer):
         else:
             descripcion = f'El usuario {usuario.username} cambió su contraseña.'
 
-        registrar_bitacora_seguro(
+        registrar_bitacora_obligatoria(
             usuario=usuario,
             accion='actualizar',
             modulo='Contraseña',
