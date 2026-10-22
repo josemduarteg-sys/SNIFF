@@ -18,9 +18,9 @@ from apps.usuarios.models import Rol, Usuario
 from .models import ConfiguracionMediciones, EstadoCumplimiento, Frecuencia, IndicadorKPI
 from .services import (
     calcular_fecha_limite_registro,
-    crear_rangos_provisionales,
     obtener_info_siguiente_periodo,
 )
+from .rangos_de_prueba import configurar_rangos_70_85
 
 
 def crear_usuario(username, rol_nombre):
@@ -86,7 +86,7 @@ class VigenciaPlanAnualTests(APITestCase):
             estado='autorizado',
             creado_por=self.usuario,
         )
-        crear_rangos_provisionales(kpi)
+        configurar_rangos_70_85(kpi)
         return kpi
 
     # 9. Un Plan anual con fecha_inicio/fecha_fin propias (Bloque 1) debe
@@ -270,7 +270,7 @@ class ContinuidadAdministrativaEntreAniosTests(APITestCase):
             estado='autorizado',
             creado_por=self.usuario,
         )
-        crear_rangos_provisionales(self.kpi)
+        configurar_rangos_70_85(self.kpi)
 
         # Cubre manualmente enero-noviembre para que el próximo periodo
         # pendiente sea diciembre — el que se intenta registrar tarde,
@@ -364,7 +364,7 @@ class CompatibilidadPonderacionesTests(APITestCase):
             estado='autorizado',
             creado_por=self.usuario,
         )
-        crear_rangos_provisionales(kpi)
+        configurar_rangos_70_85(kpi)
 
         with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 1, 31)):
             info = obtener_info_siguiente_periodo(kpi)
@@ -429,7 +429,7 @@ class SeguridadBackendPeriodosTests(APITestCase):
             estado='autorizado',
             creado_por=self.usuario,
         )
-        crear_rangos_provisionales(self.kpi)
+        configurar_rangos_70_85(self.kpi)
 
     def test_un_periodo_enviado_en_el_payload_es_ignorado_y_sigue_rechazando_lo_no_disponible(self):
         from .models import PeriodoMedicion

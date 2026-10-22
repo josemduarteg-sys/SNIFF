@@ -53,34 +53,42 @@ export async function actualizarMedicion(id, payload) {
   return response.data
 }
 
-export function obtenerUrlEvidencia(id) {
-  return `mediciones/${id}/evidencia/`
+// D2: evidencias múltiples. Cada archivo se consulta por su id; nada se
+// reemplaza ni se elimina.
+export function obtenerUrlArchivoEvidencia(medicionId, evidenciaId, modo = 'ver') {
+  return `mediciones/${medicionId}/evidencias/${evidenciaId}/${modo}/`
 }
 
-export function obtenerUrlDescargaEvidencia(id) {
-  return `mediciones/${id}/evidencia/descargar/`
-}
-
-export async function descargarEvidencia(id) {
-  const response = await api.get(obtenerUrlEvidencia(id), {
+export async function descargarEvidencia(medicionId, evidenciaId) {
+  const response = await api.get(obtenerUrlArchivoEvidencia(medicionId, evidenciaId, 'ver'), {
     responseType: 'blob',
   })
 
   return response.data
 }
 
-export async function descargarArchivoEvidencia(id) {
-  const response = await api.get(obtenerUrlDescargaEvidencia(id), {
+export async function descargarArchivoEvidencia(medicionId, evidenciaId) {
+  const response = await api.get(obtenerUrlArchivoEvidencia(medicionId, evidenciaId, 'descargar'), {
     responseType: 'blob',
+  })
+
+  return response.data
+}
+
+// «Agregar evidencia»: suma 1 a 10 archivos a una medición ya registrada.
+export async function agregarEvidencias(medicionId, archivos) {
+  const formData = new FormData()
+  archivos.forEach((archivo) => formData.append('archivos', archivo))
+
+  const response = await api.post(`mediciones/${medicionId}/evidencias/`, formData, {
+    headers: { 'Content-Type': undefined },
   })
 
   return response.data
 }
 
 // Construye el FormData que se envía como multipart/form-data (Bloque 4:
-// la evidencia ahora es un archivo real, no texto). Solo se agrega
-// `evidencia` cuando el usuario efectivamente seleccionó un archivo nuevo,
-// para no pisar sin querer una evidencia ya guardada al editar.
+// la evidencia es un archivo real, no texto).
 function construirFormData(payload, { incluirIndicador }) {
   const formData = new FormData()
 
@@ -91,9 +99,11 @@ function construirFormData(payload, { incluirIndicador }) {
   formData.append('valor_resultado', payload.valor_resultado)
   formData.append('observacion', payload.observacion || '')
 
-  if (payload.evidencia instanceof File) {
-    formData.append('evidencia', payload.evidencia)
-  }
+  // D2: los archivos se agregan a las evidencias anteriores (nunca las
+  // reemplazan).
+  ;(payload.archivos_evidencia || []).forEach((archivo) => {
+    if (archivo instanceof File) formData.append('archivos_evidencia', archivo)
+  })
 
   return formData
 }

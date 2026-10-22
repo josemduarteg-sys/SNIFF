@@ -427,11 +427,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 
 from .models import Medicion
+from .rangos_de_prueba import configurar_rangos_70_85
 from .services import (
     calcular_fecha_cierre_periodo,
     calcular_fecha_limite_registro,
     cerrar_mediciones_vencidas,
-    crear_rangos_provisionales,
     formatear_periodo,
     obtener_info_siguiente_periodo,
     obtener_intervalo_meses,
@@ -516,7 +516,7 @@ class MedicionTestsBase(APITestCase):
             estado='autorizado',
             creado_por=self.usuario,
         )
-        crear_rangos_provisionales(kpi)
+        configurar_rangos_70_85(kpi)
         return kpi
 
 
@@ -1049,7 +1049,7 @@ class PromedioAcumuladoTests(MedicionTestsBase):
             estado='autorizado',
             creado_por=self.usuario,
         )
-        crear_rangos_provisionales(kpi_2028)
+        configurar_rangos_70_85(kpi_2028)
         registrar_medicion(self.client, kpi_2028, '20', date(2028, 1, 31))
 
         self.assertEqual(calcular_promedio_acumulado_kpi(kpi_2027), Decimal('80.00'))

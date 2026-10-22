@@ -95,9 +95,9 @@ test('la selección respeta la relación entre planes y descarta ids inválidos'
 test('oportunidad de registro: la categoría del backend manda', () => {
   const base = { fecha_medicion: '2027-01-31', fecha_registro: '2027-02-03T10:00:00', cierre_automatico: false }
 
-  assert.equal(categoriaOportunidad({ ...base, oportunidad_registro: 'A tiempo' }, 'Sin registro'), 'A tiempo')
-  assert.equal(categoriaOportunidad({ ...base, oportunidad_registro: 'Con ampliación' }, 'Sin registro'), 'Con ampliación')
-  assert.equal(categoriaOportunidad({ ...base, oportunidad_registro: 'Con retraso' }, 'Sin registro'), 'Con retraso')
+  for (const categoria of ['Oportuno', 'Demorado', 'Tardío', 'Fuera de plazo']) {
+    assert.equal(categoriaOportunidad({ ...base, oportunidad_registro: categoria }, 'Sin registro'), categoria)
+  }
   assert.equal(categoriaOportunidad({ ...base, cierre_automatico: true, oportunidad_registro: 'Sin registro' }, 'Sin registro'), 'Sin registro')
 })
 

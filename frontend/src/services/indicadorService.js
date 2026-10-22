@@ -76,6 +76,12 @@ export async function obtenerRangosKpi() {
   return normalizarRespuesta(response)
 }
 
+// D3: guarda el conjunto completo de rangos de un KPI en Borrador.
+export async function configurarRangosKpi(indicadorId, rangos) {
+  const response = await api.post(`indicadores-kpi/${indicadorId}/configurar-rangos/`, { rangos })
+  return response.data
+}
+
 export async function obtenerEstadosCumplimiento() {
   const response = await api.get('estados-cumplimiento/')
   return normalizarRespuesta(response)

@@ -3,9 +3,10 @@
 // porcentajes ni cambia ninguna clasificación.
 
 import {
-  OPORTUNIDAD_A_TIEMPO,
-  OPORTUNIDAD_CON_AMPLIACION,
-  OPORTUNIDAD_CON_RETRASO,
+  OPORTUNIDAD_DEMORADO,
+  OPORTUNIDAD_FUERA_DE_PLAZO,
+  OPORTUNIDAD_OPORTUNO,
+  OPORTUNIDAD_TARDIO,
   categoriaOportunidad,
 } from './ampliaciones.js'
 
@@ -144,14 +145,21 @@ export function gruposCumplimiento(kpis) {
     .sort((a, b) => b.barras.length - a.barras.length || a.unidad.localeCompare(b.unidad))
 }
 
-// Archivos de evidencia reales por KPI (una medición tiene a lo sumo uno).
-// Las omisiones nunca tienen evidencia.
+// D2: total de ARCHIVOS de evidencia por KPI (una medición puede tener
+// varios). Las omisiones nunca tienen evidencia.
+export function cantidadEvidencias(medicion) {
+  if (Number.isFinite(medicion.cantidad_evidencias)) return medicion.cantidad_evidencias
+  if (Array.isArray(medicion.evidencias)) return medicion.evidencias.length
+  return medicion.tiene_evidencia ? 1 : 0
+}
+
 export function evidenciasPorKpi(mediciones) {
   const conteos = new Map()
 
   mediciones.forEach((medicion) => {
-    if (medicion.cierre_automatico || !medicion.tiene_evidencia) return
-    conteos.set(medicion.indicador, (conteos.get(medicion.indicador) || 0) + 1)
+    const cantidad = medicion.cierre_automatico ? 0 : cantidadEvidencias(medicion)
+    if (!cantidad) return
+    conteos.set(medicion.indicador, (conteos.get(medicion.indicador) || 0) + cantidad)
   })
 
   return conteos
@@ -165,29 +173,39 @@ export function resumenEvidencias(kpis, mediciones) {
   return { con, sin: kpis.length - con, total: kpis.length }
 }
 
-// Oportunidad de registro con la clasificación actual del backend
+// Oportunidad de registro con la clasificación del backend
 // (oportunidad_registro). Las omisiones ("Sin registro") son periodos
 // cerrados sin medición: se cuentan aparte de las mediciones registradas.
+// conAmpliacion es un detalle de las Tardías (registrada_con_ampliacion),
+// no una categoría más: no se suma al total.
 export function resumenOportunidad(mediciones, sinRegistro) {
   const conteos = {
-    [OPORTUNIDAD_A_TIEMPO]: 0,
-    [OPORTUNIDAD_CON_RETRASO]: 0,
-    [OPORTUNIDAD_CON_AMPLIACION]: 0,
+    [OPORTUNIDAD_OPORTUNO]: 0,
+    [OPORTUNIDAD_DEMORADO]: 0,
+    [OPORTUNIDAD_TARDIO]: 0,
+    [OPORTUNIDAD_FUERA_DE_PLAZO]: 0,
     [sinRegistro]: 0,
   }
+  let conAmpliacion = 0
 
   mediciones.forEach((medicion) => {
     const categoria = categoriaOportunidad(medicion, sinRegistro)
     if (categoria in conteos) conteos[categoria] += 1
+    if (medicion.registrada_con_ampliacion) conAmpliacion += 1
   })
 
+  const registradas = conteos[OPORTUNIDAD_OPORTUNO] + conteos[OPORTUNIDAD_DEMORADO]
+    + conteos[OPORTUNIDAD_TARDIO] + conteos[OPORTUNIDAD_FUERA_DE_PLAZO]
+
   return {
-    aTiempo: conteos[OPORTUNIDAD_A_TIEMPO],
-    conRetraso: conteos[OPORTUNIDAD_CON_RETRASO],
-    conAmpliacion: conteos[OPORTUNIDAD_CON_AMPLIACION],
+    oportuno: conteos[OPORTUNIDAD_OPORTUNO],
+    demorado: conteos[OPORTUNIDAD_DEMORADO],
+    tardio: conteos[OPORTUNIDAD_TARDIO],
+    fueraDePlazo: conteos[OPORTUNIDAD_FUERA_DE_PLAZO],
     sinRegistro: conteos[sinRegistro],
-    registradas: conteos[OPORTUNIDAD_A_TIEMPO] + conteos[OPORTUNIDAD_CON_RETRASO] + conteos[OPORTUNIDAD_CON_AMPLIACION],
-    total: mediciones.length,
+    conAmpliacion,
+    registradas,
+    total: registradas + conteos[sinRegistro],
   }
 }
 

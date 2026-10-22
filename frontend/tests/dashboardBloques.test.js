@@ -179,18 +179,47 @@ test('evidencias: cuenta KPI (no archivos) y excluye las omisiones', () => {
   assert.equal(porcentajeDe(0, 0), 0)
 })
 
-test('oportunidad: las omisiones se cuentan aparte de las mediciones registradas', () => {
+test('D2: la columna Evidencias suma todos los archivos; el resumen sigue contando KPI', () => {
   const mediciones = [
-    { oportunidad_registro: 'A tiempo' },
-    { oportunidad_registro: 'Con retraso' },
-    { oportunidad_registro: 'Con retraso' },
-    { oportunidad_registro: 'Con ampliación' },
+    { indicador: 1, cantidad_evidencias: 3, tiene_evidencia: true, cierre_automatico: false },
+    { indicador: 1, cantidad_evidencias: 2, tiene_evidencia: true, cierre_automatico: false },
+    { indicador: 2, cantidad_evidencias: 0, tiene_evidencia: false, cierre_automatico: false },
+    { indicador: 3, evidencias: [{ id: 1 }, { id: 2 }], cierre_automatico: false },
+    { indicador: 4, cantidad_evidencias: 5, cierre_automatico: true },
+  ]
+
+  const conteos = evidenciasPorKpi(mediciones)
+
+  assert.equal(conteos.get(1), 5)
+  assert.equal(conteos.get(2), undefined)
+  assert.equal(conteos.get(3), 2)
+  assert.equal(conteos.get(4), undefined)
+  assert.deepEqual(resumenEvidencias(kpis(4), mediciones), { con: 2, sin: 2, total: 4 })
+})
+
+test('oportunidad: cinco categorías; las omisiones aparte y la ampliación como detalle', () => {
+  const mediciones = [
+    { oportunidad_registro: 'Oportuno' },
+    { oportunidad_registro: 'Demorado' },
+    { oportunidad_registro: 'Demorado' },
+    { oportunidad_registro: 'Tardío' },
+    { oportunidad_registro: 'Tardío', registrada_con_ampliacion: true },
+    { oportunidad_registro: 'Fuera de plazo' },
     { oportunidad_registro: SIN_REGISTRO, cierre_automatico: true },
   ]
 
   assert.deepEqual(resumenOportunidad(mediciones, SIN_REGISTRO), {
-    aTiempo: 1, conRetraso: 2, conAmpliacion: 1, sinRegistro: 1, registradas: 4, total: 5,
+    oportuno: 1, demorado: 2, tardio: 2, fueraDePlazo: 1, sinRegistro: 1, conAmpliacion: 1, registradas: 6, total: 7,
   })
+
+  // Las 22 mediciones históricas retroactivas aparecen como "Fuera de plazo", no se ocultan.
+  const historicas = Array.from({ length: 22 }, () => ({ oportunidad_registro: 'Fuera de plazo', cierre_automatico: false }))
+  assert.deepEqual(
+    [resumenOportunidad(historicas, SIN_REGISTRO).fueraDePlazo, resumenOportunidad(historicas, SIN_REGISTRO).total],
+    [22, 22],
+  )
+  // Una medición sin categoría del backend no se cuenta en ninguna barra.
+  assert.equal(resumenOportunidad([{ cierre_automatico: false }], SIN_REGISTRO).total, 0)
   assert.deepEqual(ejeConteo(22), { tope: 24, marcas: [0, 6, 12, 18, 24] })
   assert.deepEqual(ejeConteo(0), { tope: 4, marcas: [0, 1, 2, 3, 4] })
   assert.equal(alturaConteo(2, 4), 50)
@@ -262,9 +291,20 @@ test('KPI con evidencias: dos barras horizontales con la cantidad al extremo', (
   assert.equal(alturaConteo(0, 0), 0)
 })
 
-test('Oportunidad de registro conserva sus barras verticales', () => {
+test('Oportunidad de registro: barras verticales con las cinco categorías', () => {
   assert.match(vista, /v-for="barra in graficoOportunidad\.barras"/)
-  assert.match(vista, /const eje = ejeConteo\(Math\.max\(aTiempo, conRetraso, sinRegistro\)\)/)
+  assert.match(vista, /const eje = ejeConteo\(Math\.max\(oportuno, demorado, tardio, fueraDePlazo, sinRegistro\)\)/)
+  for (const [nombre, clase] of [
+    ['OPORTUNIDAD_OPORTUNO', 'ok'],
+    ['OPORTUNIDAD_DEMORADO', 'warning'],
+    ['OPORTUNIDAD_TARDIO', 'danger'],
+    ['OPORTUNIDAD_FUERA_DE_PLAZO', 'fuera'],
+    ['SIN_REGISTRO', 'omision'],
+  ]) {
+    assert.match(vista, new RegExp(`nombre: ${nombre}, cantidad: \\w+, clase: '${clase}'`), nombre)
+  }
+  assert.doesNotMatch(vista, /'A tiempo'|'Con retraso'/)
+  assert.match(vista, /de las tardías se registraron con ampliación autorizada/)
 })
 
 test('Objetivo: texto resumido en una línea y completo en el title', () => {

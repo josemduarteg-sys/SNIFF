@@ -91,3 +91,13 @@ test('responsables individuales: sin sección, filtro ni contador', () => {
   assert.doesNotMatch(listado, /Sin responsable/)
   assert.doesNotMatch(listado, /textoResponsables/)
 })
+
+test('C2: el formulario y el detalle muestran el inicio real del seguimiento', () => {
+  const formulario = fuente('components/mediciones/MedicionForm.vue')
+  const detalle = fuente('components/indicadores/IndicadorDetalle.vue')
+
+  assert.match(formulario, /v-if="estado\.periodo\.periodo_parcial"/)
+  assert.match(formulario, /formatearFechaIso\(estado\.periodo\.inicio_seguimiento\)/)
+  assert.match(detalle, /Seguimiento desde/)
+  assert.match(detalle, /formatearFechaIso\(indicador\.fecha_inicio_seguimiento\)/)
+})

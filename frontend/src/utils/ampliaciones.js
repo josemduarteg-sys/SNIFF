@@ -52,25 +52,20 @@ export function diasValidos(dias, minimo = 1, maximo = DIAS_MAXIMOS_AMPLIACION) 
   return Number.isInteger(numero) && numero >= minimo && numero <= maximo
 }
 
-// Oportunidad de registro (Dashboard): una sola categoría por medición.
-// "Con ampliación" = registrada después del plazo ordinario gracias a una
-// ampliación autorizada (lo decide el backend: registrada_con_ampliacion).
-export const OPORTUNIDAD_A_TIEMPO = 'A tiempo'
-export const OPORTUNIDAD_CON_RETRASO = 'Con retraso'
-export const OPORTUNIDAD_CON_AMPLIACION = 'Con ampliación'
+// Oportunidad de registro (criterio de Hernán, 06/10/2026): días entre el
+// cierre del periodo y el registro. La categoría la calcula el backend
+// (oportunidad_registro) con el plazo y las ampliaciones; una medición
+// registrada con ampliación es Tardía y además trae registrada_con_ampliacion.
+export const OPORTUNIDAD_OPORTUNO = 'Oportuno'
+export const OPORTUNIDAD_DEMORADO = 'Demorado'
+export const OPORTUNIDAD_TARDIO = 'Tardío'
+export const OPORTUNIDAD_FUERA_DE_PLAZO = 'Fuera de plazo'
 
-// Etapa 6 (M5): el backend decide la categoría (oportunidad_registro,
-// criterio "por plazo"). El cálculo de abajo queda solo como respaldo para
-// una respuesta que todavía no traiga ese campo.
+// Sin el campo del backend no se puede clasificar (hace falta el plazo):
+// devuelve null en lugar de suponer una categoría.
 export function categoriaOportunidad(medicion, sinRegistro) {
   if (medicion.oportunidad_registro) return medicion.oportunidad_registro
   if (medicion.cierre_automatico) return sinRegistro
-  if (medicion.registrada_con_ampliacion) return OPORTUNIDAD_CON_AMPLIACION
 
-  const fechaRegistro = (medicion.fecha_registro || '').slice(0, 10)
-  const fechaCierre = medicion.fecha_medicion
-
-  if (fechaRegistro && fechaCierre && fechaRegistro > fechaCierre) return OPORTUNIDAD_CON_RETRASO
-
-  return OPORTUNIDAD_A_TIEMPO
+  return null
 }

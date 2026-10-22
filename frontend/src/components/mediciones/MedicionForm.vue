@@ -6,6 +6,7 @@ import { formatearNumero } from '../../utils/formato'
 import { formatearFechaIso } from '../../utils/ampliaciones'
 import { textoObjetivoKpi } from '../../utils/objetivos'
 import { MENSAJE_SIN_KPI_DISPONIBLES, kpisDisponiblesParaRegistro } from '../../utils/registroMediciones'
+import { formatearTamano, validarArchivosEvidencia } from '../../utils/evidencias'
 
 const props = defineProps({
   indicadores: {
@@ -25,7 +26,7 @@ const form = reactive({
   indicador: '',
   valor_resultado: '',
   observacion: '',
-  evidencia: null,
+  archivos: [],
 })
 
 const estado = reactive({
@@ -113,13 +114,10 @@ const contexto = computed(() => {
 
 const unidadMedida = computed(() => contexto.value?.unidad || 'unidad')
 
-// V2: la evidencia ya adjunta es inmutable (no se reemplaza ni se
-// elimina). El control de subida solo se muestra cuando esta Medicion
-// todavía NO tiene evidencia (creación, o edición de una medición sin
-// evidencia previa) — ver también la validación equivalente y
-// autoritativa en backend (MedicionSerializer.validate).
+// D2: los archivos elegidos se SUMAN a las evidencias que la medición ya
+// tenga (nunca las reemplazan). En edición solo si la medición admite
+// cambios (backend: MedicionSerializer.validate es quien decide).
 const puedeEditarEvidencia = computed(() => {
-  if (esEdicion.value && props.medicionEditar?.tiene_evidencia) return false
   if (!esEdicion.value) return true
   return props.medicionEditar?.puede_modificarse !== false
 })
@@ -138,7 +136,7 @@ watch(
   () => props.medicionEditar,
   (medicion) => {
     estado.error = ''
-    form.evidencia = null
+    form.archivos = []
 
     if (medicion?.id) {
       form.indicador = medicion.indicador || ''
@@ -168,7 +166,7 @@ function limpiarFormulario() {
   form.indicador = ''
   form.valor_resultado = ''
   form.observacion = ''
-  form.evidencia = null
+  form.archivos = []
   estado.periodo = null
 }
 
@@ -196,48 +194,24 @@ async function cargarSiguientePeriodo(indicadorId) {
 }
 
 function manejarSeleccionArchivo(evento) {
-  const archivo = evento.target.files?.[0] || null
+  const archivos = Array.from(evento.target.files || [])
+  const error = validarArchivosEvidencia(archivos)
 
-  if (!archivo) {
-    form.evidencia = null
-    return
-  }
-
-  const extension = archivo.name.split('.').pop()?.toLowerCase()
-  const extensionesValidas = ['pdf', 'jpg', 'jpeg']
-
-  if (!extensionesValidas.includes(extension)) {
-    estado.error = 'Solo se permiten archivos PDF, JPG o JPEG.'
+  if (error) {
+    estado.error = error
     evento.target.value = ''
-    form.evidencia = null
-    return
-  }
-
-  if (archivo.size > 10 * 1024 * 1024) {
-    estado.error = 'El archivo no puede superar los 10 MB.'
-    evento.target.value = ''
-    form.evidencia = null
+    form.archivos = []
     return
   }
 
   estado.error = ''
-  form.evidencia = archivo
+  form.archivos = archivos
 }
 
 const inputArchivoRef = ref(null)
 
-const tamanoArchivoTexto = computed(() => {
-  if (!form.evidencia) return ''
-
-  const kb = form.evidencia.size / 1024
-
-  if (kb < 1024) return `${kb.toFixed(1)} KB`
-
-  return `${(kb / 1024).toFixed(2)} MB`
-})
-
-function quitarArchivo() {
-  form.evidencia = null
+function quitarArchivos() {
+  form.archivos = []
 
   if (inputArchivoRef.value) {
     inputArchivoRef.value.value = ''
@@ -287,7 +261,7 @@ async function guardar() {
     indicador: Number(form.indicador),
     valor_resultado: form.valor_resultado,
     observacion: form.observacion,
-    evidencia: form.evidencia,
+    archivos_evidencia: form.archivos,
   }
 
   try {
@@ -386,7 +360,9 @@ async function guardar() {
         :class="{ error: !estado.periodo.disponible, ok: estado.periodo.disponible }"
       >
         <template v-if="estado.periodo.disponible">
-          Podés registrar la medición de <strong>{{ estado.periodo.periodo_nombre }}</strong>.
+          Podés registrar la medición de <strong>{{ estado.periodo.periodo_nombre }}</strong><template v-if="estado.periodo.periodo_parcial">
+            (primer periodo, medido desde el inicio del seguimiento del KPI, el
+            {{ formatearFechaIso(estado.periodo.inicio_seguimiento) }})</template>.
           Fecha de cierre: {{ formatearFechaIso(estado.periodo.fecha_cierre) }}.
           <template v-if="estado.periodo.fecha_limite_extraordinaria">
             <strong>Plazo ampliado hasta el {{ formatearFechaIso(estado.periodo.fecha_limite_extraordinaria) }}</strong>
@@ -432,29 +408,33 @@ async function guardar() {
       <div class="form-group full">
         <label>Evidencia / respaldo (opcional)</label>
 
-        <p v-if="esEdicion && medicionEditar?.tiene_evidencia" class="field-hint">
-          Esta medición ya tiene una evidencia adjunta. No puede reemplazarse ni eliminarse: queda
-          como respaldo histórico.
+        <p v-if="esEdicion && medicionEditar?.cantidad_evidencias" class="field-hint">
+          Esta medición ya tiene {{ medicionEditar.cantidad_evidencias }}
+          {{ medicionEditar.cantidad_evidencias === 1 ? 'evidencia adjunta' : 'evidencias adjuntas' }}.
+          Se conservan todas: los archivos que elijas se suman a las anteriores.
         </p>
 
-        <template v-else-if="puedeEditarEvidencia">
+        <template v-if="puedeEditarEvidencia">
           <input
             ref="inputArchivoRef"
             type="file"
+            multiple
             accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"
             @change="manejarSeleccionArchivo"
           />
 
-          <div v-if="form.evidencia" class="archivo-seleccionado">
-            <p class="field-hint ok">
-              Archivo seleccionado: {{ form.evidencia.name }} ({{ tamanoArchivoTexto }})
-            </p>
-            <button type="button" class="btn-quitar-archivo" @click="quitarArchivo">
+          <div v-if="form.archivos.length" class="archivo-seleccionado">
+            <ul class="field-hint ok lista-archivos">
+              <li v-for="archivo in form.archivos" :key="archivo.name + archivo.size">
+                {{ archivo.name }} ({{ formatearTamano(archivo.size) }})
+              </li>
+            </ul>
+            <button type="button" class="btn-quitar-archivo" @click="quitarArchivos">
               Quitar
             </button>
           </div>
 
-          <small>Solo PDF, JPG o JPEG. Tamaño máximo 10 MB.</small>
+          <small>Solo PDF, JPG o JPEG. Hasta 10 archivos por vez, 10 MB cada uno.</small>
         </template>
       </div>
     </template>
@@ -593,6 +573,10 @@ small {
 
 .archivo-seleccionado .field-hint {
   margin: 0;
+}
+
+.lista-archivos {
+  padding-left: 18px;
 }
 
 .btn-quitar-archivo {

@@ -31,6 +31,12 @@ import {
 } from '../utils/dashboardBloques'
 import { textoObjetivoKpi } from '../utils/objetivos'
 import {
+  OPORTUNIDAD_DEMORADO,
+  OPORTUNIDAD_FUERA_DE_PLAZO,
+  OPORTUNIDAD_OPORTUNO,
+  OPORTUNIDAD_TARDIO,
+} from '../utils/ampliaciones'
+import {
   SIN_REGISTRO,
   categoriaKpi,
   claseColorCumplimiento,
@@ -336,24 +342,28 @@ const graficoEvidencias = computed(() => {
 })
 
 // ============================================================
-// 4) Oportunidad de registro — clasificación actual del backend
+// 4) Oportunidad de registro — criterio de Hernán (días desde el cierre)
 // ============================================================
 
-// "A tiempo" y "Con retraso" son mediciones registradas; "Sin registro" son
-// periodos cerrados sin medición (se muestran con su propio color, nunca
-// como medición tardía). "Con ampliación" queda como nota secundaria.
+// Oportuno (día 0), Demorado (días 1 y 2), Tardío (día 3 al vencimiento),
+// Fuera de plazo (después del plazo efectivo) son mediciones registradas;
+// "Sin registro" son periodos cerrados sin medición, con su propio estilo,
+// nunca como medición tardía. Las Tardías registradas con días adicionales
+// autorizados se informan en una nota.
 const oportunidad = computed(() => resumenOportunidad(medicionesAutorizadas.value, SIN_REGISTRO))
 
 const graficoOportunidad = computed(() => {
-  const { aTiempo, conRetraso, sinRegistro, total } = oportunidad.value
-  const eje = ejeConteo(Math.max(aTiempo, conRetraso, sinRegistro))
+  const { oportuno, demorado, tardio, fueraDePlazo, sinRegistro, total } = oportunidad.value
+  const eje = ejeConteo(Math.max(oportuno, demorado, tardio, fueraDePlazo, sinRegistro))
 
   return {
     eje,
     barras: [
-      { nombre: 'A tiempo', cantidad: aTiempo, clase: 'ok', ayuda: 'Mediciones registradas dentro del plazo ordinario' },
-      { nombre: 'Con retraso', cantidad: conRetraso, clase: 'warning', ayuda: 'Mediciones registradas después del plazo' },
-      { nombre: SIN_REGISTRO, cantidad: sinRegistro, clase: 'danger', ayuda: 'Periodos cerrados por el sistema sin medición' },
+      { nombre: OPORTUNIDAD_OPORTUNO, cantidad: oportuno, clase: 'ok', ayuda: 'Registradas el mismo día del cierre del periodo' },
+      { nombre: OPORTUNIDAD_DEMORADO, cantidad: demorado, clase: 'warning', ayuda: 'Registradas 1 o 2 días después del cierre' },
+      { nombre: OPORTUNIDAD_TARDIO, cantidad: tardio, clase: 'danger', ayuda: 'Registradas desde el 3.er día hasta el vencimiento del plazo' },
+      { nombre: OPORTUNIDAD_FUERA_DE_PLAZO, cantidad: fueraDePlazo, clase: 'fuera', ayuda: 'Registradas después del plazo autorizado (cargas retroactivas)' },
+      { nombre: SIN_REGISTRO, cantidad: sinRegistro, clase: 'omision', ayuda: 'Periodos cerrados por el sistema sin medición' },
     ].map((barra) => ({ ...barra, porcentaje: porcentajeDe(barra.cantidad, total), altura: (barra.cantidad / eje.tope) * 100 })),
   }
 })
@@ -683,7 +693,7 @@ onMounted(() => {
               <div class="eje" aria-hidden="true">
                 <span v-for="marca in graficoOportunidad.eje.marcas" :key="marca" :style="{ bottom: `${(marca / graficoOportunidad.eje.tope) * 100}%` }">{{ marca }}</span>
               </div>
-              <div class="area area--conteo">
+              <div class="area area--conteo area--cinco">
                 <div v-for="marca in graficoOportunidad.eje.marcas" :key="`l-${marca}`" class="linea-guia" :style="{ bottom: `${(marca / graficoOportunidad.eje.tope) * 100}%` }"></div>
                 <div
                   v-for="barra in graficoOportunidad.barras"
@@ -699,7 +709,7 @@ onMounted(() => {
                 </div>
               </div>
               <div></div>
-              <div class="etiquetas etiquetas--conteo">
+              <div class="etiquetas etiquetas--conteo etiquetas--cinco">
                 <div v-for="barra in graficoOportunidad.barras" :key="`o-${barra.nombre}`" class="etiqueta" :title="barra.ayuda">
                   <strong>{{ barra.nombre }}</strong>
                   <span>({{ barra.porcentaje }}%)</span>
@@ -708,7 +718,7 @@ onMounted(() => {
             </div>
 
             <p v-if="oportunidad.conAmpliacion" class="nota-secundaria">
-              Además, {{ oportunidad.conAmpliacion }} medición(es) registrada(s) con días adicionales autorizados.
+              {{ oportunidad.conAmpliacion }} de las tardías se registraron con ampliación autorizada.
             </p>
           </template>
         </div>
@@ -1018,6 +1028,14 @@ onMounted(() => {
   .etiqueta span{ font-size:10px; font-weight:600; color:var(--text-muted); line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
   .marca-omision{ color:#55657A; font-weight:800; margin-left:2px; }
   .nota-secundaria{ margin:10px 0 0; font-size:11px; color:var(--text-muted); font-weight:600; text-align:center; }
+
+  /* Oportunidad de registro: cinco categorías repartidas en el ancho
+     disponible (misma distribución en barras y etiquetas). */
+  .area--cinco, .etiquetas--cinco{ justify-content:space-between; gap:8px; }
+  .area--cinco .columna--conteo, .etiquetas--cinco .etiqueta{ flex:1 1 0; min-width:0; }
+  .area--cinco .barra{ max-width:44px; }
+  .etiquetas--cinco .etiqueta strong{ white-space:normal; line-height:1.2; }
+  .barra.fuera{ background:#9AA8B8; }
 
   /* ---- KPI con evidencias: barras horizontales ---- */
   .barras-horizontales{ display:flex; flex-direction:column; justify-content:center; gap:16px; min-height:150px; padding:6px 2px 0; }

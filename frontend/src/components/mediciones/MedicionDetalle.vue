@@ -7,14 +7,32 @@ import {
   esMedicionSinRegistro,
   textoEstadoCumplimiento,
 } from '../../utils/cumplimiento'
-import { descargarEvidencia, descargarArchivoEvidencia } from '../../services/medicionService'
+import {
+  agregarEvidencias,
+  descargarArchivoEvidencia,
+  descargarEvidencia,
+} from '../../services/medicionService'
+import {
+  extensionDe,
+  formatearTamano,
+  mensajeErrorEvidencias,
+  validarArchivosEvidencia,
+} from '../../utils/evidencias'
 
 const props = defineProps({
   medicion: {
     type: Object,
     required: true,
   },
+  // D2: «Agregar evidencia» solo para Ejecutor operativo; el backend
+  // además rechaza omisiones y planes Cerrados.
+  puedeAgregarEvidencia: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+const emit = defineEmits(['evidencias-agregadas'])
 
 const claseCumplimiento = computed(() => claseColorCumplimiento(props.medicion.estado_cumplimiento_color))
 
@@ -65,20 +83,22 @@ const tipoRegistroTexto = computed(() => {
   return props.medicion.cierre_automatico ? 'Cierre automático' : 'Manual'
 })
 
-const descargando = ref(false)
-const abriendo = ref(false)
+// D2: todas las evidencias de la medición, en orden de carga.
+const evidencias = computed(() => props.medicion.evidencias || [])
 
-const extensionEvidencia = computed(() => {
-  const nombre = props.medicion.evidencia_nombre || ''
-  const partes = nombre.split('.')
-  return partes.length > 1 ? partes.pop().toUpperCase() : ''
+const admiteEvidencias = computed(() => {
+  return props.puedeAgregarEvidencia
+    && !props.medicion.cierre_automatico
+    && props.medicion.puede_modificarse !== false
 })
 
-async function verEvidencia() {
-  abriendo.value = true
+const accionEnCurso = ref('')
+
+async function verEvidencia(evidencia) {
+  accionEnCurso.value = `ver-${evidencia.id}`
 
   try {
-    const blob = await descargarEvidencia(props.medicion.id)
+    const blob = await descargarEvidencia(props.medicion.id, evidencia.id)
     const url = window.URL.createObjectURL(blob)
     window.open(url, '_blank', 'noopener')
     window.setTimeout(() => window.URL.revokeObjectURL(url), 60000)
@@ -86,19 +106,19 @@ async function verEvidencia() {
     // Silencioso: la descarga es una acción secundaria del detalle: si
     // falla (por ejemplo, el archivo ya no existe), no rompe la vista.
   } finally {
-    abriendo.value = false
+    accionEnCurso.value = ''
   }
 }
 
-async function descargarEvidenciaArchivo() {
-  descargando.value = true
+async function descargarEvidenciaArchivo(evidencia) {
+  accionEnCurso.value = `descargar-${evidencia.id}`
 
   try {
-    const blob = await descargarArchivoEvidencia(props.medicion.id)
+    const blob = await descargarArchivoEvidencia(props.medicion.id, evidencia.id)
     const url = window.URL.createObjectURL(blob)
     const enlace = document.createElement('a')
     enlace.href = url
-    enlace.download = props.medicion.evidencia_nombre || 'evidencia'
+    enlace.download = evidencia.nombre_original || 'evidencia'
     document.body.appendChild(enlace)
     enlace.click()
     enlace.remove()
@@ -106,8 +126,57 @@ async function descargarEvidenciaArchivo() {
   } catch {
     // Silencioso: mismo criterio que verEvidencia().
   } finally {
-    descargando.value = false
+    accionEnCurso.value = ''
   }
+}
+
+const inputAgregarRef = ref(null)
+const agregando = ref(false)
+const errorAgregar = ref('')
+const mensajeAgregar = ref('')
+
+function elegirArchivos() {
+  errorAgregar.value = ''
+  mensajeAgregar.value = ''
+  inputAgregarRef.value?.click()
+}
+
+async function agregarArchivos(evento) {
+  const archivos = Array.from(evento.target.files || [])
+  evento.target.value = ''
+
+  if (!archivos.length) return
+
+  const error = validarArchivosEvidencia(archivos)
+
+  if (error) {
+    errorAgregar.value = error
+    return
+  }
+
+  agregando.value = true
+
+  try {
+    const nuevas = await agregarEvidencias(props.medicion.id, archivos)
+    mensajeAgregar.value = nuevas.length === 1
+      ? 'Se agregó 1 evidencia.'
+      : `Se agregaron ${nuevas.length} evidencias.`
+    emit('evidencias-agregadas', nuevas)
+  } catch (errorApi) {
+    errorAgregar.value = mensajeErrorEvidencias(errorApi)
+  } finally {
+    agregando.value = false
+  }
+}
+
+function formatearFechaHora(fecha) {
+  if (!fecha) return ''
+
+  const valor = new Date(fecha)
+
+  if (Number.isNaN(valor.getTime())) return fecha
+
+  return valor.toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 function formatearFecha(fecha) {
@@ -251,42 +320,70 @@ function formatearFecha(fecha) {
     <div class="observation-box">
       <span>Evidencia / respaldo de lo realizado</span>
 
-      <template v-if="medicion.tiene_evidencia">
-        <p class="evidencia-nombre">
-          {{ medicion.evidencia_nombre }}
-          <span v-if="extensionEvidencia" class="evidencia-tipo">{{ extensionEvidencia }}</span>
-        </p>
+      <ul v-if="evidencias.length" class="evidencias-lista">
+        <li v-for="evidencia in evidencias" :key="evidencia.id" class="evidencia-item">
+          <div class="evidencia-datos">
+            <p class="evidencia-nombre">
+              {{ evidencia.nombre_original }}
+              <span v-if="extensionDe(evidencia.nombre_original)" class="evidencia-tipo">
+                {{ extensionDe(evidencia.nombre_original) }}
+              </span>
+            </p>
+            <small class="evidencia-meta">
+              {{ formatearFechaHora(evidencia.fecha_subida) }}
+              · {{ evidencia.subido_por_username || 'Sistema' }}
+              · {{ formatearTamano(evidencia.tamano) }}
+            </small>
+          </div>
 
-        <div class="evidencia-acciones">
-          <button
-            class="btn-evidencia"
-            type="button"
-            :disabled="abriendo"
-            @click="verEvidencia"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-            {{ abriendo ? 'Abriendo...' : 'Ver evidencia' }}
-          </button>
+          <div class="evidencia-acciones">
+            <button
+              class="btn-evidencia"
+              type="button"
+              :disabled="accionEnCurso === `ver-${evidencia.id}`"
+              @click="verEvidencia(evidencia)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              {{ accionEnCurso === `ver-${evidencia.id}` ? 'Abriendo...' : 'Ver' }}
+            </button>
 
-          <button
-            class="btn-evidencia"
-            type="button"
-            :disabled="descargando"
-            @click="descargarEvidenciaArchivo"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            {{ descargando ? 'Descargando...' : 'Descargar' }}
-          </button>
-        </div>
-      </template>
+            <button
+              class="btn-evidencia"
+              type="button"
+              :disabled="accionEnCurso === `descargar-${evidencia.id}`"
+              @click="descargarEvidenciaArchivo(evidencia)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              {{ accionEnCurso === `descargar-${evidencia.id}` ? 'Descargando...' : 'Descargar' }}
+            </button>
+          </div>
+        </li>
+      </ul>
       <p v-else>Sin evidencia adjunta.</p>
+
+      <div v-if="admiteEvidencias" class="evidencia-agregar">
+        <input
+          ref="inputAgregarRef"
+          type="file"
+          multiple
+          hidden
+          accept=".pdf,.jpg,.jpeg,application/pdf,image/jpeg"
+          @change="agregarArchivos"
+        />
+        <button class="btn-evidencia" type="button" :disabled="agregando" @click="elegirArchivos">
+          {{ agregando ? 'Adjuntando...' : 'Agregar evidencia' }}
+        </button>
+        <small>PDF, JPG o JPEG · hasta 10 archivos por vez, 10 MB cada uno. Las anteriores se conservan.</small>
+        <p v-if="mensajeAgregar" class="evidencia-ok">{{ mensajeAgregar }}</p>
+        <p v-if="errorAgregar" class="evidencia-error">{{ errorAgregar }}</p>
+      </div>
     </div>
 
     <div class="note-box">
@@ -478,6 +575,71 @@ p {
   font-size: 10.5px;
   font-weight: 800;
   letter-spacing: 0.4px;
+}
+
+.evidencias-lista {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evidencia-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #edf1f4;
+}
+
+.evidencia-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.evidencia-datos {
+  min-width: 0;
+}
+
+.evidencia-datos .evidencia-nombre {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.evidencia-meta {
+  color: #6b7c8a;
+}
+
+.evidencia-agregar {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.evidencia-agregar small {
+  color: #6b7c8a;
+}
+
+.evidencia-ok,
+.evidencia-error {
+  width: 100%;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.evidencia-ok {
+  color: #2a9d8f;
+}
+
+.evidencia-error {
+  color: #e76f51;
 }
 
 .evidencia-acciones {

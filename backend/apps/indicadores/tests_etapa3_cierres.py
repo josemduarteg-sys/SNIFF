@@ -44,13 +44,13 @@ from .services import (
     generar_alertas_periodos_vencidos,
     obtener_estado_por_cumplimiento,
     recalcular_mediciones_pendientes,
-    crear_rangos_provisionales,
     obtener_estado_acumulado_kpi,
     obtener_estado_para_medicion,
     obtener_info_siguiente_periodo,
     obtener_o_crear_meta_vigente,
     obtener_o_crear_periodo,
 )
+from .rangos_de_prueba import configurar_rangos_70_85
 
 
 def crear_usuario(username, rol_nombre):
@@ -102,7 +102,7 @@ class CierresBase(APITestCase):
             fecha_autorizacion=autorizado,
             autorizado_por=self.admin if autorizado else None,
         )
-        crear_rangos_provisionales(kpi)
+        configurar_rangos_70_85(kpi)
 
         if creado:
             IndicadorKPI.objects.filter(pk=kpi.pk).update(fecha_creacion=creado)
@@ -275,13 +275,10 @@ class IncorporacionDelKpiTests(CierresBase):
         self.assertTrue(info['disponible'])
         self.assertEqual(info['periodo_nombre'], 'enero 2027')
 
-    def test_actual_kpi_creado_a_mitad_de_anio_recibe_omisiones_desde_enero(self):
-        """C2 (pendiente) — comportamiento vigente: el primer periodo es el
-        mes de inicio de la vigencia del Plan anual, sin considerar cuándo
-        se incorporó el KPI. Uno creado en julio recibe omisiones de enero
-        a mayo. Desde C3 ya no quedan en 0.00/Incumplido sino "Sin
-        registro" (promedio sin datos), pero siguen siendo omisiones
-        atribuidas a periodos anteriores a su incorporación."""
+    def test_kpi_creado_a_mitad_de_anio_no_recibe_omisiones_anteriores(self):
+        """C2 resuelto: un KPI incorporado en julio se mide desde julio
+        (respuesta de Hernán). Antes de C2 este mismo caso recibía
+        omisiones de enero a mayo."""
         kpi = self.crear_kpi(
             'KPI de julio',
             creado=timezone.make_aware(timezone.datetime(2027, 7, 1)),
@@ -290,14 +287,14 @@ class IncorporacionDelKpiTests(CierresBase):
 
         resultado = cerrar_mediciones_vencidas(fecha_referencia=date(2027, 7, 1))
 
-        self.assertEqual(resultado['cierres_creados'], 5)
-        self.assertEqual(self.periodos_cerrados(kpi), [1, 2, 3, 4, 5])
-        self.assertEqual(contar_omisiones_kpi(kpi), 5)
-        self.assertIsNone(calcular_promedio_acumulado_kpi(kpi))
+        self.assertEqual(resultado['cierres_creados'], 0)
+        self.assertEqual(self.periodos_cerrados(kpi), [])
+        self.assertEqual(contar_omisiones_kpi(kpi), 0)
+        self.assertEqual(obtener_info_siguiente_periodo(kpi, fecha_referencia=date(2027, 7, 1))['periodo_nombre'], 'julio 2027')
 
-    def test_actual_fecha_de_autorizacion_no_cambia_el_primer_periodo(self):
-        """C2 — creado en marzo y autorizado en julio: hoy se ignoran ambas
-        fechas; el primer periodo esperado sigue siendo enero."""
+    def test_la_fecha_de_autorizacion_define_el_primer_periodo(self):
+        """C2 resuelto: creado en marzo y autorizado el 15/07 — el primer
+        periodo exigible es julio (parcial, desde el 15/07)."""
         kpi = self.crear_kpi(
             'KPI autorizado tarde',
             creado=timezone.make_aware(timezone.datetime(2027, 3, 1)),
@@ -306,7 +303,9 @@ class IncorporacionDelKpiTests(CierresBase):
 
         info = obtener_info_siguiente_periodo(kpi, fecha_referencia=date(2027, 7, 15))
 
-        self.assertEqual(info['periodo_nombre'], 'enero 2027')
+        self.assertEqual(info['periodo_nombre'], 'julio 2027')
+        self.assertEqual(info['inicio_seguimiento'], date(2027, 7, 15))
+        self.assertTrue(info['periodo_parcial'])
         self.assertFalse(info['disponible'])
 
     def test_un_kpi_autorizado_puede_no_tener_fecha_de_autorizacion(self):

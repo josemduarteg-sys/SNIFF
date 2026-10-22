@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils.timezone import now as timezone_now
 
 from apps.estrategia.models import ObjetivoEspecifico
 
@@ -266,6 +267,26 @@ class IndicadorKPI(models.Model):
             return inicio_plan
 
         return inicio_anio
+
+    @property
+    def fecha_inicio_seguimiento(self):
+        """C2: día desde el que se exige medir el KPI. Hernán confirmó que un
+        KPI puede crearse a mitad de año y se mide desde ese día hasta
+        terminar el año. Decisión operativa del proyecto: la fecha base es
+        la de AUTORIZACIÓN (desde ahí puede registrarse); un KPI histórico
+        sin fecha de autorización usa la de creación. Nunca es anterior al
+        inicio de la vigencia del plan anual. No cambia las fechas del plan
+        ni la cuadrícula de periodos (ver
+        services.obtener_primer_periodo_exigible)."""
+        from django.utils import timezone
+
+        base = self.fecha_autorizacion or self.fecha_creacion
+        inicio_vigencia = self.fecha_inicio_vigencia
+
+        if base is None:
+            return inicio_vigencia
+
+        return max(inicio_vigencia, timezone.localtime(base).date())
 
     @property
     def fecha_fin_vigencia(self):
@@ -590,6 +611,72 @@ class Medicion(models.Model):
 
     def __str__(self):
         return f'{self.indicador.nombre} - {self.fecha_medicion}'
+
+
+MAXIMO_EVIDENCIAS_POR_CARGA = 10
+
+
+def ruta_evidencia_medicion(instancia, nombre):
+    """D2: misma carpeta que la evidencia heredada, con un prefijo aleatorio
+    y un nombre saneado: dos archivos con el mismo nombre nunca chocan y no
+    se aceptan rutas ni caracteres peligrosos. El nombre original se guarda
+    aparte (EvidenciaMedicion.nombre_original) para mostrarlo."""
+    import os
+    import uuid
+
+    from django.utils import timezone
+    from django.utils.text import get_valid_filename
+
+    base, extension = os.path.splitext(os.path.basename(nombre or ''))
+    seguro = get_valid_filename(base)[:80] or 'evidencia'
+    ahora = timezone.localdate()
+
+    return f'evidencias/mediciones/{ahora:%Y/%m}/{uuid.uuid4().hex[:12]}_{seguro}{extension.lower()}'
+
+
+class EvidenciaMedicion(models.Model):
+    """D2 (pedido de Hernán, 06/10/2026): una medición puede tener varios
+    archivos de evidencia, y uno nuevo nunca reemplaza a los anteriores:
+    cada archivo es un registro independiente que se conserva. No hay
+    versiones, estados ni borrado. Medicion.evidencia queda como campo
+    heredado de solo lectura; sus archivos se migraron aquí apuntando a la
+    misma ruta (no se copiaron ni movieron)."""
+
+    medicion = models.ForeignKey(
+        Medicion,
+        on_delete=models.PROTECT,
+        related_name='evidencias',
+    )
+    archivo = models.FileField(
+        upload_to=ruta_evidencia_medicion,
+        max_length=255,
+        validators=[validar_archivo_evidencia],
+    )
+    nombre_original = models.CharField(max_length=255)
+    tamano = models.PositiveBigIntegerField(default=0)
+    tipo_contenido = models.CharField(max_length=100, blank=True, default='')
+    subido_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='evidencias_subidas',
+        blank=True,
+        null=True,
+    )
+    fecha_subida = models.DateTimeField(default=timezone_now)
+
+    class Meta:
+        db_table = 'evidencia_medicion'
+        verbose_name = 'Evidencia de medición'
+        verbose_name_plural = 'Evidencias de medición'
+        ordering = ['fecha_subida', 'id']
+
+    def delete(self, *args, **kwargs):
+        # Las evidencias son historial: nunca se borran (ni la fila ni el
+        # archivo, que además puede estar compartido con Medicion.evidencia).
+        raise ValidationError('Las evidencias adjuntas no pueden eliminarse.')
+
+    def __str__(self):
+        return f'{self.nombre_original} (medición #{self.medicion_id})'
 
 
 class Alerta(models.Model):

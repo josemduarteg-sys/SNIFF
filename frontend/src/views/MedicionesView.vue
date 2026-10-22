@@ -233,7 +233,7 @@ const medicionesFiltradas = computed(() => {
       medicion.estado_cumplimiento_nombre?.toLowerCase().includes(texto) ||
       medicion.observacion?.toLowerCase().includes(texto) ||
       medicion.observaciones?.toLowerCase().includes(texto) ||
-      medicion.evidencia?.toLowerCase().includes(texto)
+      (medicion.evidencias || []).some((evidencia) => evidencia.nombre_original?.toLowerCase().includes(texto))
 
     const coincideIndicador =
       !indicadorSeleccionado.value ||
@@ -358,6 +358,30 @@ function textoRegistradoPor(medicion) {
 function abrirModalDetalle(medicion) {
   medicionDetalle.value = { ...medicion }
   mostrarModalDetalle.value = true
+}
+
+// D2: las evidencias nuevas se suman a la medición abierta y a su fila del
+// listado, sin recargar todo.
+function sumarEvidencias(nuevas) {
+  const actualizar = (medicion) => {
+    const evidencias = [...(medicion.evidencias || []), ...nuevas]
+
+    return {
+      ...medicion,
+      evidencias,
+      cantidad_evidencias: evidencias.length,
+      tiene_evidencia: evidencias.length > 0,
+      evidencia_nombre: evidencias[evidencias.length - 1]?.nombre_original || null,
+    }
+  }
+
+  if (medicionDetalle.value) {
+    medicionDetalle.value = actualizar(medicionDetalle.value)
+  }
+
+  mediciones.value = mediciones.value.map((medicion) => (
+    medicion.id === medicionDetalle.value?.id ? actualizar(medicion) : medicion
+  ))
 }
 
 function cerrarModalDetalle() {
@@ -859,6 +883,8 @@ onMounted(async () => {
       <MedicionDetalle
         v-if="medicionDetalle"
         :medicion="medicionDetalle"
+        :puede-agregar-evidencia="puedeRegistrar"
+        @evidencias-agregadas="sumarEvidencias"
       />
     </ModalBase>
   </AppLayout>

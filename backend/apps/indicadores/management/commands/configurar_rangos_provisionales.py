@@ -5,12 +5,11 @@ from apps.indicadores.services import configurar_rangos_provisionales_para_todos
 
 class Command(BaseCommand):
     help = (
-        'Configura los RangoKPI provisionales (Incumplido/En riesgo/Favorable) '
-        'para todos los KPI existentes: crea los que falten y actualiza los que '
-        'coincidan exactamente con la configuración anterior conocida. No '
-        'duplica rangos y puede ejecutarse nuevamente sin efectos adicionales. '
-        'KPI con una configuración de rangos distinta a la esperada se omiten '
-        'y se reportan para revisión manual.'
+        'Completa los RangoKPI (Incumplido/En riesgo/Favorable, plantilla 60/75) '
+        'SOLO en los KPI en porcentaje que no tienen ningún rango. Nunca modifica '
+        'rangos existentes (personalizados, invertidos o de la plantilla anterior) '
+        'ni asigna rangos porcentuales a KPI en otra unidad: esos casos se informan '
+        'como omitidos. Puede ejecutarse nuevamente sin efectos adicionales.'
     )
 
     def handle(self, *args, **kwargs):
@@ -22,24 +21,13 @@ class Command(BaseCommand):
                     f"  + KPI {item['indicador_id']} \"{item['indicador']}\": "
                     f"{item['rangos_creados']} rango(s) creado(s)."
                 ))
-            elif item['accion'] == 'actualizado':
-                self.stdout.write(self.style.WARNING(
-                    f"  ~ KPI {item['indicador_id']} \"{item['indicador']}\": "
-                    f"{item['rangos_actualizados']} rango(s) actualizado(s)."
-                ))
-            elif item['accion'] == 'sin cambios':
-                self.stdout.write(
-                    f"  · KPI {item['indicador_id']} \"{item['indicador']}\": "
-                    "ya estaba con el criterio provisional, sin cambios."
-                )
             else:
-                self.stdout.write(self.style.ERROR(
-                    f"  ! KPI {item['indicador_id']} \"{item['indicador']}\" OMITIDO: "
-                    f"{item['motivo']}"
-                ))
+                self.stdout.write(
+                    f"  · KPI {item['indicador_id']} \"{item['indicador']}\" omitido: {item['motivo']}"
+                )
 
         self.stdout.write(self.style.SUCCESS(
             f"\nKPI procesados: {resultado['kpi_procesados']} | "
             f"Rangos creados: {resultado['rangos_creados']} | "
-            f"Rangos actualizados: {resultado['rangos_actualizados']}"
+            'Rangos existentes modificados: 0'
         ))

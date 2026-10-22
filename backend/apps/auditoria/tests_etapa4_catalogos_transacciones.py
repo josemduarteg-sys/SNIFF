@@ -21,8 +21,8 @@ from apps.indicadores.models import (
     MetaKPI,
     RangoKPI,
 )
+from apps.indicadores.rangos_de_prueba import configurar_rangos_70_85
 from apps.indicadores.services import (
-    crear_rangos_provisionales,
     obtener_estado_para_medicion,
     obtener_o_crear_meta_vigente,
     obtener_o_crear_periodo,
@@ -77,7 +77,7 @@ class BitacoraCatalogosTests(APITestCase):
             formula_medicion='Resultado', unidad_medida='%', valor_meta=Decimal('85'),
             estado='autorizado', creado_por=self.admin,
         )
-        crear_rangos_provisionales(self.kpi)
+        configurar_rangos_70_85(self.kpi)
 
     def registros(self, modulo):
         return list(Bitacora.objects.filter(modulo=modulo).order_by('id').values_list('accion', 'descripcion'))
@@ -85,15 +85,16 @@ class BitacoraCatalogosTests(APITestCase):
     def test_rangos_kpi(self):
         rango = RangoKPI.objects.get(indicador=self.kpi, estado_cumplimiento__nombre='Favorable')
 
-        self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '80'}, format='json')
-        self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '80'}, format='json')  # sin cambio
+        # D3: 90 no se superpone con En riesgo (70 a menos de 85).
+        self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '90'}, format='json')
+        self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '90'}, format='json')  # sin cambio
         self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'estado': False}, format='json')
 
         registros = self.registros('Rangos KPI')
         self.assertEqual(len(registros), 2)
         self.assertEqual(registros[0][0], 'actualizar')
         self.assertIn('rango "Favorable" del KPI KPI catálogos', registros[0][1])
-        self.assertIn('valor_minimo: 85.0000 → 80', registros[0][1])
+        self.assertIn('valor_minimo: 85.0000 → 90', registros[0][1])
         self.assertEqual(registros[1], ('eliminar', 'Desactivó el rango "Favorable" del KPI KPI catálogos.'))
         self.assertEqual(Bitacora.objects.get(modulo='Rangos KPI', accion='actualizar').usuario, self.admin)
 
@@ -105,9 +106,13 @@ class BitacoraCatalogosTests(APITestCase):
             estado_cumplimiento=obtener_estado_para_medicion(self.kpi, meta, Decimal('82')),
             registrado_por=self.admin, fecha_medicion=periodo.fecha_fin, valor_resultado=Decimal('82'),
         )
-        rango = RangoKPI.objects.get(indicador=self.kpi, estado_cumplimiento__nombre='Favorable')
+        en_riesgo = RangoKPI.objects.get(indicador=self.kpi, estado_cumplimiento__nombre='En riesgo')
+        favorable = RangoKPI.objects.get(indicador=self.kpi, estado_cumplimiento__nombre='Favorable')
 
-        self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '80'}, format='json')
+        # Con los rangos nuevos 82 sería Favorable (D3: sin superponerse,
+        # primero se acorta En riesgo y después se baja Favorable).
+        self.assertEqual(self.client.patch(f'/api/rangos-kpi/{en_riesgo.id}/', {'valor_maximo': '80'}, format='json').status_code, 200)
+        self.assertEqual(self.client.patch(f'/api/rangos-kpi/{favorable.id}/', {'valor_minimo': '80'}, format='json').status_code, 200)
 
         medicion.refresh_from_db()
         self.assertEqual(medicion.estado_cumplimiento.nombre, 'En riesgo')
@@ -163,7 +168,7 @@ class BitacoraCatalogosTests(APITestCase):
         rango = RangoKPI.objects.get(indicador=self.kpi, estado_cumplimiento__nombre='Favorable')
 
         with mock.patch('apps.auditoria.services.registrar_bitacora', side_effect=RuntimeError('BD caída')):
-            respuesta = self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '10'}, format='json')
+            respuesta = self.client.patch(f'/api/rangos-kpi/{rango.id}/', {'valor_minimo': '90'}, format='json')
 
         self.assertEqual(respuesta.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         rango.refresh_from_db()

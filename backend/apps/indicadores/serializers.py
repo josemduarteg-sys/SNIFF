@@ -15,6 +15,8 @@ from .models import (
     Medicion,
     Alerta,
     DIAS_MAXIMOS_AMPLIACION,
+    EvidenciaMedicion,
+    MAXIMO_EVIDENCIAS_POR_CARGA,
     SolicitudAmpliacionPlazo,
     validar_archivo_evidencia,
 )
@@ -103,6 +105,8 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
     anio = serializers.ReadOnlyField()
     fecha_inicio_vigencia = serializers.ReadOnlyField()
     fecha_fin_vigencia = serializers.ReadOnlyField()
+    # C2: día desde el que se mide el KPI (autorización; sin ella, creación).
+    fecha_inicio_seguimiento = serializers.ReadOnlyField()
     frecuencia_nombre = serializers.CharField(source='frecuencia.nombre', read_only=True)
     autorizado_por_username = serializers.CharField(source='autorizado_por.username', read_only=True)
     creado_por_username = serializers.CharField(source='creado_por.username', read_only=True)
@@ -151,6 +155,7 @@ class IndicadorKPISerializer(serializers.ModelSerializer):
             'periodo_disponible_motivo',
             'fecha_inicio_vigencia',
             'fecha_fin_vigencia',
+            'fecha_inicio_seguimiento',
             'estado',
             'fecha_autorizacion',
             'autorizado_por',
@@ -630,10 +635,15 @@ class MetaKPISerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
-OPORTUNIDAD_A_TIEMPO = 'A tiempo'
-OPORTUNIDAD_CON_RETRASO = 'Con retraso'
-OPORTUNIDAD_CON_AMPLIACION = 'Con ampliación'
-ESTADO_SIN_REGISTRO_OPORTUNIDAD = 'Sin registro'
+# Oportunidad de registro (criterio de Hernán, reunión del 06/10/2026): días
+# transcurridos entre el cierre del periodo y el registro de la medición.
+OPORTUNIDAD_OPORTUNO = 'Oportuno'            # día 0 (el mismo día del cierre)
+OPORTUNIDAD_DEMORADO = 'Demorado'            # días 1 y 2
+OPORTUNIDAD_TARDIO = 'Tardío'                # día 3 hasta el vencimiento (incluye ampliación)
+OPORTUNIDAD_FUERA_DE_PLAZO = 'Fuera de plazo'  # después del plazo efectivo
+ESTADO_SIN_REGISTRO_OPORTUNIDAD = 'Sin registro'  # periodo cerrado sin medición
+DIAS_OPORTUNO = 0
+DIAS_DEMORADO = 2
 
 
 def validar_asignacion_responsable(indicador, usuario):
@@ -765,6 +775,40 @@ class RangoKPISerializer(serializers.ModelSerializer):
 
         return estado
 
+    def validate(self, attrs):
+        """D3: un rango debe ser coherente (máximo mayor que el mínimo) y no
+        superponerse con los demás rangos activos del mismo KPI (mínimo
+        inclusivo, máximo exclusivo, sin máximo = sin límite)."""
+        instancia = self.instance
+        indicador = attrs.get('indicador', getattr(instancia, 'indicador', None))
+        minimo = attrs.get('valor_minimo', getattr(instancia, 'valor_minimo', None))
+        maximo = attrs.get('valor_maximo', getattr(instancia, 'valor_maximo', None))
+        activo = attrs.get('estado', getattr(instancia, 'estado', True))
+
+        if minimo is not None and maximo is not None and maximo <= minimo:
+            raise serializers.ValidationError({'valor_maximo': 'El máximo debe ser mayor que el mínimo.'})
+
+        if indicador is None or minimo is None or not activo:
+            return attrs
+
+        otros = RangoKPI.objects.filter(indicador=indicador, estado=True)
+
+        if instancia is not None:
+            otros = otros.exclude(pk=instancia.pk)
+
+        for otro in otros.select_related('estado_cumplimiento'):
+            se_superponen = (
+                (maximo is None or otro.valor_minimo < maximo)
+                and (otro.valor_maximo is None or minimo < otro.valor_maximo)
+            )
+
+            if se_superponen:
+                raise serializers.ValidationError(
+                    f'El rango se superpone con el de "{otro.estado_cumplimiento.nombre}".'
+                )
+
+        return attrs
+
 
 class PeriodoMedicionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -781,6 +825,36 @@ class PeriodoMedicionSerializer(serializers.ModelSerializer):
             'descripcion',
         ]
         read_only_fields = ['id']
+
+
+class EvidenciaMedicionSerializer(serializers.ModelSerializer):
+    """D2: un archivo de evidencia (solo lectura; se agregan por
+    adjuntar_evidencias). El archivo se descarga por la API autenticada."""
+
+    subido_por_username = serializers.CharField(source='subido_por.username', read_only=True, default=None)
+
+    class Meta:
+        model = EvidenciaMedicion
+        fields = ['id', 'nombre_original', 'tamano', 'tipo_contenido', 'subido_por', 'subido_por_username', 'fecha_subida']
+        read_only_fields = fields
+
+
+class AgregarEvidenciasSerializer(serializers.Serializer):
+    """D2: «Agregar evidencia» a una medición ya registrada (1 a 10 archivos
+    PDF/JPG/JPEG de hasta 10 MB cada uno)."""
+
+    archivos = serializers.ListField(
+        child=serializers.FileField(validators=[validar_archivo_evidencia]),
+        allow_empty=False,
+        max_length=MAXIMO_EVIDENCIAS_POR_CARGA,
+        error_messages={
+            'required': 'Seleccioná al menos un archivo.',
+            'empty': 'Seleccioná al menos un archivo.',
+            'max_length': (
+                f'Se pueden adjuntar como máximo {MAXIMO_EVIDENCIAS_POR_CARGA} archivos por operación.'
+            ),
+        },
+    )
 
 
 class MedicionSerializer(serializers.ModelSerializer):
@@ -836,12 +910,25 @@ class MedicionSerializer(serializers.ModelSerializer):
         },
     )
     sin_registro = serializers.BooleanField(read_only=True)
+    # D2: los archivos nuevos se guardan como EvidenciaMedicion y se suman a
+    # los anteriores (nunca los reemplazan). `evidencia` (uno) se conserva
+    # por compatibilidad; `archivos_evidencia` admite hasta 10 por operación.
+    # Medicion.evidencia queda como campo heredado de solo lectura.
     evidencia = serializers.FileField(
         required=False,
         allow_null=True,
         write_only=True,
         validators=[validar_archivo_evidencia],
     )
+    archivos_evidencia = serializers.ListField(
+        child=serializers.FileField(validators=[validar_archivo_evidencia]),
+        required=False,
+        write_only=True,
+        max_length=MAXIMO_EVIDENCIAS_POR_CARGA,
+        error_messages={'max_length': f'Podés adjuntar hasta {MAXIMO_EVIDENCIAS_POR_CARGA} archivos por operación.'},
+    )
+    evidencias = serializers.SerializerMethodField()
+    cantidad_evidencias = serializers.SerializerMethodField()
     evidencia_nombre = serializers.SerializerMethodField()
     tiene_evidencia = serializers.SerializerMethodField()
     puede_modificarse = serializers.SerializerMethodField()
@@ -889,6 +976,9 @@ class MedicionSerializer(serializers.ModelSerializer):
             'observacion',
             'observaciones',
             'evidencia',
+            'archivos_evidencia',
+            'evidencias',
+            'cantidad_evidencias',
             'evidencia_nombre',
             'tiene_evidencia',
             'cierre_automatico',
@@ -982,14 +1072,23 @@ class MedicionSerializer(serializers.ModelSerializer):
         _, estado = self._estado_acumulado_hasta_medicion_cacheado(obj)
         return estado.color if estado else None
 
-    def get_evidencia_nombre(self, obj):
-        if not obj.evidencia:
-            return None
+    # D2: el historial vive en EvidenciaMedicion (precargado en los listados;
+    # las evidencias heredadas se migraron allí apuntando a la misma ruta).
+    def _evidencias(self, obj):
+        return list(obj.evidencias.all())
 
-        return os.path.basename(obj.evidencia.name)
+    def get_evidencias(self, obj):
+        return EvidenciaMedicionSerializer(self._evidencias(obj), many=True).data
+
+    def get_cantidad_evidencias(self, obj):
+        return len(self._evidencias(obj))
+
+    def get_evidencia_nombre(self, obj):
+        evidencias = self._evidencias(obj)
+        return evidencias[-1].nombre_original if evidencias else None
 
     def get_tiene_evidencia(self, obj):
-        return bool(obj.evidencia)
+        return bool(self._evidencias(obj))
 
     def get_puede_modificarse(self, obj):
         if obj.cierre_automatico:
@@ -998,19 +1097,27 @@ class MedicionSerializer(serializers.ModelSerializer):
         return not obj.indicador.esta_bloqueado()
 
     def get_registrada_con_ampliacion(self, obj):
-        return self.get_oportunidad_registro(obj) == OPORTUNIDAD_CON_AMPLIACION
+        """Registrada después del vencimiento ordinario, dentro de una
+        ampliación autorizada (se clasifica Tardío y además se identifica)."""
+        return self._datos_oportunidad(obj)['con_ampliacion']
 
     def get_oportunidad_registro(self, obj):
-        """Etapa 6 (M5): categoría de oportunidad de registro, una sola por
-        medición (criterio "por plazo" aprobado):
-          - Sin registro: cierre automático (el periodo venció sin resultado).
-          - A tiempo: registrada hasta el límite ordinario inclusive (cierre
-            del periodo + plazo general vigente).
-          - Con ampliación: después del límite ordinario y hasta la fecha
-            extraordinaria de una ampliación autorizada, inclusive.
-          - Con retraso: después del límite efectivo (hoy solo es posible en
-            cargas históricas anteriores a las reglas de plazo).
-        La fecha de registro se toma en la zona horaria del sistema."""
+        return self._datos_oportunidad(obj)['categoria']
+
+    def _datos_oportunidad(self, obj):
+        """Oportunidad de registro (criterio de Hernán): cuántos días después
+        del cierre del periodo (fecha_medicion) se registró la medición
+        (fecha_registro, en la zona horaria del sistema, America/Guatemala).
+        No es el estado de cumplimiento del KPI.
+          - Sin registro: periodo cerrado automáticamente sin medición.
+          - Fuera de plazo: después del plazo efectivo (el ordinario o el de
+            una ampliación autorizada, el mayor). Hoy solo ocurre en cargas
+            retroactivas: el backend no admite registros fuera de plazo.
+          - Oportuno: día 0 (el día del cierre).
+          - Demorado: días 1 y 2.
+          - Tardío: desde el día 3 hasta el vencimiento, cualquiera sea el
+            plazo configurado; incluye lo registrado con ampliación.
+        Se calcula al consultar: no modifica ni guarda nada en la medición."""
         from datetime import timedelta
 
         from django.utils import timezone
@@ -1018,24 +1125,30 @@ class MedicionSerializer(serializers.ModelSerializer):
         if hasattr(obj, '_oportunidad_registro_cache'):
             return obj._oportunidad_registro_cache
 
+        con_ampliacion = False
+
         if obj.cierre_automatico:
             categoria = ESTADO_SIN_REGISTRO_OPORTUNIDAD
         else:
             registro = timezone.localtime(obj.fecha_registro).date()
+            dias = (registro - obj.fecha_medicion).days
             limite_ordinario = obj.fecha_medicion + timedelta(days=self._dias_plazo_registro())
+            extraordinaria = self._fecha_extraordinaria(obj) if registro > limite_ordinario else None
+            limite_efectivo = max(limite_ordinario, extraordinaria) if extraordinaria else limite_ordinario
 
-            if registro <= limite_ordinario:
-                categoria = OPORTUNIDAD_A_TIEMPO
+            if registro > limite_efectivo:
+                categoria = OPORTUNIDAD_FUERA_DE_PLAZO
+            elif dias <= DIAS_OPORTUNO:
+                categoria = OPORTUNIDAD_OPORTUNO
+            elif dias <= DIAS_DEMORADO:
+                categoria = OPORTUNIDAD_DEMORADO
             else:
-                extraordinaria = self._fecha_extraordinaria(obj)
-                categoria = (
-                    OPORTUNIDAD_CON_AMPLIACION
-                    if extraordinaria is not None and registro <= extraordinaria
-                    else OPORTUNIDAD_CON_RETRASO
-                )
+                categoria = OPORTUNIDAD_TARDIO
 
-        obj._oportunidad_registro_cache = categoria
-        return categoria
+            con_ampliacion = registro > limite_ordinario and categoria != OPORTUNIDAD_FUERA_DE_PLAZO
+
+        obj._oportunidad_registro_cache = {'categoria': categoria, 'con_ampliacion': con_ampliacion}
+        return obj._oportunidad_registro_cache
 
     def _fecha_extraordinaria(self, obj):
         # MedicionViewSet la anota con una subconsulta para no consultar
@@ -1072,7 +1185,7 @@ class MedicionSerializer(serializers.ModelSerializer):
                     'no permiten modificar mediciones.'
                 )
 
-            campos_permitidos = {'valor_resultado', 'observacion', 'evidencia'}
+            campos_permitidos = {'valor_resultado', 'observacion', 'evidencia', 'archivos_evidencia'}
             campos_no_permitidos = set(attrs.keys()) - campos_permitidos
 
             if campos_no_permitidos:
@@ -1081,21 +1194,9 @@ class MedicionSerializer(serializers.ModelSerializer):
                     'evidencia de una medición existente.'
                 )
 
-            # REGLA V2 (inmutabilidad de la evidencia): una vez que una
-            # Medicion ya tiene un archivo de evidencia, ese archivo queda
-            # fijo como respaldo histórico — no puede reemplazarse ni
-            # eliminarse. Se rechaza acá, en backend, en cuanto la clave
-            # 'evidencia' aparece en la petición (sea un archivo nuevo o un
-            # intento de vaciarla), sin depender de que el frontend oculte
-            # el control. Una Medicion que todavía NO tiene evidencia sigue
-            # pudiendo recibir una por esta vía (caso reportado aparte, no
-            # se inventa una regla nueva para ese otro caso en esta tarea).
-            if instance.evidencia and 'evidencia' in attrs:
-                raise serializers.ValidationError(
-                    'Esta medición ya tiene una evidencia adjunta. No puede reemplazarse '
-                    'ni eliminarse: queda como respaldo histórico.'
-                )
-
+            # D2: las evidencias nuevas se AGREGAN como EvidenciaMedicion;
+            # ninguna anterior se reemplaza ni se elimina, y Medicion.evidencia
+            # (heredado) ya no se escribe.
             indicador = instance.indicador
         else:
             indicador = attrs.get('indicador')
@@ -1136,12 +1237,31 @@ class MedicionSerializer(serializers.ModelSerializer):
                     )
                 })
 
+        # D2: `evidencia` (uno, compatibilidad) y `archivos_evidencia` se
+        # unen en una sola carga; cada archivo se AGREGA a los anteriores.
+        archivos = list(attrs.pop('archivos_evidencia', None) or [])
+        evidencia_unica = attrs.pop('evidencia', None)
+
+        if evidencia_unica:
+            archivos.insert(0, evidencia_unica)
+
+        if len(archivos) > MAXIMO_EVIDENCIAS_POR_CARGA:
+            raise serializers.ValidationError({
+                'archivos_evidencia': (
+                    f'Se pueden adjuntar como máximo {MAXIMO_EVIDENCIAS_POR_CARGA} '
+                    'archivos por operación.'
+                )
+            })
+
+        attrs['_archivos_evidencia'] = archivos
+
         return attrs
 
     def create(self, validated_data):
         from apps.auditoria.services import registrar_bitacora_obligatoria as registrar_bitacora
         from .services import (
             actualizar_alerta_cumplimiento_kpi,
+            adjuntar_evidencias,
             obtener_estado_para_medicion,
             obtener_o_crear_meta_vigente,
             obtener_o_crear_periodo,
@@ -1149,6 +1269,7 @@ class MedicionSerializer(serializers.ModelSerializer):
         )
 
         info = validated_data.pop('_info_periodo')
+        archivos = validated_data.pop('_archivos_evidencia', [])
         indicador = validated_data['indicador']
 
         periodo = obtener_o_crear_periodo(indicador, info['fecha_inicio_periodo'])
@@ -1191,6 +1312,8 @@ class MedicionSerializer(serializers.ModelSerializer):
             if request and request.user.is_authenticated
             else medicion.registrado_por
         )
+
+        adjuntar_evidencias(medicion, archivos, usuario, request=request)
 
         alerta = actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
         resolver_alertas_periodo_vencido(medicion, usuario=usuario)
@@ -1237,12 +1360,12 @@ class MedicionSerializer(serializers.ModelSerializer):
         from apps.auditoria.services import registrar_bitacora_obligatoria as registrar_bitacora
         from .services import (
             actualizar_alerta_cumplimiento_kpi,
+            adjuntar_evidencias,
             obtener_estado_para_medicion,
             resolver_alertas_periodo_vencido,
         )
 
-        evidencia_anterior = instance.evidencia
-        reemplaza_evidencia = 'evidencia' in validated_data
+        archivos = validated_data.pop('_archivos_evidencia', [])
 
         valor_resultado = validated_data.get('valor_resultado', instance.valor_resultado)
 
@@ -1261,13 +1384,10 @@ class MedicionSerializer(serializers.ModelSerializer):
 
         medicion = super().update(instance, validated_data)
 
-        # Reemplazo de evidencia (punto 31): evita dejar el archivo anterior
-        # huérfano en el almacenamiento local cuando se sube uno nuevo.
-        if reemplaza_evidencia and evidencia_anterior and evidencia_anterior != medicion.evidencia:
-            evidencia_anterior.delete(save=False)
-
         request = self.context.get('request')
         usuario = request.user if request and request.user.is_authenticated else medicion.registrado_por
+
+        adjuntar_evidencias(medicion, archivos, usuario, request=request)
 
         alerta = actualizar_alerta_cumplimiento_kpi(medicion.indicador, medicion_actual=medicion)
         resolver_alertas_periodo_vencido(medicion, usuario=usuario)

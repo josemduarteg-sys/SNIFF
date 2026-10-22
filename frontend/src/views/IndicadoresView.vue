@@ -379,6 +379,28 @@ function abrirDetalleIndicador(indicador) {
   modalDetalleAbierto.value = true
 }
 
+// D3: los rangos se configuran desde el detalle, solo en Borrador y con el
+// plan abierto (el backend vuelve a validarlo).
+const puedeEditarRangosDetalle = computed(() => {
+  const kpi = indicadorDetalle.value
+
+  return Boolean(kpi)
+    && puedeEditarKpi(props.usuario, kpi)
+    && kpi.estado === 'borrador'
+    && kpi.plan_anual_estado !== 'cerrado'
+    && kpi.plan_estrategico_estado !== 'cerrado'
+})
+
+function actualizarRangosDetalle(rangos) {
+  const id = Number(indicadorDetalle.value?.id)
+
+  rangosKpi.value = [
+    ...rangosKpi.value.filter((rango) => Number(rango.indicador) !== id),
+    ...rangos,
+  ]
+  mensaje.value = 'Rangos de evaluación guardados correctamente.'
+}
+
 function cerrarModalDetalle() {
   modalDetalleAbierto.value = false
   indicadorDetalle.value = null
@@ -937,6 +959,8 @@ onBeforeUnmount(() => {
         v-if="indicadorDetalle"
         :indicador="indicadorDetalle"
         :rangos="rangosDelIndicadorDetalle"
+        :puede-editar-rangos="puedeEditarRangosDetalle"
+        @rangos-actualizados="actualizarRangosDetalle"
       />
     </ModalBase>
 

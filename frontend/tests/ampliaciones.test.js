@@ -4,9 +4,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
-  OPORTUNIDAD_A_TIEMPO,
-  OPORTUNIDAD_CON_AMPLIACION,
-  OPORTUNIDAD_CON_RETRASO,
+  OPORTUNIDAD_DEMORADO,
+  OPORTUNIDAD_FUERA_DE_PLAZO,
+  OPORTUNIDAD_OPORTUNO,
+  OPORTUNIDAD_TARDIO,
   categoriaOportunidad,
   contarPorEstado,
   datosEstadoAmpliacion,
@@ -57,16 +58,19 @@ test('contarPorEstado y etiquetas de estado', () => {
   assert.equal(datosEstadoAmpliacion('autorizada').clase, 'ok')
 })
 
-test('oportunidad de registro: una sola categoría por medición', () => {
-  const base = { fecha_medicion: '2027-01-31', registrada_con_ampliacion: false, cierre_automatico: false }
-
-  assert.equal(categoriaOportunidad({ ...base, fecha_registro: '2027-01-31T09:00:00' }, SIN_REGISTRO), OPORTUNIDAD_A_TIEMPO)
-  assert.equal(categoriaOportunidad({ ...base, fecha_registro: '2027-02-03T09:00:00' }, SIN_REGISTRO), OPORTUNIDAD_CON_RETRASO)
-  assert.equal(
-    categoriaOportunidad({ ...base, fecha_registro: '2027-02-10T09:00:00', registrada_con_ampliacion: true }, SIN_REGISTRO),
-    OPORTUNIDAD_CON_AMPLIACION,
+test('oportunidad de registro: categorías del criterio de Hernán', () => {
+  assert.deepEqual(
+    [OPORTUNIDAD_OPORTUNO, OPORTUNIDAD_DEMORADO, OPORTUNIDAD_TARDIO, OPORTUNIDAD_FUERA_DE_PLAZO],
+    ['Oportuno', 'Demorado', 'Tardío', 'Fuera de plazo'],
   )
-  assert.equal(categoriaOportunidad({ ...base, cierre_automatico: true, fecha_registro: '2027-02-16' }, SIN_REGISTRO), SIN_REGISTRO)
+
+  const base = { fecha_medicion: '2027-01-31', fecha_registro: '2027-02-10T09:00:00', cierre_automatico: false }
+
+  // La categoría la calcula el backend (con el plazo y las ampliaciones).
+  assert.equal(categoriaOportunidad({ ...base, oportunidad_registro: 'Tardío', registrada_con_ampliacion: true }, SIN_REGISTRO), OPORTUNIDAD_TARDIO)
+  assert.equal(categoriaOportunidad({ ...base, cierre_automatico: true }, SIN_REGISTRO), SIN_REGISTRO)
+  // Sin el dato del backend no se supone ninguna categoría.
+  assert.equal(categoriaOportunidad(base, SIN_REGISTRO), null)
 })
 
 test('solo Ejecutor y Administrador de planificación ven las solicitudes', () => {

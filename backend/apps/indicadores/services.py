@@ -135,16 +135,28 @@ def obtener_estado_para_medicion(indicador, meta, valor_resultado):
 
 PLANTILLA_RANGOS_PROVISIONALES = (
     # (nombre del EstadoCumplimiento real, valor_minimo, valor_maximo)
-    # valor_maximo=None => sin límite superior.
-    ('Incumplido', Decimal('0'), Decimal('70')),
-    ('En riesgo', Decimal('70'), Decimal('85')),
-    ('Favorable', Decimal('85'), None),
+    # valor_minimo inclusivo, valor_maximo exclusivo; None = sin límite.
+    ('Incumplido', Decimal('0'), Decimal('60.01')),
+    ('En riesgo', Decimal('60.01'), Decimal('75.01')),
+    ('Favorable', Decimal('75.01'), None),
 )
-"""Plantilla ÚNICA y centralizada usada para generar los RangoKPI iniciales
-de un KPI (provisional, pendiente de validación con el cliente). La
-clasificación de mediciones NUNCA lee esta plantilla directamente: siempre
-consulta los RangoKPI ya guardados en base de datos. Cambiar los valores acá
-solo afecta a los rangos que se generen de ahora en adelante."""
+"""Plantilla de rangos para KPI NUEVOS en porcentaje (D3, criterio de Hernán
+del 06/10/2026): 0 a 60 inclusive Incumplido, más de 60 hasta 75 inclusive
+En riesgo, más de 75 Favorable. Los límites técnicos 60,01 y 75,01 son
+exactos porque todo valor se redondea a dos decimales antes de clasificarse
+(round(..., 2) en cada medición y quantize(0.01) en el promedio): 60,00 cae
+en Incumplido, 60,01 en En riesgo, 75,00 en En riesgo y 75,01 en Favorable.
+
+Reemplaza a la plantilla provisional 70/85, que sigue vigente en los KPI que
+ya la tienen guardada: la clasificación NUNCA lee esta plantilla, siempre
+consulta los RangoKPI guardados en la base de datos. Cambiarla solo afecta a
+los KPI que se creen de ahora en adelante."""
+
+UNIDAD_PORCENTAJE = '%'
+
+
+def es_kpi_porcentual(indicador):
+    return (indicador.unidad_medida or '').strip() == UNIDAD_PORCENTAJE
 
 
 def obtener_estados_cumplimiento_plantilla():
@@ -154,9 +166,14 @@ def obtener_estados_cumplimiento_plantilla():
 
 
 def crear_rangos_provisionales(indicador):
-    """Crea los RangoKPI provisionales de un KPI que todavía no tenga ninguno
-    para ese estado. Idempotente: si ya existe un rango para ese
-    (indicador, estado_cumplimiento), no lo duplica ni lo modifica."""
+    """Crea los RangoKPI de la plantilla para un KPI en PORCENTAJE que todavía
+    no tenga rango para ese estado. Idempotente: no duplica ni modifica un
+    rango existente. A un KPI en otra unidad (días, quetzales...) no le crea
+    nada: sus rangos se configuran según su unidad antes de autorizarlo (ver
+    validar_rangos_para_autorizar)."""
+    if not es_kpi_porcentual(indicador):
+        return 0
+
     estados = obtener_estados_cumplimiento_plantilla()
 
     faltantes = [
@@ -191,107 +208,186 @@ def crear_rangos_provisionales(indicador):
     return creados
 
 
-def actualizar_rangos_a_plantilla(indicador):
-    """Actualiza a los valores provisionales los RangoKPI que ya existen
-    para un KPI, emparejando por estado_cumplimiento. No crea filas nuevas
-    ni elimina ninguna; solo ajusta valor_minimo/valor_maximo si difieren."""
-    estados = obtener_estados_cumplimiento_plantilla()
-    actualizados = 0
+def rangos_son_plantilla_porcentual(rangos):
+    """True si los rangos activos son exactamente una plantilla porcentual:
+    la vigente (60/75) o la anterior (70/85)."""
+    plantillas = [
+        {(nombre, minimo, maximo) for nombre, minimo, maximo in PLANTILLA_RANGOS_PROVISIONALES},
+        {('Incumplido', Decimal('0'), Decimal('70')), ('En riesgo', Decimal('70'), Decimal('85')), ('Favorable', Decimal('85'), None)},
+    ]
+    actuales = {(r.estado_cumplimiento.nombre, r.valor_minimo, r.valor_maximo) for r in rangos}
+    return actuales in plantillas
 
-    for nombre_estado, minimo, maximo in PLANTILLA_RANGOS_PROVISIONALES:
-        estado_cumplimiento = estados.get(nombre_estado)
 
-        if not estado_cumplimiento:
+def validar_rangos_para_autorizar(indicador):
+    """Errores que impiden autorizar un KPI por sus rangos (lista vacía si
+    están bien). Un KPI autorizado clasifica cada medición con sus rangos, así
+    que antes de autorizarlo debe tener rangos activos, coherentes y propios
+    de su unidad. No cambia nada; los KPI ya autorizados no se revisan."""
+    rangos = list(
+        RangoKPI.objects.filter(indicador=indicador, estado=True)
+        .select_related('estado_cumplimiento')
+        .order_by('valor_minimo', 'id')
+    )
+
+    if not rangos:
+        return [
+            'El KPI no tiene rangos de evaluación configurados. Configurá los rangos de '
+            f'Incumplido, En riesgo y Favorable según su unidad ({indicador.unidad_medida}) antes de autorizarlo.'
+        ]
+
+    errores = []
+
+    for rango in rangos:
+        if rango.valor_maximo is not None and rango.valor_maximo <= rango.valor_minimo:
+            errores.append(
+                f'El rango "{rango.estado_cumplimiento.nombre}" tiene un máximo menor o igual a su mínimo.'
+            )
+
+    for anterior, siguiente in zip(rangos, rangos[1:]):
+        if anterior.valor_maximo is None or anterior.valor_maximo > siguiente.valor_minimo:
+            errores.append(
+                f'Los rangos "{anterior.estado_cumplimiento.nombre}" y '
+                f'"{siguiente.estado_cumplimiento.nombre}" se superponen.'
+            )
+
+    if not es_kpi_porcentual(indicador) and rangos_son_plantilla_porcentual(rangos):
+        errores.append(
+            f'El KPI se mide en {indicador.unidad_medida}, pero conserva los rangos porcentuales por '
+            'defecto. Configurá rangos propios de su unidad antes de autorizarlo.'
+        )
+
+    return errores
+
+
+def validar_conjunto_rangos(datos):
+    """Valida el conjunto completo de rangos enviado para un KPI (acción
+    configurar-rangos). Devuelve (rangos normalizados, errores). Cada rango:
+    {estado_cumplimiento: id, valor_minimo, valor_maximo (vacío = sin
+    límite)}. Reglas: al menos un rango, estados del catálogo activos y sin
+    repetir ("Sin registro" no clasifica resultados), mínimo no negativo,
+    máximo mayor que el mínimo y sin superposiciones (mínimo inclusivo,
+    máximo exclusivo)."""
+    from decimal import InvalidOperation
+
+    if not isinstance(datos, list) or not datos:
+        return [], ['Enviá al menos un rango de evaluación.']
+
+    errores = []
+    rangos = []
+    vistos = set()
+
+    def a_decimal(valor):
+        """(número, válido): vacío -> (None, True); inválido -> (None, False)."""
+        if valor is None or str(valor).strip() == '':
+            return None, True
+        try:
+            numero = Decimal(str(valor).replace(',', '.'))
+        except (InvalidOperation, ValueError):
+            return None, False
+        if not numero.is_finite():
+            return None, False
+        return numero.quantize(Decimal('0.0001')), True
+
+    for item in datos:
+        if not isinstance(item, dict):
+            errores.append('Cada rango debe indicar estado, mínimo y máximo.')
             continue
 
-        rango = RangoKPI.objects.filter(
-            indicador=indicador,
-            estado_cumplimiento=estado_cumplimiento,
-        ).first()
+        estado = EstadoCumplimiento.objects.filter(pk=item.get('estado_cumplimiento'), estado=True).first()
 
-        if not rango:
+        if estado is None or estado.nombre.strip().lower() == ESTADO_SIN_REGISTRO.lower():
+            errores.append('Uno de los rangos no tiene un estado de cumplimiento válido.')
             continue
 
-        if rango.valor_minimo != minimo or rango.valor_maximo != maximo:
-            rango.valor_minimo = minimo
-            rango.valor_maximo = maximo
-            rango.save(update_fields=['valor_minimo', 'valor_maximo'])
-            actualizados += 1
+        if estado.id in vistos:
+            errores.append(f'El estado "{estado.nombre}" está repetido.')
+            continue
 
-    return actualizados
+        vistos.add(estado.id)
+        minimo, minimo_valido = a_decimal(item.get('valor_minimo'))
+        maximo, maximo_valido = a_decimal(item.get('valor_maximo'))
+
+        if not minimo_valido or not maximo_valido:
+            errores.append(f'Los valores de "{estado.nombre}" deben ser números.')
+            continue
+
+        if minimo is None:
+            errores.append(f'Indicá el mínimo de "{estado.nombre}".')
+            continue
+
+        if minimo < 0:
+            errores.append(f'El mínimo de "{estado.nombre}" no puede ser negativo.')
+        if maximo is not None and maximo <= minimo:
+            errores.append(f'El máximo de "{estado.nombre}" debe ser mayor que su mínimo.')
+
+        rangos.append({'estado_cumplimiento': estado, 'valor_minimo': minimo, 'valor_maximo': maximo})
+
+    ordenados = sorted(rangos, key=lambda r: r['valor_minimo'])
+
+    for anterior, siguiente in zip(ordenados, ordenados[1:]):
+        if anterior['valor_maximo'] is None or anterior['valor_maximo'] > siguiente['valor_minimo']:
+            errores.append(
+                f'Los rangos "{anterior["estado_cumplimiento"].nombre}" y '
+                f'"{siguiente["estado_cumplimiento"].nombre}" se superponen.'
+            )
+
+    return (ordenados if not errores else []), errores
 
 
 def configurar_rangos_provisionales_para_todos():
-    """Revisa todos los KPI existentes y deja configurados sus RangoKPI
-    provisionales:
-    - Si el KPI no tiene ningún rango, crea los tres de la plantilla.
-    - Si ya tiene exactamente los tres rangos esperados (uno por cada
-      estado de la plantilla), los actualiza a los valores provisionales.
-    - Si tiene una configuración distinta (cantidad o estados que no
-      coinciden con lo esperado), NO la toca: la reporta como omitida para
-      revisión manual.
-    Es reproducible: correrlo de nuevo no duplica ni rompe nada.
-    """
-    nombres_plantilla = {nombre for nombre, _, _ in PLANTILLA_RANGOS_PROVISIONALES}
+    """Completa SOLO configuraciones ausentes y seguras: crea los rangos de la
+    plantilla en los KPI en porcentaje que no tienen ningún rango. Nunca
+    modifica ni reemplaza rangos existentes (personalizados, invertidos o de
+    la plantilla anterior) y nunca asigna rangos porcentuales a un KPI en otra
+    unidad: esos casos se informan como omitidos. Reproducible: correrlo de
+    nuevo no duplica ni cambia nada.
 
+    Antes de D3 este proceso también sobrescribía con la plantilla los KPI que
+    tuvieran exactamente sus tres estados, sin mirar la unidad: habría pisado
+    rangos personalizados (como los del KPI #9) o invertidos (#10, en días)."""
     kpi_procesados = 0
     rangos_creados_total = 0
-    rangos_actualizados_total = 0
     detalle = []
 
     with transaction.atomic():
         for indicador in IndicadorKPI.objects.all().order_by('id'):
             kpi_procesados += 1
-            rangos_existentes = list(
-                RangoKPI.objects.filter(indicador=indicador).select_related('estado_cumplimiento')
-            )
 
-            if not rangos_existentes:
-                creados = crear_rangos_provisionales(indicador)
-                rangos_creados_total += creados
+            if RangoKPI.objects.filter(indicador=indicador).exists():
                 detalle.append({
                     'indicador_id': indicador.id,
                     'indicador': indicador.nombre,
-                    'accion': 'creado',
-                    'rangos_creados': creados,
+                    'accion': 'omitido',
+                    'motivo': 'Ya tiene rangos configurados: no se modifican.',
                 })
                 continue
 
-            nombres_existentes = [r.estado_cumplimiento.nombre for r in rangos_existentes]
-
-            coincide_estructura = (
-                len(rangos_existentes) == len(nombres_plantilla)
-                and set(nombres_existentes) == nombres_plantilla
-                and len(nombres_existentes) == len(set(nombres_existentes))
-            )
-
-            if not coincide_estructura:
+            if not es_kpi_porcentual(indicador):
                 detalle.append({
                     'indicador_id': indicador.id,
                     'indicador': indicador.nombre,
                     'accion': 'omitido',
                     'motivo': (
-                        'Tiene una configuración de RangoKPI distinta a la esperada '
-                        f'({len(rangos_existentes)} rango(s): '
-                        f'{", ".join(nombres_existentes) or "ninguno"}). '
-                        'Revisar manualmente antes de modificar.'
+                        f'Se mide en {indicador.unidad_medida}: sus rangos se configuran '
+                        'manualmente según su unidad.'
                     ),
                 })
                 continue
 
-            actualizados = actualizar_rangos_a_plantilla(indicador)
-            rangos_actualizados_total += actualizados
+            creados = crear_rangos_provisionales(indicador)
+            rangos_creados_total += creados
             detalle.append({
                 'indicador_id': indicador.id,
                 'indicador': indicador.nombre,
-                'accion': 'actualizado' if actualizados else 'sin cambios',
-                'rangos_actualizados': actualizados,
+                'accion': 'creado',
+                'rangos_creados': creados,
             })
 
     return {
         'kpi_procesados': kpi_procesados,
         'rangos_creados': rangos_creados_total,
-        'rangos_actualizados': rangos_actualizados_total,
+        'rangos_actualizados': 0,
         'detalle': detalle,
     }
 
@@ -740,14 +836,39 @@ def formatear_periodo(fecha_inicio, intervalo_meses=1):
     )
 
 
+def obtener_primer_periodo_exigible(indicador):
+    """C2: primer periodo que se exige medir. Es el periodo de la cuadrícula
+    del plan anual (anclada al mes de inicio de su vigencia y avanzada según
+    la frecuencia) que contiene la fecha de inicio del seguimiento del KPI.
+    Ese primer periodo puede ser parcial: se mide desde ese día, pero su
+    cierre es el de siempre. Si el seguimiento empieza después del fin de la
+    vigencia, devuelve un mes posterior a la vigencia: no hay periodos."""
+    intervalo = obtener_intervalo_meses(indicador)
+    inicio_vigencia = indicador.fecha_inicio_vigencia
+    fin_vigencia = indicador.fecha_fin_vigencia
+    inicio = indicador.fecha_inicio_seguimiento
+
+    if inicio > fin_vigencia:
+        return sumar_meses(date(fin_vigencia.year, fin_vigencia.month, 1), 1)
+
+    periodo = date(inicio_vigencia.year, inicio_vigencia.month, 1)
+    mes_inicio = date(inicio.year, inicio.month, 1)
+
+    while sumar_meses(periodo, intervalo) <= mes_inicio:
+        periodo = sumar_meses(periodo, intervalo)
+
+    return periodo
+
+
 def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
+    """Siguiente periodo a medir: el posterior a la última medición
+    guardada (real u omisión), pero nunca anterior al primer periodo
+    exigible (C2). Las mediciones retroactivas de periodos anteriores al
+    inicio del seguimiento se conservan; los periodos intermedios no se
+    exigen ni generan omisiones."""
     intervalo = obtener_intervalo_meses(indicador)
 
-    primer_periodo = date(
-        indicador.fecha_inicio_vigencia.year,
-        indicador.fecha_inicio_vigencia.month,
-        1,
-    )
+    primer_periodo = obtener_primer_periodo_exigible(indicador)
 
     precargadas = precargado(indicador, 'mediciones') if excluir_medicion_id is None else None
 
@@ -775,7 +896,7 @@ def obtener_siguiente_periodo_esperado(indicador, excluir_medicion_id=None):
         1,
     )
 
-    return sumar_meses(ultimo_periodo, intervalo)
+    return max(sumar_meses(ultimo_periodo, intervalo), primer_periodo)
 
 
 def obtener_ultimo_dia_mes(fecha):
@@ -958,6 +1079,8 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None, dias_plazo=
         'fecha_limite_ordinaria': None,
         'ampliacion_autorizada': None,
         'ampliacion_pendiente': None,
+        'inicio_seguimiento': None,
+        'periodo_parcial': False,
     }
 
     if indicador.estado != 'autorizado':
@@ -1002,6 +1125,10 @@ def obtener_info_siguiente_periodo(indicador, fecha_referencia=None, dias_plazo=
         'fecha_inicio_periodo': fecha_inicio_periodo,
         'fecha_cierre': fecha_cierre,
         **limites,
+        # C2: el primer periodo puede ser parcial (empieza a medirse el día
+        # de inicio del seguimiento, no el primer día del periodo).
+        'inicio_seguimiento': indicador.fecha_inicio_seguimiento,
+        'periodo_parcial': fecha_inicio_periodo < indicador.fecha_inicio_seguimiento,
     }
 
     if fecha_referencia < fecha_cierre:
@@ -1090,6 +1217,57 @@ def responsables_vigentes(indicador):
         estado=True,
         rol__nombre__iexact=ROL_EJECUTOR_OPERATIVO,
     ).distinct()
+
+
+def motivo_no_admite_evidencias(medicion):
+    """D2: '' si a la medición se le pueden adjuntar evidencias; si no, el
+    motivo (omisión del sistema o plan Cerrado)."""
+    if medicion.cierre_automatico:
+        return 'No se pueden adjuntar evidencias a un periodo cerrado automáticamente sin registro.'
+
+    if medicion.indicador.esta_bloqueado():
+        return 'El Plan anual o el Plan estratégico de este KPI están Cerrados: no admite nuevas evidencias.'
+
+    return ''
+
+
+def adjuntar_evidencias(medicion, archivos, usuario, request=None):
+    """D2: agrega archivos de evidencia a una medición. Cada archivo queda
+    como un registro independiente y se conservan todos los anteriores
+    (nunca se reemplaza ni se borra nada). Una entrada de bitácora por
+    archivo, con el archivo, el usuario y la medición. Las validaciones de
+    tipo, tamaño y cantidad las hace quien llama (serializers)."""
+    import os
+
+    from apps.auditoria.services import registrar_bitacora_obligatoria
+    from .models import EvidenciaMedicion
+
+    creadas = []
+
+    for archivo in archivos:
+        nombre_original = os.path.basename(getattr(archivo, 'name', '') or 'evidencia')[:255]
+        evidencia = EvidenciaMedicion.objects.create(
+            medicion=medicion,
+            archivo=archivo,
+            nombre_original=nombre_original,
+            tamano=getattr(archivo, 'size', 0) or 0,
+            tipo_contenido=(getattr(archivo, 'content_type', '') or '')[:100],
+            subido_por=usuario,
+        )
+        creadas.append(evidencia)
+
+        registrar_bitacora_obligatoria(
+            usuario=usuario,
+            accion='crear',
+            modulo='Evidencias',
+            descripcion=(
+                f'Adjuntó la evidencia "{nombre_original}" ({evidencia.tamano} bytes) a la medición '
+                f'#{medicion.id} del KPI {medicion.indicador.nombre} (periodo {medicion.periodo.descripcion}).'
+            ),
+            request=request,
+        )
+
+    return creadas
 
 
 def notificar_sin_duplicar(usuario, tipo, titulo, mensaje, enlace):

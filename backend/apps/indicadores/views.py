@@ -36,6 +36,7 @@ from .models import (
     PeriodoMedicion,
     Medicion,
     Alerta,
+    EvidenciaMedicion,
 )
 from .serializers import (
     ConfiguracionMedicionesSerializer,
@@ -47,19 +48,24 @@ from .serializers import (
     RangoKPISerializer,
     PeriodoMedicionSerializer,
     MedicionSerializer,
+    AgregarEvidenciasSerializer,
+    EvidenciaMedicionSerializer,
     AlertaSerializer,
     SolicitudAmpliacionPlazoSerializer,
 )
 from .services import (
     MODULO_AMPLIACIONES,
     actualizar_alertas_por_ampliacion,
+    adjuntar_evidencias,
     crear_rangos_provisionales,
     dejar_sin_efecto_solicitudes_pendientes,
     describir_solicitud_ampliacion,
     enlace_solicitud_ampliacion,
     evaluar_solicitud_ampliacion,
+    motivo_no_admite_evidencias,
     notificar_sin_duplicar,
     obtener_info_siguiente_periodo,
+    validar_rangos_para_autorizar,
 )
 
 
@@ -209,6 +215,11 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
 
         indicador = serializer.save()
 
+        # D3: un KPI que pasa a medirse en % y no tiene ningún rango recibe la
+        # plantilla, igual que al crearse. Nunca toca rangos existentes.
+        if not RangoKPI.objects.filter(indicador=indicador).exists():
+            crear_rangos_provisionales(indicador)
+
         registrar_bitacora_obligatoria(
             usuario=self.request.user,
             accion='actualizar',
@@ -249,6 +260,16 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # D3: un KPI autorizado clasifica sus mediciones con sus rangos; deben
+        # existir, ser coherentes y corresponder a su unidad.
+        errores_rangos = validar_rangos_para_autorizar(indicador)
+
+        if errores_rangos:
+            return Response(
+                {'detail': ' '.join(errores_rangos), 'rangos': errores_rangos},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         indicador.estado = 'autorizado'
         indicador.fecha_autorizacion = timezone.now()
         indicador.autorizado_por = request.user
@@ -278,6 +299,82 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             )
 
         serializer = self.get_serializer(indicador)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='configurar-rangos')
+    def configurar_rangos(self, request, pk=None):
+        """D3: guarda en una sola operación los rangos de evaluación de un KPI
+        en Borrador (p. ej. uno en días, que no recibe la plantilla
+        porcentual). Reemplaza el conjunto completo: actualiza el rango de cada
+        estado enviado, crea los que falten y desactiva los que no se envían.
+        Valida el conjunto entero antes de guardar, así que nunca deja rangos
+        a medias. Los KPI autorizados conservan sus rangos."""
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+        from .services import validar_conjunto_rangos
+
+        indicador = self.get_object()
+
+        if indicador.esta_bloqueado():
+            return Response(
+                {'detail': 'El Plan anual o el Plan estratégico de este KPI están Cerrados.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if indicador.estado != 'borrador':
+            return Response(
+                {'detail': 'Solo se pueden configurar los rangos de un KPI en Borrador.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        rangos, errores = validar_conjunto_rangos(request.data.get('rangos'))
+
+        if errores:
+            return Response({'detail': ' '.join(errores), 'rangos': errores}, status=status.HTTP_400_BAD_REQUEST)
+
+        existentes = {rango.estado_cumplimiento_id: rango for rango in RangoKPI.objects.select_for_update().filter(indicador=indicador)}
+        enviados = set()
+
+        for datos in rangos:
+            estado = datos['estado_cumplimiento']
+            enviados.add(estado.id)
+            rango = existentes.get(estado.id)
+
+            if rango is None:
+                RangoKPI.objects.create(
+                    indicador=indicador, estado_cumplimiento=estado,
+                    valor_minimo=datos['valor_minimo'], valor_maximo=datos['valor_maximo'], estado=True,
+                )
+            else:
+                rango.valor_minimo = datos['valor_minimo']
+                rango.valor_maximo = datos['valor_maximo']
+                rango.estado = True
+                rango.save(update_fields=['valor_minimo', 'valor_maximo', 'estado'])
+
+        for estado_id, rango in existentes.items():
+            if estado_id not in enviados and rango.estado:
+                rango.estado = False
+                rango.save(update_fields=['estado'])
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='actualizar',
+            modulo='Rangos KPI',
+            descripcion=(
+                f'Configuró los rangos de evaluación del KPI {indicador.nombre} ({indicador.unidad_medida}): '
+                + '; '.join(
+                    f"{d['estado_cumplimiento'].nombre} desde {d['valor_minimo']}"
+                    + (f" hasta menos de {d['valor_maximo']}" if d['valor_maximo'] is not None else ' sin límite')
+                    for d in rangos
+                )
+                + '.'
+            ),
+            request=request,
+        )
+
+        serializer = RangoKPISerializer(
+            RangoKPI.objects.filter(indicador=indicador).select_related('estado_cumplimiento', 'indicador'),
+            many=True,
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -518,12 +615,17 @@ class MedicionViewSet(viewsets.ModelViewSet):
 
         queryset = super().get_queryset().annotate(fecha_extraordinaria_ampliacion=Subquery(ampliacion))
 
+        # D2: las evidencias (con quién las subió) en una sola consulta.
+        from django.db.models import Prefetch
+
+        queryset = queryset.prefetch_related(
+            Prefetch('evidencias', queryset=EvidenciaMedicion.objects.select_related('subido_por')),
+        )
+
         if self.action in ('list', 'retrieve'):
             # Etapa 6 (M8): el promedio y el estado acumulados "hasta esta
             # medición" se calculan sobre las mediciones y los rangos del KPI
             # ya cargados, en lugar de dos consultas por cada medición.
-            from django.db.models import Prefetch
-
             queryset = queryset.prefetch_related(
                 Prefetch('indicador__mediciones', queryset=Medicion.objects.select_related('periodo')),
                 Prefetch('indicador__rangos', queryset=RangoKPI.objects.select_related('estado_cumplimiento')),
@@ -593,39 +695,101 @@ class MedicionViewSet(viewsets.ModelViewSet):
             },
             'puede_solicitar_ampliacion': not motivo_ampliacion,
             'motivo_ampliacion': motivo_ampliacion,
+            'inicio_seguimiento': info['inicio_seguimiento'],
+            'periodo_parcial': info['periodo_parcial'],
             'motivo': info['motivo'],
         })
 
-    @action(detail=True, methods=['get'], url_path='evidencia')
-    def evidencia(self, request, pk=None):
-
+    # D2: evidencias múltiples. Consultar y descargar: cualquier autenticado
+    # (GET, mismos permisos y queryset que el detalle). Agregar: solo
+    # Ejecutor operativo (PermisoMedicion en POST). Nada se reemplaza ni se
+    # elimina: no hay PUT/PATCH/DELETE sobre una evidencia.
+    @action(detail=True, methods=['get', 'post'], url_path='evidencias')
+    def evidencias(self, request, pk=None):
         medicion = self.get_object()
 
-        if not medicion.evidencia:
-            raise Http404('Esta medición no tiene evidencia adjunta.')
+        if request.method == 'GET':
+            return Response(EvidenciaMedicionSerializer(medicion.evidencias.all(), many=True).data)
 
-        return FileResponse(
-            medicion.evidencia.open('rb'),
-            as_attachment=False,
-            filename=os.path.basename(medicion.evidencia.name),
+        motivo = motivo_no_admite_evidencias(medicion)
+
+        if motivo:
+            return Response({'detail': motivo}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = AgregarEvidenciasSerializer(data={'archivos': request.FILES.getlist('archivos')})
+        serializer.is_valid(raise_exception=True)
+
+        creadas = adjuntar_evidencias(
+            medicion,
+            serializer.validated_data['archivos'],
+            request.user,
+            request=request,
         )
+
+        return Response(
+            EvidenciaMedicionSerializer(creadas, many=True).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'evidencias/(?P<evidencia_id>[0-9]+)/(?P<modo>ver|descargar)',
+    )
+    def evidencia_archivo(self, request, pk=None, evidencia_id=None, modo=None):
+        medicion = self.get_object()
+        evidencia = medicion.evidencias.filter(id=evidencia_id).first()
+
+        if evidencia is None:
+            raise Http404('La evidencia no existe en esta medición.')
+
+        return self._responder_evidencia(evidencia, como_descarga=(modo == 'descargar'))
+
+    # Rutas anteriores (un archivo por medición): se mantienen por
+    # compatibilidad y sirven la evidencia más reciente.
+    @action(detail=True, methods=['get'], url_path='evidencia')
+    def evidencia(self, request, pk=None):
+        return self._responder_evidencia(self._ultima_evidencia(), como_descarga=False)
 
     @action(detail=True, methods=['get'], url_path='evidencia/descargar')
     def evidencia_descargar(self, request, pk=None):
-        # Mismo archivo protegido que `evidencia`, pero forzando la
-        # descarga (Content-Disposition: attachment) en vez de abrirlo
-        # inline. Mismos permisos: get_object() aplica el mismo queryset y
-        # permission_classes del ViewSet.
-        medicion = self.get_object()
+        return self._responder_evidencia(self._ultima_evidencia(), como_descarga=True)
 
-        if not medicion.evidencia:
+    def _ultima_evidencia(self):
+        medicion = self.get_object()
+        evidencia = medicion.evidencias.order_by('-fecha_subida', '-id').first()
+
+        if evidencia is None and medicion.evidencia:
+            # Campo heredado aún no migrado: se sirve tal cual (instancia en
+            # memoria, nunca se guarda).
+            evidencia = EvidenciaMedicion(
+                medicion=medicion,
+                archivo=medicion.evidencia.name,
+                nombre_original=os.path.basename(medicion.evidencia.name),
+            )
+
+        if evidencia is None:
             raise Http404('Esta medición no tiene evidencia adjunta.')
 
-        return FileResponse(
-            medicion.evidencia.open('rb'),
-            as_attachment=True,
-            filename=os.path.basename(medicion.evidencia.name),
+        return evidencia
+
+    def _responder_evidencia(self, evidencia, como_descarga):
+        try:
+            archivo = evidencia.archivo.open('rb')
+        except (FileNotFoundError, OSError):
+            raise Http404('El archivo de evidencia no está disponible.')
+
+        respuesta = FileResponse(
+            archivo,
+            as_attachment=como_descarga,
+            filename=evidencia.nombre_original or os.path.basename(evidencia.archivo.name),
         )
+
+        if evidencia.tipo_contenido:
+            respuesta['Content-Type'] = evidencia.tipo_contenido
+
+        respuesta['X-Content-Type-Options'] = 'nosniff'
+        return respuesta
 
 
 class AlertaViewSet(viewsets.ReadOnlyModelViewSet):

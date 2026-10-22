@@ -135,70 +135,112 @@ class Etapa6Base(APITestCase):
 
 
 class OportunidadRegistroTests(Etapa6Base):
-    def test_a_tiempo_el_dia_del_cierre_y_el_ultimo_dia_del_plazo_ordinario(self):
-        dia_cierre = self.medicion(self.kpi, 1, registro=momento(2027, 1, 31))
-        self.assertEqual(self.oportunidad(dia_cierre), 'A tiempo')
+    """Criterio de Hernán (06/10/2026): días entre el cierre del periodo
+    (31/01/2027) y el registro. Oportuno día 0, Demorado días 1 y 2, Tardío
+    del día 3 al vencimiento, Fuera de plazo después del plazo efectivo y
+    Sin registro para los periodos cerrados sin medición."""
 
-        Medicion.objects.filter(pk=dia_cierre.pk).update(fecha_registro=momento(2027, 2, 5, 23, 30))
-        self.assertEqual(self.oportunidad(dia_cierre), 'A tiempo')
+    def registrada_el(self, dia_febrero=None, kpi=None, mes=1, **momento_extra):
+        registro = momento(2027, 1, 31, **momento_extra) if dia_febrero is None else momento(2027, 2, dia_febrero, **momento_extra)
+        return self.medicion(kpi or self.kpi, mes, registro=registro)
 
-    def test_dentro_del_plazo_ordinario_ya_no_es_retraso(self):
-        # Antes de la Etapa 6 esto era "Con retraso" por ser posterior al cierre.
-        medicion = self.medicion(self.kpi, 1, registro=momento(2027, 2, 3))
+    def datos(self, medicion):
+        return self.get(f'/api/mediciones/{medicion.id}/').data
 
-        datos = self.get(f'/api/mediciones/{medicion.id}/').data
-        self.assertEqual(datos['oportunidad_registro'], 'A tiempo')
-        self.assertFalse(datos['registrada_con_ampliacion'])
+    def assertOportunidad(self, medicion, categoria, con_ampliacion=False):
+        datos = self.datos(medicion)
+        self.assertEqual(datos['oportunidad_registro'], categoria)
+        self.assertEqual(datos['registrada_con_ampliacion'], con_ampliacion)
 
-    def test_con_ampliacion_autorizada(self):
+    def test_dia_0_oportuno(self):
+        self.assertOportunidad(self.registrada_el(), 'Oportuno')
+
+    def test_dia_0_al_final_del_dia_en_hora_de_guatemala(self):
+        # 31/01 a las 23:30 en Guatemala (05:30 del 01/02 en UTC) sigue siendo el día 0.
+        self.assertOportunidad(self.registrada_el(hora=23, minuto=30), 'Oportuno')
+
+    def test_dias_1_y_2_demorado(self):
+        for dia in (1, 2):
+            medicion = self.registrada_el(dia)
+            self.assertOportunidad(medicion, 'Demorado')
+            medicion.delete()
+
+    def test_dias_3_4_y_5_tardio(self):
+        for dia in (3, 4, 5):
+            medicion = self.registrada_el(dia)
+            self.assertOportunidad(medicion, 'Tardío')
+            medicion.delete()
+
+    def test_plazo_ordinario_de_diez_dias_mantiene_los_umbrales(self):
+        from .models import ConfiguracionMediciones
+
+        configuracion = ConfiguracionMediciones.obtener()
+        configuracion.dias_plazo_registro = 10
+        configuracion.save()
+
+        for dia, categoria in ((1, 'Demorado'), (3, 'Tardío'), (9, 'Tardío'), (10, 'Tardío'), (11, 'Fuera de plazo')):
+            medicion = self.registrada_el(dia)
+            self.assertOportunidad(medicion, categoria)
+            medicion.delete()
+
+    def test_registro_dentro_de_una_ampliacion_autorizada_es_tardio_e_identificado(self):
         self.ampliacion(self.kpi, 1, date(2027, 2, 12))
 
         for dia in (6, 12):
-            medicion = self.medicion(self.kpi, 1, registro=momento(2027, 2, dia))
-            datos = self.get(f'/api/mediciones/{medicion.id}/').data
-            self.assertEqual(datos['oportunidad_registro'], 'Con ampliación', dia)
-            self.assertTrue(datos['registrada_con_ampliacion'])
+            medicion = self.registrada_el(dia)
+            self.assertOportunidad(medicion, 'Tardío', con_ampliacion=True)
             medicion.delete()
 
-    def test_despues_del_plazo_efectivo_es_retraso(self):
-        sin_ampliacion = self.medicion(self.kpi, 1, registro=momento(2027, 2, 6))
-        self.assertEqual(self.oportunidad(sin_ampliacion), 'Con retraso')
+        # Dentro del plazo ordinario no cuenta como ampliación aunque exista una.
+        dentro = self.registrada_el(4)
+        self.assertOportunidad(dentro, 'Tardío', con_ampliacion=False)
+
+    def test_despues_del_plazo_efectivo_es_fuera_de_plazo(self):
+        self.assertOportunidad(self.registrada_el(6), 'Fuera de plazo')
 
         otro = self.crear_kpi('KPI con ampliación')
         self.ampliacion(otro, 1, date(2027, 2, 12))
-        tras_ampliacion = self.medicion(otro, 1, registro=momento(2027, 2, 13))
-        self.assertEqual(self.oportunidad(tras_ampliacion), 'Con retraso')
+        self.assertOportunidad(self.registrada_el(13, kpi=otro), 'Fuera de plazo')
 
     def test_ampliacion_no_autorizada_no_cuenta(self):
         SolicitudAmpliacionPlazo.objects.create(
             indicador=self.kpi, periodo=obtener_o_crear_periodo(self.kpi, date(2027, 1, 1)), solicitante=self.ana,
             motivo='x', dias_solicitados=10, fecha_limite_ordinaria=date(2027, 2, 5), estado='rechazada',
         )
-        medicion = self.medicion(self.kpi, 1, registro=momento(2027, 2, 8))
 
-        self.assertEqual(self.oportunidad(medicion), 'Con retraso')
+        self.assertOportunidad(self.registrada_el(8), 'Fuera de plazo')
 
-    def test_periodo_sin_registro(self):
+    def test_periodo_cerrado_sin_registro(self):
         with mock.patch('apps.indicadores.services.hoy', return_value=date(2027, 2, 6)):
             cerrar_mediciones_vencidas()
 
         omision = Medicion.objects.get(indicador=self.kpi, cierre_automatico=True)
-        datos = self.get(f'/api/mediciones/{omision.id}/').data
-        self.assertEqual(datos['oportunidad_registro'], 'Sin registro')
-        self.assertFalse(datos['registrada_con_ampliacion'])
+        self.assertOportunidad(omision, 'Sin registro')
+
+    def test_datos_historicos_retroactivos_son_fuera_de_plazo(self):
+        """Como las 22 mediciones reales: KPI creado en septiembre con sus
+        periodos de enero a agosto registrados ese mismo día."""
+        retroactivas = [self.medicion(self.kpi, mes, registro=momento(2027, 9, 27)) for mes in range(1, 9)]
+        registro_original = [m.fecha_registro for m in retroactivas]
+
+        listado = {m['id']: m for m in self.get('/api/mediciones/').data}
+
+        self.assertEqual({listado[m.id]['oportunidad_registro'] for m in retroactivas}, {'Fuera de plazo'})
+        # La consulta no modifica la fecha original de registro.
+        for medicion, original in zip(retroactivas, registro_original):
+            medicion.refresh_from_db()
+            self.assertEqual(medicion.fecha_registro, original)
 
     def test_una_sola_categoria_por_medicion_en_el_listado(self):
-        self.ampliacion(self.kpi, 2, date(2027, 3, 12))
-        self.medicion(self.kpi, 1, registro=momento(2027, 2, 2))
-        Medicion.objects.filter(indicador=self.kpi).delete()
-        self.medicion(self.kpi, 1, registro=momento(2027, 2, 2))
-        self.medicion(self.kpi, 3, registro=momento(2027, 4, 20))
+        self.ampliacion(self.kpi, 3, date(2027, 4, 12))
+        self.registrada_el()
+        self.medicion(self.kpi, 2, registro=momento(2027, 3, 1))
+        self.medicion(self.kpi, 3, registro=momento(2027, 4, 10))
+        self.medicion(self.kpi, 4, registro=momento(2027, 6, 1))
 
-        listado = self.get('/api/mediciones/').data
-        categorias = {m['oportunidad_registro'] for m in listado}
+        categorias = [m['oportunidad_registro'] for m in sorted(self.get('/api/mediciones/').data, key=lambda m: m['fecha_medicion'])]
 
-        self.assertEqual(len(listado), 2)
-        self.assertTrue(categorias <= {'A tiempo', 'Con retraso', 'Con ampliación', 'Sin registro'})
+        self.assertEqual(categorias, ['Oportuno', 'Demorado', 'Tardío', 'Fuera de plazo'])
 
     def test_la_categoria_no_cambia_resultados_ni_promedios(self):
         self.medicion(self.kpi, 1, valor='80', registro=momento(2027, 2, 2))
