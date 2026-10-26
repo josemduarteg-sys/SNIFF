@@ -914,20 +914,17 @@ def calcular_fecha_cierre_periodo(fecha_inicio_periodo, intervalo_meses):
     return obtener_ultimo_dia_mes(mes_final)
 
 
-def calcular_fecha_limite_registro(fecha_cierre, dias_plazo=None):
-    """Última fecha en la que todavía se puede registrar manualmente la
-    medición de un periodo (Bloque 4, regla 6/7): el mismo día del cierre
-    del periodo y durante los N días calendario siguientes, donde N es el
-    plazo configurado por la administración (ver
-    ConfiguracionMediciones.obtener() — nunca un número fijo en código).
-
-    Etapa 6 (M8): `dias_plazo` permite a un listado leer la configuración
-    una sola vez y reutilizarla para todos sus KPI."""
+def calcular_fecha_limite_registro(fecha_cierre, dias_plazo=None, fecha_inicio_periodo=None):
+    """Límite inclusivo por inicio del período: calendario antes del corte,
+    cinco hábiles desde 01/11/2026. Sin inicio explícito conserva calendario.
+    dias_plazo permite reutilizar la configuración sin consultas repetidas.
+    """
     from .models import ConfiguracionMediciones
 
     dias = dias_plazo if dias_plazo is not None else ConfiguracionMediciones.obtener().dias_plazo_registro
 
-    return fecha_cierre + timedelta(days=dias)
+    from .plazos import limite_ordinario
+    return limite_ordinario(fecha_cierre, fecha_inicio_periodo, dias)
 
 
 def obtener_ampliaciones_del_periodo(indicador, fecha_inicio_periodo):
@@ -976,7 +973,7 @@ def obtener_fecha_limite_efectiva(indicador, fecha_inicio_periodo, fecha_cierre,
     ordinario actual y la fecha extraordinaria guardada al autorizar: un
     cambio posterior del plazo general nunca acorta una ampliación ya
     concedida. Solo afecta a ese KPI y ese periodo."""
-    fecha_limite_ordinaria = calcular_fecha_limite_registro(fecha_cierre, dias_plazo)
+    fecha_limite_ordinaria = calcular_fecha_limite_registro(fecha_cierre, dias_plazo, fecha_inicio_periodo)
     autorizada, pendiente = obtener_ampliaciones_del_periodo(indicador, fecha_inicio_periodo)
     fecha_limite = fecha_limite_ordinaria
 
@@ -1389,7 +1386,7 @@ def _dejar_sin_efecto(solicitudes, motivo, usuario, request):
 
 def procesar_solicitudes_ampliacion(fecha_referencia=None):
     """Etapa 5: paso previo del cierre automático (tarea del Sistema).
-    - Pendiente después de su fecha máxima (límite ordinario + 10 días)
+    - Pendiente después de su fecha máxima (según la regla de su período)
       -> Vencida (regla 9).
     - Pendiente de un KPI anulado, de un plan Cerrado o de un periodo que
       ya tiene medición -> Sin efecto.

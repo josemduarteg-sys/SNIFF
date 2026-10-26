@@ -1,3 +1,4 @@
+from .plazos import limite_ampliado, maximo_adicional, minimo_autorizable, usa_dias_habiles
 import os
 
 from django.db import transaction
@@ -745,6 +746,7 @@ class MedicionViewSet(viewsets.ModelViewSet):
             'tipo_periodo': info['tipo_periodo'],
             'fecha_inicio_periodo': info['fecha_inicio_periodo'],
             'fecha_cierre': info['fecha_cierre'],
+            'usa_dias_habiles': usa_dias_habiles(info['fecha_inicio_periodo']),
             'fecha_limite_registro': info['fecha_limite_registro'],
             'fecha_limite_ordinaria': info['fecha_limite_ordinaria'],
             'fecha_limite_extraordinaria': (
@@ -1079,8 +1081,6 @@ class SolicitudAmpliacionPlazoViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def autorizar(self, request, pk=None):
-        from datetime import timedelta
-
         from django.db import IntegrityError
         from apps.auditoria.services import registrar_bitacora_obligatoria
         from .services import hoy
@@ -1119,12 +1119,17 @@ class SolicitudAmpliacionPlazoViewSet(viewsets.ModelViewSet):
                 f'No se pueden autorizar más días de los solicitados ({solicitud.dias_solicitados}).'
             )
 
-        fecha_extraordinaria = solicitud.fecha_limite_ordinaria + timedelta(days=dias)
+        inicio = solicitud.periodo.fecha_inicio
+        if dias > maximo_adicional(inicio):
+            return self._error('Los días exceden el máximo adicional de este período.')
+        fecha_extraordinaria = limite_ampliado(solicitud.fecha_limite_ordinaria, dias, inicio)
+        if fecha_extraordinaria > solicitud.fecha_limite_maxima:
+            return self._error('La ampliación excede el máximo total del período.')
         fecha_hoy = hoy()
 
         if fecha_extraordinaria < fecha_hoy:
             # Regla 8: nunca se autoriza un plazo que ya venció.
-            minimo = (fecha_hoy - solicitud.fecha_limite_ordinaria).days
+            minimo = minimo_autorizable(solicitud.fecha_limite_ordinaria, fecha_hoy, inicio)
             return self._error(
                 f'Con {dias} día(s) el plazo terminaría el {fecha_extraordinaria.strftime("%d/%m/%Y")}, '
                 f'que ya pasó. Autorizá al menos {minimo} día(s).'

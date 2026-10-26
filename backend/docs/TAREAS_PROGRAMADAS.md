@@ -1,11 +1,36 @@
+# Transición de plazos desde períodos iniciados el 01/11/2026
+
+**La programación automática sigue sin activarse.** Este cambio no crea tareas.
+
+La regla se selecciona por la fecha de inicio del período, nunca por la fecha
+de consulta, autorización o ejecución. Un trimestre iniciado antes del corte
+conserva la regla anterior aunque cierre después.
+
+- Períodos anteriores: configuración ordinaria calendario existente; ampliación
+  de hasta 10 días calendario adicionales y máximo de resolución ordinario + 10.
+- Períodos desde el corte: 5 días hábiles después del cierre; ampliación de
+  hasta 5 hábiles adicionales, máximo 10 hábiles TOTALES desde el cierre.
+- Hábiles: lunes a viernes, sin excluir feriados provisionalmente. El cierre
+  es día cero y el último día permitido es inclusivo. El cierre automático
+  puede proceder al día calendario siguiente, sin esperar otro día hábil.
+- Una pendiente no habilita registro fuera del plazo ordinario, pero retiene
+  el cierre hasta su máximo inclusivo. Se conservan roles e idempotencia.
+- No se modifican mediciones, solicitudes ni fechas almacenadas. La configuración
+  actual de 5 se conserva; la API rechaza cambios para proteger históricos.
+- Oportunidad conserva nombres y umbrales de días CALENDARIO: 0 Oportuno,
+  1–2 Demorado, 3+ Tardío, sujeto al vencimiento efectivo. Este criterio es
+  distinto de los vencimientos hábiles y queda pendiente de validación funcional.
+  Los períodos anteriores conservan el cálculo anterior de oportunidad.
+- No se requieren migraciones para esta transición.
+
+Lo que sigue describe la operación existente; donde menciona ordinario + 10,
+esa fórmula aplica únicamente a períodos anteriores al corte.
+
 # Tarea diaria de mediciones (cierre automático y alertas)
 
-> **Estado: preparada, NO activada.** No registres la tarea hasta resolver el
-> hallazgo C2 (primer periodo de un KPI incorporado a mitad de año) de la
-> auditoría del 20/10/2026. C3 ya está resuelto: las omisiones se guardan como
-> "Sin registro" (sin resultado numérico), no como 0.00. Aun así, ejecutarla hoy
-> crearía omisiones para periodos anteriores a la incorporación de los KPI, que
-> no pueden borrarse desde la aplicación.
+> **Estado: preparada, NO activada.** Esta implementación conserva C2
+> (inicio del seguimiento y primer período parcial) y no activa la tarea.
+> Su activación requiere una revisión operativa independiente.
 
 ## Qué hace
 
@@ -83,7 +108,7 @@ En la pestaña **Configuración** de la tarea:
 15 0 * * * cd /ruta/SNIFF/backend && TZ=America/Guatemala venv/bin/python manage.py ejecutar_tareas_mediciones >> logs/tareas_mediciones_$(date +\%Y-\%m).log 2>&1
 ```
 
-## Pasos para activarla (cuando se resuelvan C2 y C3)
+## Pasos para activarla (pendiente de autorización operativa)
 
 1. Respaldo de PostgreSQL con `pg_dump` y de `backend/media/`.
 2. `ejecutar_tareas_mediciones --simular` y revisión de cada cierre que se haría.
@@ -96,3 +121,22 @@ En la pestaña **Configuración** de la tarea:
 - El historial del Programador de tareas muestra el código de salida de cada día.
 - El log mensual contiene la fecha, cada cierre, cada alerta creada y el resumen.
 - Pendiente (hallazgo M7): registrar cada ejecución también en la bitácora.
+
+
+## Verificación aislada de la transición
+
+Desde backend, usar exclusivamente --settings=config.settings_pruebas_aisladas
+para las pruebas de este cambio. Esa configuración no carga .env, utiliza
+SQLite en memoria y no se conecta a PostgreSQL. Las migraciones de preparación
+se ejecutan únicamente en esa base efímera.
+
+Las suites anteriores de ampliaciones, oportunidad/Dashboard y cierres conservan
+sus escenarios calendario desplazando el corte solo dentro de esas pruebas.
+tests_plazos_habiles verifica el corte real sin ese parche, los dos regímenes,
+registro, autorización, rechazo, oportunidad y C2 con cierre en viernes.
+
+Prueba específica: venv/Scripts/python.exe -B manage.py test apps.indicadores.tests_plazos_habiles --settings=config.settings_pruebas_aisladas --noinput
+
+Frontend: npm test y npm run build, desde frontend.
+SQLite no reproduce los bloqueos concurrentes específicos de PostgreSQL; este
+cambio conserva la implementación existente de esos bloqueos.

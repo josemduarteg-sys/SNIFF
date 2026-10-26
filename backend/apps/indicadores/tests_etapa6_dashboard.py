@@ -55,7 +55,16 @@ def momento(anio, mes, dia, hora=10, minuto=0):
 
 
 class Etapa6Base(APITestCase):
+    # Esta suite conserva los escenarios calendario previos a la transición.
+    # Sus fechas sintéticas son 2027; el corte real y la rama hábil se
+    # verifican sin parchear en tests_plazos_habiles.
+    calendario_anterior = True
+
     def setUp(self):
+        if self.calendario_anterior:
+            regla = mock.patch('apps.indicadores.plazos.INICIO_REGLA_HABIL', date(2028, 1, 1))
+            regla.start()
+            self.addCleanup(regla.stop)
         self.admin = crear_usuario('admin_e6', 'Administrador de planificación')
         self.ana = crear_usuario('ana_e6', 'Ejecutor operativo')
         self.consulta = crear_usuario('consulta_e6', 'Usuario de consulta')

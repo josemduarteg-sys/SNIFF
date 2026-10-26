@@ -61,7 +61,7 @@ const solicitudesFiltradas = computed(() => {
 const nuevoPlazoAutorizado = computed(() => {
   const solicitud = resolucion.solicitud
   if (!solicitud || !diasValidos(resolucion.dias, 1, solicitud.dias_solicitados)) return null
-  return sumarDias(solicitud.fecha_limite_ordinaria, resolucion.dias)
+  return sumarDias(solicitud.fecha_limite_ordinaria, resolucion.dias, solicitud.usa_dias_habiles)
 })
 
 const puedeConfirmar = computed(() => {

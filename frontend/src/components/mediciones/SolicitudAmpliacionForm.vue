@@ -44,10 +44,13 @@ const opcionesKpi = computed(() => {
   }))
 })
 
-const nuevoPlazo = computed(() => {
-  if (!estado.periodo?.fecha_limite_ordinaria || !diasValidos(form.dias_solicitados)) return null
+const maximoAdicional = computed(() => estado.periodo?.usa_dias_habiles ? 5 : DIAS_MAXIMOS_AMPLIACION)
+const unidadDias = computed(() => estado.periodo?.usa_dias_habiles ? 'hábiles' : 'calendario')
 
-  return sumarDias(estado.periodo.fecha_limite_ordinaria, form.dias_solicitados)
+const nuevoPlazo = computed(() => {
+  if (!estado.periodo?.fecha_limite_ordinaria || !diasValidos(form.dias_solicitados, 1, maximoAdicional.value)) return null
+
+  return sumarDias(estado.periodo.fecha_limite_ordinaria, form.dias_solicitados, estado.periodo.usa_dias_habiles)
 })
 
 const puedeGuardar = computed(() => {
@@ -55,7 +58,7 @@ const puedeGuardar = computed(() => {
     !estado.guardando &&
     !estado.cargandoPeriodo &&
     estado.periodo?.puede_solicitar_ampliacion === true &&
-    diasValidos(form.dias_solicitados) &&
+    diasValidos(form.dias_solicitados, 1, maximoAdicional.value) &&
     form.motivo.trim() !== ''
   )
 })
@@ -159,10 +162,10 @@ async function guardar() {
             v-model.number="form.dias_solicitados"
             type="number"
             min="1"
-            :max="DIAS_MAXIMOS_AMPLIACION"
+            :max="maximoAdicional"
             step="1"
           />
-          <small>De 1 a {{ DIAS_MAXIMOS_AMPLIACION }} días calendario, contados desde la fecha límite ordinaria.</small>
+          <small>De 1 a {{ maximoAdicional }} días {{ unidadDias }}, contados desde la fecha límite ordinaria.</small>
         </div>
 
         <div class="form-group full">
@@ -178,7 +181,7 @@ async function guardar() {
         <p class="field-hint full">
           Si el plazo ordinario vence antes de que se resuelva la solicitud, no vas a poder registrar
           hasta que se autorice. El cierre automático espera como máximo hasta el
-          {{ formatearFechaIso(sumarDias(estado.periodo.fecha_limite_ordinaria, DIAS_MAXIMOS_AMPLIACION)) }}.
+          {{ formatearFechaIso(sumarDias(estado.periodo.fecha_limite_ordinaria, maximoAdicional, estado.periodo.usa_dias_habiles)) }}.
         </p>
       </template>
     </template>

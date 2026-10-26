@@ -61,7 +61,16 @@ def crear_usuario(username, rol_nombre, **extra):
 
 
 class AmpliacionesBase(APITestCase):
+    # Esta suite conserva los escenarios calendario previos a la transición.
+    # Sus fechas sintéticas son 2027; el corte real y la rama hábil se
+    # verifican sin parchear en tests_plazos_habiles.
+    calendario_anterior = True
+
     def setUp(self):
+        if self.calendario_anterior:
+            regla = mock.patch('apps.indicadores.plazos.INICIO_REGLA_HABIL', date(2028, 1, 1))
+            regla.start()
+            self.addCleanup(regla.stop)
         self.admin = crear_usuario('admin_ampl', 'Administrador de planificación')
         self.admin2 = crear_usuario('admin2_ampl', 'Administrador de planificación')
         self.admin_sistema = crear_usuario('sistema_ampl', 'Administrador del sistema')

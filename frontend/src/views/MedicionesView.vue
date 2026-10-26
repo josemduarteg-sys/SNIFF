@@ -561,7 +561,7 @@ onMounted(async () => {
     <div class="plazo-registro">
       <span>
         Plazo para registrar una medición después del cierre de su periodo:
-        <strong>{{ configuracionMediciones?.dias_plazo_registro ?? '—' }} día(s) calendario.</strong>
+        <strong>{{ configuracionMediciones?.dias_plazo_registro ?? '—' }} día(s) calendario para períodos anteriores al 01/11/2026; desde esa fecha, 5 días hábiles.</strong>
       </span>
 
       <template v-if="esAdmin">
@@ -854,7 +854,7 @@ onMounted(async () => {
     <ModalBase
       :abierto="mostrarModalAmpliacion"
       titulo="Solicitar días adicionales"
-      subtitulo="Pedí hasta 10 días calendario más para registrar la medición del periodo pendiente de un KPI. La solicitud la resuelve el Administrador de planificación."
+      subtitulo="Para períodos iniciados desde el 01/11/2026, pedí hasta 5 días hábiles adicionales, con un máximo total de 10 desde el cierre. Los anteriores conservan sus reglas calendario. Resuelve el Administrador de planificación."
       @cerrar="mostrarModalAmpliacion = false"
     >
       <SolicitudAmpliacionForm

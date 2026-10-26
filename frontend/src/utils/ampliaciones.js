@@ -29,11 +29,20 @@ export function contarPorEstado(solicitudes) {
 
 // Suma días calendario a una fecha ISO (AAAA-MM-DD) sin pasar por la zona
 // horaria del navegador.
-export function sumarDias(fechaIso, dias) {
+export function sumarDias(fechaIso, dias, habiles = false) {
   if (!fechaIso) return null
 
   const [anio, mes, dia] = fechaIso.slice(0, 10).split('-').map(Number)
-  const fecha = new Date(Date.UTC(anio, mes - 1, dia + Number(dias || 0)))
+  const fecha = new Date(Date.UTC(anio, mes - 1, dia))
+  let restantes = Number(dias || 0)
+  if (habiles) {
+    while (restantes > 0) {
+      fecha.setUTCDate(fecha.getUTCDate() + 1)
+      if (fecha.getUTCDay() !== 0 && fecha.getUTCDay() !== 6) restantes -= 1
+    }
+  } else {
+    fecha.setUTCDate(fecha.getUTCDate() + restantes)
+  }
 
   return fecha.toISOString().slice(0, 10)
 }

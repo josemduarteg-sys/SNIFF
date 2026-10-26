@@ -193,12 +193,12 @@ class ConfiguracionPlazoRegistroTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_administrador_de_planificacion_puede_editar(self):
+    def test_administrador_puede_confirmar_el_plazo_sin_cambiarlo(self):
         self.client.force_authenticate(user=self.admin_planificacion)
-        response = self.client.patch('/api/configuracion-mediciones/', {'dias_plazo_registro': 10})
+        response = self.client.patch('/api/configuracion-mediciones/', {'dias_plazo_registro': 5})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['dias_plazo_registro'], 10)
+        self.assertEqual(response.data['dias_plazo_registro'], 5)
 
     def test_rechaza_plazo_menor_a_uno(self):
         self.client.force_authenticate(user=self.admin_planificacion)
@@ -208,12 +208,13 @@ class ConfiguracionPlazoRegistroTests(APITestCase):
 
     # El nuevo plazo editado se refleja de inmediato en el cálculo real
     # de fecha límite de registro (no solo en la fila de configuración).
-    def test_plazo_editado_se_refleja_en_calcular_fecha_limite_registro(self):
+    def test_cambio_de_plazo_rechazado_preserva_calculo_historico(self):
         self.client.force_authenticate(user=self.admin_planificacion)
-        self.client.patch('/api/configuracion-mediciones/', {'dias_plazo_registro': 10})
+        response = self.client.patch('/api/configuracion-mediciones/', {'dias_plazo_registro': 10})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
         fecha_limite = calcular_fecha_limite_registro(date(2027, 1, 31))
-        self.assertEqual(fecha_limite, date(2027, 2, 10))
+        self.assertEqual(fecha_limite, date(2027, 2, 5))
 
     def test_singleton_no_duplica_filas(self):
         ConfiguracionMediciones.obtener()

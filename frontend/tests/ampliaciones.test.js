@@ -87,3 +87,10 @@ test('solo Ejecutor y Administrador de planificación ven las solicitudes', () =
   for (const usuario of [ejecutor, planificacion]) assert.equal(puedeVerSolicitudesAmpliacion(usuario), true)
   for (const usuario of [sistema, consulta, null]) assert.equal(puedeVerSolicitudesAmpliacion(usuario), false)
 })
+
+test('días hábiles: viernes, cruce de mes y máximo total', () => {
+  assert.equal(sumarDias('2027-04-30', 5, true), '2027-05-07')
+  assert.equal(sumarDias('2027-04-30', 10, true), '2027-05-14')
+  assert.equal(sumarDias('2027-05-07', 5, true), '2027-05-14')
+  assert.equal(sumarDias('2026-07-31', 5, false), '2026-08-05')
+})

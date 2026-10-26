@@ -739,8 +739,8 @@ class SolicitudAmpliacionPlazo(models.Model):
     de estado queda como historial.
 
     `fecha_limite_ordinaria` es la fecha límite vigente al solicitar y no
-    se recalcula si después cambia el plazo general: de ella salen el tope
-    de 10 días y la fecha extraordinaria."""
+    se recalcula si después cambia el plazo general. El inicio del período
+    selecciona calendario o hábiles; desde 01/11/2026 el tope es cierre + 10 hábiles."""
 
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_AUTORIZADA = 'autorizada'
@@ -843,9 +843,8 @@ class SolicitudAmpliacionPlazo(models.Model):
     def fecha_limite_maxima(self):
         """Último día en que la solicitud puede resolverse (y en que una
         solicitud pendiente detiene el cierre automático)."""
-        from datetime import timedelta
-
-        return self.fecha_limite_ordinaria + timedelta(days=DIAS_MAXIMOS_AMPLIACION)
+        from .plazos import limite_maximo
+        return limite_maximo(self.periodo.fecha_fin, self.fecha_limite_ordinaria, self.periodo.fecha_inicio)
 
     def __str__(self):
         return f'Ampliación #{self.id} - {self.indicador.nombre} ({self.get_estado_display()})'

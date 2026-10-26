@@ -1,5 +1,7 @@
 import os
 
+from .plazos import limite_ampliado, maximo_adicional, minimo_autorizable, usa_dias_habiles
+
 from rest_framework import serializers
 
 from apps.estrategia.models import ObjetivoGeneral, ObjetivoEspecifico, PlanAnual
@@ -50,6 +52,13 @@ class ConfiguracionMedicionesSerializer(serializers.ModelSerializer):
                 'El plazo debe ser de al menos 1 día calendario.'
             )
 
+        if valor != ConfiguracionMediciones.obtener().dias_plazo_registro:
+            raise serializers.ValidationError(
+                'El plazo se conserva para proteger los históricos. Desde períodos '
+                'iniciados el 01/11/2026 rigen 5 días hábiles y un máximo total de 10.'
+            )
+        if valor > 10:
+            raise serializers.ValidationError('El plazo ordinario no puede superar 10 días.')
         return valor
 
 
@@ -1118,8 +1127,6 @@ class MedicionSerializer(serializers.ModelSerializer):
           - Tardío: desde el día 3 hasta el vencimiento, cualquiera sea el
             plazo configurado; incluye lo registrado con ampliación.
         Se calcula al consultar: no modifica ni guarda nada en la medición."""
-        from datetime import timedelta
-
         from django.utils import timezone
 
         if hasattr(obj, '_oportunidad_registro_cache'):
@@ -1132,7 +1139,10 @@ class MedicionSerializer(serializers.ModelSerializer):
         else:
             registro = timezone.localtime(obj.fecha_registro).date()
             dias = (registro - obj.fecha_medicion).days
-            limite_ordinario = obj.fecha_medicion + timedelta(days=self._dias_plazo_registro())
+            from .services import calcular_fecha_limite_registro
+            limite_ordinario = calcular_fecha_limite_registro(
+                obj.fecha_medicion, self._dias_plazo_registro(), obj.periodo.fecha_inicio,
+            )
             extraordinaria = self._fecha_extraordinaria(obj) if registro > limite_ordinario else None
             limite_efectivo = max(limite_ordinario, extraordinaria) if extraordinaria else limite_ordinario
 
@@ -1458,6 +1468,7 @@ class SolicitudAmpliacionPlazoSerializer(serializers.ModelSerializer):
     indicador_nombre = serializers.CharField(source='indicador.nombre', read_only=True)
     periodo_nombre = serializers.CharField(source='periodo.descripcion', read_only=True)
     periodo_fecha_cierre = serializers.DateField(source='periodo.fecha_fin', read_only=True)
+    usa_dias_habiles = serializers.SerializerMethodField()
     solicitante_username = serializers.CharField(source='solicitante.username', read_only=True)
     solicitante_nombre = serializers.SerializerMethodField()
     revisado_por_username = serializers.CharField(source='revisado_por.username', read_only=True, default=None)
@@ -1492,6 +1503,7 @@ class SolicitudAmpliacionPlazoSerializer(serializers.ModelSerializer):
             'periodo',
             'periodo_nombre',
             'periodo_fecha_cierre',
+            'usa_dias_habiles',
             'solicitante',
             'solicitante_username',
             'solicitante_nombre',
@@ -1529,10 +1541,11 @@ class SolicitudAmpliacionPlazoSerializer(serializers.ModelSerializer):
     def get_solicitante_nombre(self, obj):
         return obj.solicitante.get_full_name() or obj.solicitante.username
 
-    def get_fecha_limite_solicitada(self, obj):
-        from datetime import timedelta
+    def get_usa_dias_habiles(self, obj):
+        return usa_dias_habiles(obj.periodo.fecha_inicio)
 
-        return (obj.fecha_limite_ordinaria + timedelta(days=obj.dias_solicitados)).isoformat()
+    def get_fecha_limite_solicitada(self, obj):
+        return limite_ampliado(obj.fecha_limite_ordinaria, obj.dias_solicitados, obj.periodo.fecha_inicio).isoformat()
 
     def get_plazo_resolucion_vencido(self, obj):
         """Pendiente cuyo plazo máximo ya pasó: ya no puede resolverse y la
@@ -1549,7 +1562,7 @@ class SolicitudAmpliacionPlazoSerializer(serializers.ModelSerializer):
         if obj.estado != SolicitudAmpliacionPlazo.ESTADO_PENDIENTE:
             return None
 
-        return max(1, (hoy() - obj.fecha_limite_ordinaria).days)
+        return minimo_autorizable(obj.fecha_limite_ordinaria, hoy(), obj.periodo.fecha_inicio)
 
     def validate_motivo(self, valor):
         valor = (valor or '').strip()
@@ -1572,6 +1585,9 @@ class SolicitudAmpliacionPlazoSerializer(serializers.ModelSerializer):
         if motivo:
             raise serializers.ValidationError({'indicador': motivo})
 
+        maximo = maximo_adicional(info['fecha_inicio_periodo'])
+        if attrs['dias_solicitados'] > maximo:
+            raise serializers.ValidationError({'dias_solicitados': f'El máximo es {maximo} días adicionales para este período.'})
         attrs['_info_periodo'] = info
         return attrs
 

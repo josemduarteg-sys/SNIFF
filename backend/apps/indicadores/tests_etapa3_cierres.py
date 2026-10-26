@@ -63,7 +63,16 @@ def crear_usuario(username, rol_nombre):
 
 
 class CierresBase(APITestCase):
+    # Esta suite conserva los escenarios calendario previos a la transición.
+    # Sus fechas sintéticas son 2027; el corte real y la rama hábil se
+    # verifican sin parchear en tests_plazos_habiles.
+    calendario_anterior = True
+
     def setUp(self):
+        if self.calendario_anterior:
+            regla = mock.patch('apps.indicadores.plazos.INICIO_REGLA_HABIL', date(2028, 1, 1))
+            regla.start()
+            self.addCleanup(regla.stop)
         self.admin = crear_usuario('admin_etapa3', 'Administrador de planificación')
         self.ejecutor = crear_usuario('ejecutor_etapa3', 'Ejecutor operativo')
 
