@@ -192,6 +192,15 @@ function rangosGuardados(rangos) {
           <strong v-else>{{ textoPromedioAcumulado }}</strong>
         </div>
       </div>
+
+      <!-- D5: historial, gráfica y reporte PDF del KPI (solo lectura). -->
+      <RouterLink
+        v-if="indicador.estado === 'autorizado'"
+        :to="{ path: '/reportes', query: { kpi: indicador.id } }"
+        class="btn-rangos enlace-reporte"
+      >
+        Ver historial y reporte
+      </RouterLink>
     </div>
 
     <div class="criterios-block">
@@ -388,6 +397,12 @@ p {
 
 .btn-rangos:hover {
   background: #eaf5f5;
+}
+
+.enlace-reporte {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .criterios-lista {

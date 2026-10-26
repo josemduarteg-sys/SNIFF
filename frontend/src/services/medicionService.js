@@ -119,3 +119,9 @@ function normalizarRespuesta(response) {
 
   return []
 }
+
+// D5 (Reportes): historial de un KPI, en orden cronológico (solo lectura).
+export async function obtenerMedicionesKpi(indicadorId) {
+  const response = await api.get('mediciones/', { params: { indicador: indicadorId } })
+  return normalizarRespuesta(response)
+}

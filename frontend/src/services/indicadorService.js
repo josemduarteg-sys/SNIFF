@@ -128,3 +128,9 @@ function normalizarRespuesta(response) {
 
   return []
 }
+
+// D5: reporte PDF del KPI (generado en el backend con datos reales).
+export async function descargarReportePdfKpi(id) {
+  const response = await api.get(`indicadores-kpi/${id}/reporte-pdf/`, { responseType: 'blob' })
+  return response.data
+}

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
+import SelectorBuscable from '../components/common/SelectorBuscable.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import ObjetivoGeneralForm from '../components/objetivos-generales/ObjetivoGeneralForm.vue'
 import {
@@ -45,6 +46,10 @@ const planesAnualesTodos = ref([])
 const ponderacionesAnuales = ref([])
 const busqueda = ref('')
 const planSeleccionadoFiltro = ref('')
+const opcionesFiltroPlan = computed(() => [
+  { id: '', texto: 'Todos' },
+  ...planesFiltro.value.map((plan) => ({ id: plan.id, texto: plan.titulo })),
+])
 const cargando = ref(false)
 const error = ref('')
 const mensaje = ref('')
@@ -448,17 +453,14 @@ onMounted(async () => {
       <div class="toolbar-filter">
         <span class="filter-label">Plan estratégico:</span>
 
-        <select v-model="planSeleccionadoFiltro">
-          <option value="">Todos</option>
-
-          <option
-            v-for="plan in planesFiltro"
-            :key="plan.id"
-            :value="plan.id"
-          >
-            {{ plan.titulo }}
-          </option>
-        </select>
+        <SelectorBuscable
+          v-model="planSeleccionadoFiltro"
+          :opciones="opcionesFiltroPlan"
+          variante="toolbar"
+          etiqueta="Filtrar por plan estratégico"
+          placeholder="Todos"
+          placeholder-busqueda="Buscar plan estratégico..."
+        />
       </div>
 
       <button

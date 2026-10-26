@@ -12,6 +12,17 @@ export function esObjetivoImplicito(item) {
   return Boolean(item?.es_directo) || item?.objetivo_especifico_texto === TEXTO_OBJETIVO_IMPLICITO
 }
 
+// Texto visible de un ObjetivoEspecifico (filtros): el implícito de un KPI
+// directo se muestra con su objetivo general.
+export function textoObjetivoEspecifico(objetivo) {
+  const implicito = Boolean(objetivo?.es_generado_automaticamente)
+    || objetivo?.texto_objetivo === TEXTO_OBJETIVO_IMPLICITO
+
+  return (implicito ? objetivo?.objetivo_general_texto : objetivo?.texto_objetivo)
+    || objetivo?.texto_objetivo
+    || 'Sin objetivo'
+}
+
 export function textoObjetivoKpi(kpi, porDefecto = 'Sin objetivo') {
   if (!kpi) return porDefecto
 

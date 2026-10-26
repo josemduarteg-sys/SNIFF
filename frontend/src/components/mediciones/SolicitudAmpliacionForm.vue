@@ -1,6 +1,7 @@
 <script setup>
 import { computed, reactive, watch } from 'vue'
 import SelectorBuscable from '../common/SelectorBuscable.vue'
+import { kpiDePlanAbierto } from '../../utils/registroMediciones'
 import { obtenerSiguientePeriodo } from '../../services/medicionService'
 import { crearSolicitudAmpliacion } from '../../services/solicitudAmpliacionService'
 import {
@@ -35,8 +36,9 @@ const estado = reactive({
   periodo: null,
 })
 
+// Un plan Cerrado no admite ampliaciones (el backend también lo rechaza).
 const opcionesKpi = computed(() => {
-  return props.indicadores.map((indicador) => ({
+  return props.indicadores.filter(kpiDePlanAbierto).map((indicador) => ({
     id: indicador.id,
     texto: `${indicador.nombre} — ${indicador.plan_anual_nombre || 'Sin plan anual'}`,
   }))

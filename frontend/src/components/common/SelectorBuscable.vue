@@ -1,11 +1,17 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { filtrarOpciones } from '../../utils/busqueda'
 
 /**
  * Selector con filtro de texto, reutilizable para relaciones con listas
  * potencialmente largas (Plan estratégico, Plan anual, Objetivo general...).
  * Reemplaza un <select> nativo sin cambiar el contrato: v-model recibe/emite
  * el id de la opción seleccionada.
+ *
+ * Teclado: Enter/Espacio/flecha abajo abre; flechas recorren las opciones;
+ * Enter elige; Escape cierra. La búsqueda ignora mayúsculas y acentos, y se
+ * limpia con el botón ×. `variante="toolbar"` lo adapta a las barras de
+ * filtros (sin borde propio, como el <select> que reemplaza).
  */
 const props = defineProps({
   modelValue: {
@@ -32,14 +38,26 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  variante: {
+    type: String,
+    default: 'campo',
+  },
+  etiqueta: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits(['update:modelValue'])
 
 const contenedor = ref(null)
 const campoBusqueda = ref(null)
+const disparador = ref(null)
+const lista = ref(null)
 const abierto = ref(false)
 const busqueda = ref('')
+const indiceActivo = ref(-1)
+const idLista = `selector-lista-${Math.random().toString(36).slice(2, 9)}`
 
 const opcionSeleccionada = computed(() => {
   return (
@@ -47,15 +65,7 @@ const opcionSeleccionada = computed(() => {
   )
 })
 
-const opcionesFiltradas = computed(() => {
-  const texto = busqueda.value.trim().toLowerCase()
-
-  if (!texto) {
-    return props.opciones
-  }
-
-  return props.opciones.filter((opcion) => opcion.texto.toLowerCase().includes(texto))
-})
+const opcionesFiltradas = computed(() => filtrarOpciones(props.opciones, busqueda.value))
 
 watch(
   () => props.disabled,
@@ -65,6 +75,10 @@ watch(
     }
   }
 )
+
+watch(busqueda, () => {
+  indiceActivo.value = opcionesFiltradas.value.length ? 0 : -1
+})
 
 function alternar() {
   if (props.disabled) {
@@ -81,20 +95,61 @@ function alternar() {
 function abrir() {
   abierto.value = true
   busqueda.value = ''
+  indiceActivo.value = Math.max(
+    opcionesFiltradas.value.findIndex((opcion) => String(opcion.id) === String(props.modelValue)),
+    0,
+  )
 
   nextTick(() => {
     campoBusqueda.value?.focus()
+    asegurarVisible()
   })
 }
 
-function cerrar() {
+function cerrar({ devolverFoco = false } = {}) {
   abierto.value = false
   busqueda.value = ''
+  indiceActivo.value = -1
+
+  if (devolverFoco) {
+    nextTick(() => disparador.value?.focus())
+  }
 }
 
 function seleccionar(opcion) {
   emit('update:modelValue', opcion.id)
-  cerrar()
+  cerrar({ devolverFoco: true })
+}
+
+function limpiarBusqueda() {
+  busqueda.value = ''
+  campoBusqueda.value?.focus()
+}
+
+function mover(paso) {
+  const total = opcionesFiltradas.value.length
+
+  if (!total) return
+
+  indiceActivo.value = (indiceActivo.value + paso + total) % total
+  nextTick(asegurarVisible)
+}
+
+function asegurarVisible() {
+  lista.value?.querySelector('.selector-opcion.resaltada')?.scrollIntoView({ block: 'nearest' })
+}
+
+function elegirActiva() {
+  const opcion = opcionesFiltradas.value[indiceActivo.value]
+
+  if (opcion) seleccionar(opcion)
+}
+
+function teclaEnDisparador(evento) {
+  if (['ArrowDown', 'ArrowUp'].includes(evento.key)) {
+    evento.preventDefault()
+    abrir()
+  }
 }
 
 function manejarClickFuera(evento) {
@@ -113,13 +168,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="contenedor" class="selector-buscable">
+  <div ref="contenedor" class="selector-buscable" :class="`variante-${variante}`">
     <button
+      ref="disparador"
       type="button"
       class="selector-trigger"
       :class="{ abierto: abierto }"
       :disabled="disabled"
+      :aria-label="etiqueta || undefined"
+      aria-haspopup="listbox"
+      :aria-expanded="abierto"
       @click="alternar"
+      @keydown="teclaEnDisparador"
     >
       <span :class="{ placeholder: !opcionSeleccionada }">
         {{ opcionSeleccionada ? opcionSeleccionada.texto : placeholder }}
@@ -131,25 +191,49 @@ onBeforeUnmount(() => {
     </button>
 
     <div v-if="abierto" class="selector-panel">
-      <input
-        ref="campoBusqueda"
-        v-model="busqueda"
-        type="text"
-        class="selector-busqueda"
-        :placeholder="placeholderBusqueda"
-        @keydown.esc="cerrar"
-      />
+      <div class="selector-busqueda-fila">
+        <input
+          ref="campoBusqueda"
+          v-model="busqueda"
+          type="text"
+          class="selector-busqueda"
+          role="combobox"
+          aria-autocomplete="list"
+          :aria-controls="idLista"
+          :aria-activedescendant="indiceActivo >= 0 ? `${idLista}-${indiceActivo}` : undefined"
+          :placeholder="placeholderBusqueda"
+          @keydown.esc.prevent="cerrar({ devolverFoco: true })"
+          @keydown.down.prevent="mover(1)"
+          @keydown.up.prevent="mover(-1)"
+          @keydown.enter.prevent="elegirActiva"
+          @keydown.tab="cerrar()"
+        />
+        <button
+          v-if="busqueda"
+          type="button"
+          class="selector-limpiar"
+          aria-label="Limpiar búsqueda"
+          title="Limpiar búsqueda"
+          @click.stop="limpiarBusqueda"
+        >
+          ×
+        </button>
+      </div>
 
-      <ul class="selector-lista">
+      <ul :id="idLista" ref="lista" class="selector-lista" role="listbox">
         <li v-if="!opcionesFiltradas.length" class="selector-vacio">
           {{ mensajeVacio }}
         </li>
 
         <li
-          v-for="opcion in opcionesFiltradas"
+          v-for="(opcion, indice) in opcionesFiltradas"
+          :id="`${idLista}-${indice}`"
           :key="opcion.id"
           class="selector-opcion"
-          :class="{ activa: String(opcion.id) === String(modelValue) }"
+          role="option"
+          :aria-selected="String(opcion.id) === String(modelValue)"
+          :class="{ activa: String(opcion.id) === String(modelValue), resaltada: indice === indiceActivo }"
+          @mouseenter="indiceActivo = indice"
           @click.stop.prevent="seleccionar(opcion)"
         >
           {{ opcion.texto }}
@@ -219,6 +303,34 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
+/* Barras de filtros: el contenedor .toolbar-filter ya dibuja el borde. */
+.variante-toolbar {
+  width: auto;
+  min-width: 0;
+  max-width: 260px;
+}
+
+.variante-toolbar .selector-trigger {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.variante-toolbar .selector-trigger:focus-visible {
+  outline: 2px solid #a8dadc;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.variante-toolbar .selector-panel {
+  min-width: 260px;
+  top: calc(100% + 14px);
+  left: -12px;
+  right: auto;
+}
+
 .selector-panel {
   position: absolute;
   z-index: 40;
@@ -232,10 +344,16 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.selector-busqueda {
-  width: 100%;
-  border: none;
+.selector-busqueda-fila {
+  display: flex;
+  align-items: center;
   border-bottom: 1px solid #eef2f5;
+}
+
+.selector-busqueda {
+  flex: 1;
+  min-width: 0;
+  border: none;
   outline: none;
   padding: 11px 12px;
   font-family: inherit;
@@ -247,6 +365,25 @@ onBeforeUnmount(() => {
 
 .selector-busqueda::placeholder {
   color: #9aa8b8;
+}
+
+.selector-limpiar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #9aa8b8;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.selector-limpiar:hover {
+  background: #eaf5f5;
+  color: #457b9d;
 }
 
 .selector-lista {
@@ -266,7 +403,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.selector-opcion:hover {
+.selector-opcion.resaltada {
   background: #eaf5f5;
 }
 
@@ -281,5 +418,18 @@ onBeforeUnmount(() => {
   font-weight: 650;
   color: #9aa8b8;
   text-align: center;
+}
+
+@media (max-width: 640px) {
+  .variante-toolbar {
+    flex: 1;
+    max-width: 100%;
+  }
+
+  .variante-toolbar .selector-panel {
+    min-width: 0;
+    left: -12px;
+    right: -12px;
+  }
 }
 </style>

@@ -172,6 +172,55 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         contexto['listado_kpi'] = self.action == 'list'
         return contexto
 
+    @action(detail=True, methods=['get'], url_path='reporte-pdf')
+    def reporte_pdf(self, request, pk=None):
+        """D5: reporte PDF de solo lectura del KPI con su historial de
+        mediciones. Mismos permisos de lectura que el KPI (los 4 roles);
+        solo KPI autorizados. No incrusta archivos de evidencia."""
+        from django.http import HttpResponse
+        from apps.auditoria.services import registrar_bitacora_obligatoria
+        from apps.estrategia.services import TEXTO_OBJETIVO_ESPECIFICO_DIRECTO
+
+        from .reporte_pdf import generar_reporte_kpi_pdf
+
+        indicador = self.get_object()
+
+        if indicador.estado != 'autorizado':
+            raise Http404('Solo hay reportes de KPI autorizados.')
+
+        kpi = IndicadorKPISerializer(indicador, context=self.get_serializer_context()).data
+        mediciones = preparar_mediciones_lectura(
+            MedicionViewSet.queryset.filter(indicador=indicador).order_by('periodo__fecha_inicio', 'id'),
+        )
+        datos_mediciones = MedicionSerializer(mediciones, many=True, context={'request': request}).data
+
+        # Mismo criterio que textoObjetivoKpi() del frontend: un KPI directo
+        # muestra su objetivo general.
+        if kpi.get('es_directo') or kpi.get('objetivo_especifico_texto') == TEXTO_OBJETIVO_ESPECIFICO_DIRECTO:
+            objetivo = kpi.get('objetivo_general_texto') or kpi.get('objetivo_especifico_texto')
+        else:
+            objetivo = kpi.get('objetivo_especifico_texto') or kpi.get('objetivo_general_texto')
+
+        generado_en = timezone.localtime()
+        contenido = generar_reporte_kpi_pdf(
+            kpi, objetivo, datos_mediciones, generado_en, request.user.username,
+        )
+
+        registrar_bitacora_obligatoria(
+            usuario=request.user,
+            accion='consultar',
+            modulo='Reportes',
+            descripcion=f'Generó el reporte PDF del KPI {indicador.nombre} ({len(datos_mediciones)} mediciones).',
+            request=request,
+        )
+
+        respuesta = HttpResponse(contenido, content_type='application/pdf')
+        respuesta['Content-Disposition'] = (
+            f'attachment; filename="reporte_kpi_{indicador.id}_{generado_en:%Y%m%d}.pdf"'
+        )
+        respuesta['X-Content-Type-Options'] = 'nosniff'
+        return respuesta
+
     def perform_create(self, serializer):
         from apps.auditoria.services import notificar_usuarios_gestion, registrar_bitacora_obligatoria
         from rest_framework.exceptions import ValidationError
@@ -582,6 +631,40 @@ class PeriodoMedicionViewSet(viewsets.ModelViewSet):
     http_method_names = METODOS_SIN_BORRADO
 
 
+def preparar_mediciones_lectura(queryset, con_acumulados=True):
+    """Anotaciones y precargas que MedicionSerializer necesita para no hacer
+    consultas por cada medición. Compartido por MedicionViewSet y por el
+    reporte PDF del KPI (D5), para que ambos muestren lo mismo."""
+    from django.db.models import OuterRef, Prefetch, Subquery
+
+    # Etapa 5/6: fecha extraordinaria de la ampliación autorizada del
+    # periodo (si existe), para la oportunidad de registro sin una
+    # consulta por cada medición del listado.
+    ampliacion = SolicitudAmpliacionPlazo.objects.filter(
+        indicador=OuterRef('indicador_id'),
+        periodo=OuterRef('periodo_id'),
+        estado=SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA,
+    ).values('fecha_limite_extraordinaria')[:1]
+
+    queryset = queryset.annotate(fecha_extraordinaria_ampliacion=Subquery(ampliacion))
+
+    # D2: las evidencias (con quién las subió) en una sola consulta.
+    queryset = queryset.prefetch_related(
+        Prefetch('evidencias', queryset=EvidenciaMedicion.objects.select_related('subido_por')),
+    )
+
+    if con_acumulados:
+        # Etapa 6 (M8): el promedio y el estado acumulados "hasta esta
+        # medición" se calculan sobre las mediciones y los rangos del KPI
+        # ya cargados, en lugar de dos consultas por cada medición.
+        queryset = queryset.prefetch_related(
+            Prefetch('indicador__mediciones', queryset=Medicion.objects.select_related('periodo')),
+            Prefetch('indicador__rangos', queryset=RangoKPI.objects.select_related('estado_cumplimiento')),
+        )
+
+    return queryset
+
+
 class MedicionViewSet(viewsets.ModelViewSet):
     queryset = Medicion.objects.select_related(
         'indicador',
@@ -602,34 +685,20 @@ class MedicionViewSet(viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
-        from django.db.models import OuterRef, Subquery
-
-        # Etapa 5/6: fecha extraordinaria de la ampliación autorizada del
-        # periodo (si existe), para la oportunidad de registro sin una
-        # consulta por cada medición del listado.
-        ampliacion = SolicitudAmpliacionPlazo.objects.filter(
-            indicador=OuterRef('indicador_id'),
-            periodo=OuterRef('periodo_id'),
-            estado=SolicitudAmpliacionPlazo.ESTADO_AUTORIZADA,
-        ).values('fecha_limite_extraordinaria')[:1]
-
-        queryset = super().get_queryset().annotate(fecha_extraordinaria_ampliacion=Subquery(ampliacion))
-
-        # D2: las evidencias (con quién las subió) en una sola consulta.
-        from django.db.models import Prefetch
-
-        queryset = queryset.prefetch_related(
-            Prefetch('evidencias', queryset=EvidenciaMedicion.objects.select_related('subido_por')),
+        queryset = preparar_mediciones_lectura(
+            super().get_queryset(),
+            con_acumulados=self.action in ('list', 'retrieve'),
         )
 
-        if self.action in ('list', 'retrieve'):
-            # Etapa 6 (M8): el promedio y el estado acumulados "hasta esta
-            # medición" se calculan sobre las mediciones y los rangos del KPI
-            # ya cargados, en lugar de dos consultas por cada medición.
-            queryset = queryset.prefetch_related(
-                Prefetch('indicador__mediciones', queryset=Medicion.objects.select_related('periodo')),
-                Prefetch('indicador__rangos', queryset=RangoKPI.objects.select_related('estado_cumplimiento')),
-            )
+        # D5 (consulta histórica): ?indicador=<id> limita el listado a un KPI,
+        # en orden cronológico. Solo filtra: los permisos no cambian.
+        if self.action == 'list' and 'indicador' in self.request.query_params:
+            indicador_id = self.request.query_params.get('indicador')
+
+            if not str(indicador_id).isdigit():
+                return queryset.none()
+
+            queryset = queryset.filter(indicador_id=indicador_id).order_by('periodo__fecha_inicio', 'id')
 
         return queryset
 

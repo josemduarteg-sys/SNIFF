@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import ConfirmacionModal from '../components/common/ConfirmacionModal.vue'
+import SelectorBuscable from '../components/common/SelectorBuscable.vue'
 import IndicadorForm from '../components/indicadores/IndicadorForm.vue'
 import IndicadorDetalle from '../components/indicadores/IndicadorDetalle.vue'
 import {
@@ -32,7 +33,7 @@ import {
   puedeCrearKpi,
   puedeEditarKpi,
 } from '../utils/permisos'
-import { esObjetivoImplicito, textoObjetivoKpi } from '../utils/objetivos'
+import { esObjetivoImplicito, textoObjetivoEspecifico, textoObjetivoKpi } from '../utils/objetivos'
 
 const props = defineProps({
   usuario: {
@@ -57,6 +58,13 @@ const rangosKpi = ref([])
 
 const busqueda = ref('')
 const objetivoSeleccionado = ref('')
+const opcionesFiltroObjetivo = computed(() => [
+  { id: '', texto: 'Todos' },
+  ...objetivosEspecificos.value.map((objetivo) => ({
+    id: objetivo.id,
+    texto: `${textoObjetivoEspecifico(objetivo)}${objetivo.plan_anual_nombre ? ` — ${objetivo.plan_anual_nombre}` : ''}`,
+  })),
+])
 const frecuenciaSeleccionada = ref('')
 const estadoSeleccionado = ref('')
 
@@ -627,19 +635,16 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="toolbar-filter">
-        <span class="filter-label">Objetivo específico:</span>
+        <span class="filter-label">Objetivo:</span>
 
-        <select v-model="objetivoSeleccionado">
-          <option value="">Todos</option>
-
-          <option
-            v-for="objetivo in objetivosEspecificos"
-            :key="objetivo.id"
-            :value="objetivo.id"
-          >
-            {{ objetivo.texto_objetivo }}
-          </option>
-        </select>
+        <SelectorBuscable
+          v-model="objetivoSeleccionado"
+          :opciones="opcionesFiltroObjetivo"
+          variante="toolbar"
+          etiqueta="Filtrar por objetivo"
+          placeholder="Todos"
+          placeholder-busqueda="Buscar objetivo..."
+        />
       </div>
 
       <div class="toolbar-filter">

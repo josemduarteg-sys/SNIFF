@@ -15,6 +15,7 @@ import UsuariosView from '../views/UsuariosView.vue'
 import CambioPasswordObligatorioView from '../views/CambioPasswordObligatorioView.vue'
 import BitacoraView from '../views/BitacoraView.vue'
 import MapaEstrategicoView from '../views/MapaEstrategicoView.vue'
+import ReportesView from '../views/ReportesView.vue'
 
 const routes = [
   {
@@ -128,6 +129,16 @@ const routes = [
     meta: {
       requiresAuth: true,
       verificarAcceso: esAdministradorSistema,
+    },
+  },
+  {
+    // D5: consulta histórica y reporte PDF de KPI, solo lectura para los
+    // cuatro roles (sin verificarAcceso, como Indicadores y Mediciones).
+    path: '/reportes',
+    name: 'reportes',
+    component: ReportesView,
+    meta: {
+      requiresAuth: true,
     },
   },
   {

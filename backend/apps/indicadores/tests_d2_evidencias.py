@@ -5,6 +5,7 @@ nuevo nunca reemplaza ni borra a los anteriores. Usa un MEDIA_ROOT temporal
 fuera del proyecto (no toca backend/media)."""
 
 import importlib
+import gc
 import shutil
 import tempfile
 from datetime import date
@@ -48,6 +49,8 @@ class EvidenciasBase(MedicionTestsBase):
     @classmethod
     def tearDownClass(cls):
         super().tearDownClass()
+        # Windows no borra un archivo que un FileResponse aún tiene abierto.
+        gc.collect()
         shutil.rmtree(_MEDIA_ROOT_D2, ignore_errors=True)
 
     def registrar(self, kpi, fecha=ENERO, **extra):
@@ -436,6 +439,12 @@ class MigracionIdaYVueltaTests(APITransactionTestCase):
     NOMBRE_USUARIO = 'ejecutor_d2_migracion'
     setUp = MedicionTestsBase.setUp
     crear_kpi = MedicionTestsBase.crear_kpi
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        gc.collect()
+        shutil.rmtree(_MEDIA_ROOT_D2, ignore_errors=True)
 
     def migrar(self, destino):
         executor = MigrationExecutor(connection)

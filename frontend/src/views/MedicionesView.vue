@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '../components/layout/AppLayout.vue'
 import ModalBase from '../components/ui/ModalBase.vue'
 import MedicionForm from '../components/mediciones/MedicionForm.vue'
+import SelectorBuscable from '../components/common/SelectorBuscable.vue'
 import MedicionDetalle from '../components/mediciones/MedicionDetalle.vue'
 import SolicitudAmpliacionForm from '../components/mediciones/SolicitudAmpliacionForm.vue'
 import SolicitudesAmpliacion from '../components/mediciones/SolicitudesAmpliacion.vue'
@@ -36,6 +37,7 @@ import {
   esMedicionSinRegistro,
   textoEstadoCumplimiento,
 } from '../utils/cumplimiento'
+import { estadosDelPeriodo } from '../utils/registroMediciones'
 import { useResaltado } from '../composables/useResaltado'
 import { usePaginacion } from '../composables/usePaginacion'
 import Paginacion from '../components/common/Paginacion.vue'
@@ -55,11 +57,15 @@ const emit = defineEmits(['logout'])
 
 const mediciones = ref([])
 const indicadores = ref([])
-const estadosCumplimiento = ref([])
 
 const busqueda = ref('')
 const indicadorSeleccionado = ref('')
 const estadoSeleccionado = ref('')
+const opcionesFiltroKpi = computed(() => [
+  { id: '', texto: 'Todos' },
+  ...indicadores.value.map((indicador) => ({ id: indicador.id, texto: indicador.nombre })),
+])
+const estadosCumplimiento = computed(() => estadosDelPeriodo(mediciones.value, textoEstadoCumplimiento))
 
 const cargando = ref(false)
 const error = ref('')
@@ -300,7 +306,6 @@ async function cargarDatos() {
 
     mediciones.value = medicionesResponse
     indicadores.value = datosFormulario.indicadores
-    estadosCumplimiento.value = datosFormulario.estadosCumplimiento
     configuracionMediciones.value = configuracion
     edicionPlazoRegistro.value = configuracion.dias_plazo_registro
   } catch (e) {
@@ -623,17 +628,18 @@ onMounted(async () => {
       <div class="toolbar-filter">
         <span class="filter-label">KPI:</span>
 
-        <select v-model="indicadorSeleccionado">
-          <option value="">Todos</option>
-
-          <option v-for="indicador in indicadores" :key="indicador.id" :value="indicador.id">
-            {{ indicador.nombre }}
-          </option>
-        </select>
+        <SelectorBuscable
+          v-model="indicadorSeleccionado"
+          :opciones="opcionesFiltroKpi"
+          variante="toolbar"
+          etiqueta="Filtrar por KPI"
+          placeholder="Todos"
+          placeholder-busqueda="Buscar KPI..."
+        />
       </div>
 
       <div class="toolbar-filter">
-        <span class="filter-label">Estado:</span>
+        <span class="filter-label">Estado del periodo:</span>
 
         <select v-model="estadoSeleccionado">
           <option value="">Todos</option>
