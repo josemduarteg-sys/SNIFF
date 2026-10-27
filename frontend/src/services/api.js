@@ -1,8 +1,9 @@
 import axios from 'axios'
+import { obtenerApiBaseUrl } from '../utils/apiBaseUrl'
 import { configurarRenovacionSesion } from './sesion'
 
 const api = axios.create({
-    baseURL: 'http://127.0.0.1:8000/api/',
+    baseURL: obtenerApiBaseUrl(import.meta.env.VITE_API_BASE_URL, import.meta.env.DEV),
     headers: {
         'Content-Type': 'application/json',
     },

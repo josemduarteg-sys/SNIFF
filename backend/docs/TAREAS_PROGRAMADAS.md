@@ -38,13 +38,13 @@ esa fórmula aplica únicamente a períodos anteriores al corte.
 
 1. `cerrar_mediciones_vencidas`: por cada KPI autorizado cuyo Plan anual y Plan
    estratégico no estén Cerrados, cierra **en orden** todos los periodos cuyo
-   plazo de registro (cierre del periodo + `ConfiguracionMediciones.dias_plazo_registro`)
+   plazo de registro efectivo según la fecha de inicio del período
    ya venció sin medición. Cada cierre queda como medición "Sin registro"
    (resultado vacío, no entra en el promedio) con su alerta "Periodo sin registro".
 
    Etapa 5 (días adicionales):
    - Antes de cerrar, las solicitudes de ampliación **pendientes** cuyo plazo
-     máximo (límite ordinario + 10 días) ya pasó quedan **Vencidas**, y las de
+     máximo (cierre + 10 hábiles en períodos nuevos; ordinario + 10 calendario en anteriores) ya pasó quedan **Vencidas**, y las de
      KPI anulados, de planes Cerrados o de periodos que ya tienen medición
      quedan **Sin efecto**. Cada cambio deja un registro del Sistema en la bitácora
      y un aviso al solicitante.
@@ -104,6 +104,18 @@ En la pestaña **Configuración** de la tarea:
 
 ## Servidor Linux (cron)
 
+Crear primero la carpeta con la cuenta de servicio y concederle escritura:
+
+~~~sh
+cd /ruta/SNIFF/backend
+mkdir -p logs
+~~~
+
+La redirección de cron falla si logs no existe. Confirmar también que el entorno
+virtual se llama venv y que el programador usa la hora de Guatemala. Si usa
+otra zona, ajustar la programación; TZ dentro del comando solo afecta al proceso.
+
+
 ```cron
 15 0 * * * cd /ruta/SNIFF/backend && TZ=America/Guatemala venv/bin/python manage.py ejecutar_tareas_mediciones >> logs/tareas_mediciones_$(date +\%Y-\%m).log 2>&1
 ```
@@ -120,7 +132,7 @@ En la pestaña **Configuración** de la tarea:
 
 - El historial del Programador de tareas muestra el código de salida de cada día.
 - El log mensual contiene la fecha, cada cierre, cada alerta creada y el resumen.
-- Pendiente (hallazgo M7): registrar cada ejecución también en la bitácora.
+- Las ejecuciones reales ya se registran en bitácora como eventos del Sistema; las simulaciones no. Si falla ese registro, el comando informa fallo aunque los cierres previos ya se hayan guardado.
 
 
 ## Verificación aislada de la transición

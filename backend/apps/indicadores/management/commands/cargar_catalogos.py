@@ -26,33 +26,29 @@ class Command(BaseCommand):
         )
 
     def cargar_roles(self):
+        # Nombres de aplicación, no nombres heredados. Las migraciones deben
+        # ejecutarse primero. Nunca reasignar cuentas ni reactivar roles aquí.
         roles = [
-            {
-                'nombre': 'Administrador',
-                'descripcion': 'Gestiona usuarios, roles, permisos y configuración general del sistema.',
-            },
-            {
-                'nombre': 'Supervisor',
-                'descripcion': 'Define estrategias, objetivos, KPI, metas y revisa el cumplimiento de indicadores.',
-            },
-            {
-                'nombre': 'Usuario operativo',
-                'descripcion': 'Registra mediciones, carga archivos CSV y actualiza información autorizada.',
-            },
-            {
-                'nombre': 'Usuario de consulta',
-                'descripcion': 'Consulta dashboard, reportes, gráficas y alertas sin modificar información.',
-            },
+            ('Administrador del sistema', 'Gestiona cuentas, roles y auditoría.'),
+            ('Administrador de planificación', 'Gestiona planificación, KPI y autorizaciones.'),
+            ('Ejecutor operativo', 'Registra mediciones y adjunta evidencias.'),
+            ('Usuario de consulta', 'Consulta la información sin modificarla.'),
         ]
-
-        for rol in roles:
-            Rol.objects.get_or_create(
-                nombre=rol['nombre'],
-                defaults={
-                    'descripcion': rol['descripcion'],
-                    'estado': True,
-                }
+        for nombre, descripcion in roles:
+            rol, _ = Rol.objects.get_or_create(
+                nombre__iexact=nombre,
+                defaults={'nombre': nombre, 'descripcion': descripcion, 'estado': True},
             )
+            if not rol.estado:
+                self.stdout.write(self.style.WARNING(
+                    f'El rol "{rol.nombre}" ya existe inactivo; se conserva sin cambios.'
+                ))
+        # Supervisor solo se conserva si existe. No crear un perfil obsoleto
+        # ni modificar su estado/asignaciones fuera de una decisión explícita.
+        if Rol.objects.filter(nombre__iexact='Supervisor', estado=True).exists():
+            self.stdout.write(self.style.WARNING(
+                'Supervisor sigue activo: revisar su uso; no se modificó.'
+            ))
 
     def cargar_area(self):
         Area.objects.get_or_create(

@@ -6,14 +6,41 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / '.env')
+def env_bool(nombre, defecto=False):
+    return os.getenv(nombre, str(defecto)).strip().lower() in ('true', '1', 'yes', 'on')
+
+
+def env_lista(nombre, defecto=''):
+    return [valor.strip() for valor in os.getenv(nombre, defecto).split(',') if valor.strip()]
+
+
+def env_directorio(nombre, defecto):
+    ruta = Path(os.getenv(nombre) or defecto).expanduser()
+    return ruta.resolve() if ruta.is_absolute() else (BASE_DIR / ruta).resolve()
+
+
+# Permite revisar configuración sin cargar el .env local (pruebas aisladas).
+if env_bool('SNIFF_LOAD_DOTENV', True):
+    load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'False') == 'True'
+DEBUG = env_bool('DEBUG')
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = env_lista('ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]')
+
+CSRF_TRUSTED_ORIGINS = env_lista('CSRF_TRUSTED_ORIGINS')
+SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT')
+SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE')
+CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE')
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS')
+SECURE_HSTS_PRELOAD = env_bool('SECURE_HSTS_PRELOAD')
+# Activar SOLO si el proxy confiable elimina y establece esta cabecera.
+if env_bool('TRUST_X_FORWARDED_PROTO'):
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = env_bool('USE_X_FORWARDED_HOST')
 
 
 # Application definition
@@ -123,7 +150,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = os.getenv('STATIC_URL', '/static/')
+STATIC_ROOT = env_directorio('STATIC_ROOT', 'staticfiles')
 
 # Archivos subidos por usuarios (Bloque 4: evidencia de mediciones).
 # Almacenamiento local (FileSystemStorage, el default de Django): el
@@ -132,8 +160,8 @@ STATIC_URL = 'static/'
 # ruta pública en config/urls.py a propósito: los archivos se sirven
 # únicamente mediante el endpoint autenticado GET /api/mediciones/{id}/evidencia/,
 # que respeta los mismos permisos de lectura que el resto de Medicion.
-MEDIA_ROOT = BASE_DIR / 'media'
-MEDIA_URL = '/media/'
+MEDIA_ROOT = env_directorio('MEDIA_ROOT', 'media')
+MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
 
 AUTH_USER_MODEL = 'usuarios.Usuario'
 
@@ -183,7 +211,10 @@ SNIFF_LIMITES_SOLICITUDES = {
     'restablecimiento_identificador': os.getenv('LIMITE_RESTABLECIMIENTO_IDENTIFICADOR', '3/hour'),
 }
 
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-]
+CORS_ALLOWED_ORIGINS = env_lista(
+    'CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173',
+)
+
+# Opcional: cifrado de la conexión PostgreSQL según la infraestructura.
+if os.getenv('DB_SSLMODE'):
+    DATABASES['default']['OPTIONS'] = {'sslmode': os.environ['DB_SSLMODE']}

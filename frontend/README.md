@@ -1,5 +1,14 @@
-# Vue 3 + Vite
+# Frontend de SNIFF
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+La instalación completa está en [README principal](../README.md).
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+- Node.js 22.18+ (rama 22) o 24.11+ (rama 24), con npm.
+- Instalar con npm ci.
+- Desarrollo: npm run dev; usa la API local si no se configura otra.
+- Ajustar VITE_API_BASE_URL según .env.example; para producción puede usarse
+  /api/ detrás de un proxy del mismo origen.
+- Compilar: npm run build. Cambiar la URL exige volver a compilar.
+- Publicar dist con fallback SPA; separar /api/, /admin/ y /static/.
+- Pruebas: npm test.
+- No incluir secretos en variables VITE_* ni usar vite preview como servidor
+  institucional.
