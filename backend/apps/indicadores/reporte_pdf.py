@@ -26,7 +26,7 @@ TOPE_CONTENIDO = ALTO_PAGINA - MARGEN - ALTO_ENCABEZADO
 BASE_CONTENIDO = MARGEN + ALTO_PIE
 
 INSTITUCION = 'Cooperativa Chiquimuljá R. L.'
-TITULO = 'Reporte histórico de indicador KPI'
+TITULO = 'Informe histórico de indicador KPI'
 
 # Paleta del frontend de SNIFF.
 AZUL_OSCURO = (0.114, 0.208, 0.341)   # #1d3557
@@ -507,7 +507,7 @@ def _cuadros_resumen(documento, cuadros):
             p.texto(x + 9, y - 38 - n * 8.5, linea, 'F1', 6.8, SECUNDARIO)
 
     documento.y -= alto + 4
-    nota = ('Resumen de los periodos incluidos en este reporte. El promedio es una media simple de los resultados '
+    nota = ('Resumen de los periodos incluidos en este informe. El promedio es una media simple de los resultados '
             'registrados y no sustituye el seguimiento acumulado oficial del KPI.')
     for linea in partir_texto(nota, 'F1', 6.8, ANCHO_UTIL):
         documento.y -= 8.5

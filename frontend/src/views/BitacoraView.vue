@@ -31,6 +31,16 @@ const filtroOrigen = ref('')
 const fechaInicio = ref('')
 const fechaFin = ref('')
 
+function textoVisible(texto) {
+  return String(texto).replace(/\breportes?\b/gi, (palabra) => {
+    const informe = palabra.toLowerCase() === 'reportes' ? 'informes' : 'informe'
+    if (palabra === palabra.toUpperCase()) return informe.toUpperCase()
+    return palabra[0] === palabra[0].toUpperCase()
+      ? informe[0].toUpperCase() + informe.slice(1)
+      : informe
+  })
+}
+
 function autorRegistro(item) {
   if (item.origen === 'sistema') return 'Sistema'
 
@@ -338,7 +348,7 @@ onMounted(() => {
                 :key="modulo"
                 :value="modulo"
               >
-                {{ modulo }}
+                {{ textoVisible(modulo) }}
               </option>
             </select>
           </label>
@@ -455,11 +465,11 @@ onMounted(() => {
               </td>
 
               <td>
-                <span class="role-chip" :title="item.modulo || 'Sin módulo'">{{ item.modulo || 'Sin módulo' }}</span>
+                <span class="role-chip" :title="textoVisible(item.modulo || 'Sin módulo')">{{ textoVisible(item.modulo || 'Sin módulo') }}</span>
               </td>
 
               <td>
-                <div class="cell-sub descripcion-cell" :title="item.descripcion || 'Sin descripción'">{{ item.descripcion || 'Sin descripción' }}</div>
+                <div class="cell-sub descripcion-cell" :title="textoVisible(item.descripcion || 'Sin descripción')">{{ textoVisible(item.descripcion || 'Sin descripción') }}</div>
               </td>
 
               <td>{{ item.ip_usuario || 'No registrada' }}</td>

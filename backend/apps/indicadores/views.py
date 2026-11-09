@@ -187,7 +187,7 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
         indicador = self.get_object()
 
         if indicador.estado != 'autorizado':
-            raise Http404('Solo hay reportes de KPI autorizados.')
+            raise Http404('Solo hay informes de KPI autorizados.')
 
         kpi = IndicadorKPISerializer(indicador, context=self.get_serializer_context()).data
         mediciones = preparar_mediciones_lectura(
@@ -211,13 +211,13 @@ class IndicadorKPIViewSet(viewsets.ModelViewSet):
             usuario=request.user,
             accion='consultar',
             modulo='Reportes',
-            descripcion=f'Generó el reporte PDF del KPI {indicador.nombre} ({len(datos_mediciones)} mediciones).',
+            descripcion=f'Generó el informe PDF del KPI {indicador.nombre} ({len(datos_mediciones)} mediciones).',
             request=request,
         )
 
         respuesta = HttpResponse(contenido, content_type='application/pdf')
         respuesta['Content-Disposition'] = (
-            f'attachment; filename="reporte_kpi_{indicador.id}_{generado_en:%Y%m%d}.pdf"'
+            f'attachment; filename="informe_kpi_{indicador.id}_{generado_en:%Y%m%d}.pdf"'
         )
         respuesta['X-Content-Type-Options'] = 'nosniff'
         return respuesta

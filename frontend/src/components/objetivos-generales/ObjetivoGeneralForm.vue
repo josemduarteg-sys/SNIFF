@@ -166,10 +166,6 @@ function cancelar() {
       </label>
     </div>
 
-    <div class="help-box">
-      Se muestran únicamente los planes estratégicos En uso.
-    </div>
-
     <div class="form-actions">
       <button class="btn-secondary" type="button" @click="cancelar">
         Cancelar
@@ -264,15 +260,6 @@ function cancelar() {
   font-weight: 600;
 }
 
-.help-box {
-  border-radius: 12px;
-  background: #eaf5f5;
-  color: #457b9d;
-  padding: 13px 14px;
-  font-size: 12.5px;
-  line-height: 1.45;
-  font-weight: 650;
-}
 
 .form-actions {
   display: flex;

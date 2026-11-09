@@ -112,7 +112,7 @@ const mostrarAreas = computed(() => puedeGestionarAreas(props.usuario))
           <path d="M14 3v6h6" />
           <polyline points="8 17 11 13.5 13.5 15.5 16 12" />
         </svg>
-        <span>Reportes</span>
+        <span>Informes</span>
       </RouterLink>
 
       <RouterLink to="/mapa-estrategico" class="nav-item" active-class="active">

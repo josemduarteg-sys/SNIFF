@@ -162,6 +162,7 @@ class ReportePdfTests(ReportesBase):
 
         self.assertEqual(response['Content-Type'], 'application/pdf')
         self.assertIn('attachment;', response['Content-Disposition'])
+        self.assertIn('filename="informe_kpi_', response['Content-Disposition'])
         self.assertTrue(contenido.startswith(b'%PDF-1.4'))
         self.assertTrue(contenido.rstrip().endswith(b'%%EOF'))
 
@@ -178,7 +179,7 @@ class ReportePdfTests(ReportesBase):
         textos = ' | '.join(textos_pdf(self.pdf(kpi).content))
 
         for esperado in (
-            'Cooperativa Chiquimuljá R. L.', 'Reporte histórico de indicador KPI', 'SNIFF',
+            'Cooperativa Chiquimuljá R. L.', 'Informe histórico de indicador KPI', 'SNIFF',
             'KPI mensual con omision', 'Plan Mediciones', 'Objetivo especifico de mediciones',
             'Mensual', 'Meta', '100.00 %', 'Enero 2027', 'Febrero 2027', 'Marzo 2027',
             '80.00 %', '90.00 %', 'Sin registro', 'Cierre automático', 'Generado', 'ejecutor_d5',

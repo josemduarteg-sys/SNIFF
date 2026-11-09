@@ -490,17 +490,10 @@ function cancelar() {
 
     <!-- La ponderación es la única excepción al bloqueo de "KPI ya
          autorizado": por eso su input, arriba, nunca queda :disabled. -->
-    <div v-if="estado.plan_anual && estado.objetivo_general" class="help-box ponderacion-box">
-      Peso del KPI dentro del 100% de su año y objetivo general (independiente
-      de la meta, el resultado y el promedio acumulado).
+    <p v-if="estado.plan_anual && estado.objetivo_general" class="ponderacion-resumen">
       Ya asignado en este ámbito: <strong>{{ ponderacionAsignadaAmbito.toFixed(2) }}%</strong> ·
       Pendiente: <strong>{{ ponderacionPendienteAmbito.toFixed(2) }}%</strong>
-    </div>
-
-    <div class="help-box">
-      El KPI se crea como borrador y no inicia su seguimiento hasta ser autorizado.
-      Su vigencia es la del año del plan anual elegido.
-    </div>
+    </p>
 
     <div class="form-actions">
       <button class="btn-secondary" type="button" @click="cancelar">
@@ -608,11 +601,9 @@ function cancelar() {
   cursor: not-allowed;
 }
 
-.help-box {
-  border-radius: 12px;
-  background: #eaf5f5;
+.ponderacion-resumen {
+  margin: 0;
   color: #457b9d;
-  padding: 13px 14px;
   font-size: 12.5px;
   line-height: 1.45;
   font-weight: 650;

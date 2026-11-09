@@ -165,13 +165,13 @@ async function descargarPdf() {
     const url = window.URL.createObjectURL(blob)
     const enlace = document.createElement('a')
     enlace.href = url
-    enlace.download = `reporte_kpi_${kpiSeleccionado.value.id}.pdf`
+    enlace.download = `informe_kpi_${kpiSeleccionado.value.id}.pdf`
     document.body.appendChild(enlace)
     enlace.click()
     enlace.remove()
     window.setTimeout(() => window.URL.revokeObjectURL(url), 60000)
   } catch {
-    errorPdf.value = 'No se pudo generar el reporte PDF. Intentá de nuevo.'
+    errorPdf.value = 'No se pudo generar el informe PDF. Intentá de nuevo.'
   } finally {
     generandoPdf.value = false
   }
@@ -181,9 +181,9 @@ async function descargarPdf() {
 <template>
   <AppLayout
     :usuario="props.usuario"
-    titulo="Reportes de KPI"
+    titulo="Informes de KPI"
     subtitulo="Consulta histórica de cada KPI: resultados por periodo, evolución y evidencias."
-    breadcrumb-actual="Reportes"
+    breadcrumb-actual="Informes"
     @logout="emit('logout')"
   >
     <section class="reporte-card filtros">
@@ -254,7 +254,7 @@ async function descargarPdf() {
               <polyline points="7 10 12 15 17 10" />
               <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
-            {{ generandoPdf ? 'Generando...' : 'Descargar reporte PDF' }}
+            {{ generandoPdf ? 'Generando...' : 'Descargar informe PDF' }}
           </button>
         </div>
         <p v-if="errorPdf" class="mensaje error">{{ errorPdf }}</p>

@@ -199,7 +199,7 @@ function rangosGuardados(rangos) {
         :to="{ path: '/reportes', query: { kpi: indicador.id } }"
         class="btn-rangos enlace-reporte"
       >
-        Ver historial y reporte
+        Ver historial y informe
       </RouterLink>
     </div>
 

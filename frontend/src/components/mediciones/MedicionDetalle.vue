@@ -386,10 +386,6 @@ function formatearFecha(fecha) {
       </div>
     </div>
 
-    <div class="note-box">
-      <strong>Nota:</strong>
-      El estado de cumplimiento se calcula automáticamente comparando el resultado directamente contra los rangos configurados para este KPI.
-    </div>
   </section>
 </template>
 
@@ -679,19 +675,6 @@ p {
   stroke: currentColor;
 }
 
-.note-box {
-  border-radius: 12px;
-  background: #eaf5f5;
-  color: #457b9d;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.5;
-  padding: 13px 14px;
-}
-
-.note-box strong {
-  font-weight: 800;
-}
 
 @media (max-width: 640px) {
   .detail-summary {

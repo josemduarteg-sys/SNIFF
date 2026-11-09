@@ -8,7 +8,7 @@ from apps.indicadores.services import cerrar_mediciones_vencidas
 
 class Command(BaseCommand):
     help = (
-        'Cierra automáticamente en 0.00 los periodos de medición de KPI autorizados '
+        'Cierra automáticamente como Sin registro (resultado NULL) los periodos de medición de KPI autorizados '
         'cuya ventana de registro (cierre del periodo + el plazo configurado en '
         'ConfiguracionMediciones) ya venció sin que exista una medición manual. '
         'Procesa en orden todos los periodos atrasados de cada KPI (no solo el más '

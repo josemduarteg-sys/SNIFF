@@ -3,6 +3,9 @@ import os
 from dotenv import load_dotenv
 from datetime import timedelta
 
+import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -116,6 +119,27 @@ DATABASES = {
 }
 
 
+# DATABASE_URL tiene prioridad; una URL invalida nunca recae sobre la base local.
+database_url = os.getenv('DATABASE_URL', '').strip()
+if database_url:
+    try:
+        database_config = dj_database_url.parse(database_url)
+    except (ValueError, KeyError):
+        raise ImproperlyConfigured('DATABASE_URL debe ser una URL PostgreSQL valida.') from None
+    if (
+        database_config.get('ENGINE') != 'django.db.backends.postgresql'
+        or not database_config.get('HOST')
+        or not database_config.get('NAME')
+    ):
+        raise ImproperlyConfigured('DATABASE_URL requiere PostgreSQL, host y nombre de base.')
+    database_config['ATOMIC_REQUESTS'] = True
+    # Conservar opciones de Neon, incluyendo sslmode y channel_binding.
+    database_config.setdefault('OPTIONS', {}).setdefault(
+        'sslmode', os.getenv('DB_SSLMODE') or 'require',
+    )
+    DATABASES['default'] = database_config
+
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
@@ -216,5 +240,5 @@ CORS_ALLOWED_ORIGINS = env_lista(
 )
 
 # Opcional: cifrado de la conexión PostgreSQL según la infraestructura.
-if os.getenv('DB_SSLMODE'):
-    DATABASES['default']['OPTIONS'] = {'sslmode': os.environ['DB_SSLMODE']}
+if not database_url and os.getenv('DB_SSLMODE'):
+    DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = os.environ['DB_SSLMODE']

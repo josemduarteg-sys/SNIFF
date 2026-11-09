@@ -91,10 +91,6 @@ function cancelar() {
       </label>
     </div>
 
-    <div class="help-box">
-      Registra las áreas disponibles para la organización interna del sistema.
-    </div>
-
     <div class="form-actions">
       <button class="btn-secondary" type="button" @click="cancelar">
         Cancelar
@@ -181,15 +177,6 @@ function cancelar() {
   box-shadow: 0 0 0 4px rgba(168, 218, 220, 0.25);
 }
 
-.help-box {
-  border-radius: 12px;
-  background: #eaf5f5;
-  color: #457b9d;
-  padding: 13px 14px;
-  font-size: 12.5px;
-  line-height: 1.45;
-  font-weight: 650;
-}
 
 .form-actions {
   display: flex;
