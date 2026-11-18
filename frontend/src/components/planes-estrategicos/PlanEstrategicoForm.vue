@@ -90,10 +90,6 @@ function cancelar() {
       {{ estado.error }}
     </div>
 
-    <div v-if="esEnUso" class="help-box warning">
-      Este plan está En uso: el título y el periodo ya no pueden modificarse. Solo la descripción es editable.
-    </div>
-
     <div class="form-grid">
       <label class="field field-full">
         <span>Título del plan estratégico</span>
@@ -232,21 +228,6 @@ function cancelar() {
   background: #f4f7f9;
   color: #9aa8b8;
   cursor: not-allowed;
-}
-
-.help-box {
-  border-radius: 12px;
-  background: #eaf5f5;
-  color: #457b9d;
-  padding: 13px 14px;
-  font-size: 12.5px;
-  line-height: 1.45;
-  font-weight: 650;
-}
-
-.help-box.warning {
-  background: rgba(244, 162, 97, 0.14);
-  color: #b9701e;
 }
 
 .form-actions {

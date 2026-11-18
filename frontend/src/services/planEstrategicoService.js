@@ -33,12 +33,17 @@ export async function cerrarPlanEstrategico(id) {
 }
 
 function limpiarPayloadPlanEstrategico(payload) {
-  return {
-    titulo: payload.titulo,
-    descripcion: payload.descripcion || '',
-    fecha_inicio: payload.fecha_inicio || null,
-    fecha_fin: payload.fecha_fin || null,
+  // PATCH debe conservar la ausencia de campos bloqueados: omitir una
+  // fecha no equivale a solicitar que se borre con null.
+  const limpio = {}
+  for (const campo of ['titulo', 'descripcion', 'fecha_inicio', 'fecha_fin']) {
+    if (Object.hasOwn(payload, campo)) {
+      limpio[campo] = campo.startsWith('fecha_')
+        ? payload[campo] || null
+        : campo === 'descripcion' ? payload[campo] || '' : payload[campo]
+    }
   }
+  return limpio
 }
 
 function normalizarRespuesta(response) {
